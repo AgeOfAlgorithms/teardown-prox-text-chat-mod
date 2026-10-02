@@ -5,7 +5,7 @@
 -- MODES (chosen on the input line; they decide how OTHERS hear your message)
 --   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
 --     you (quieter and echoing with distance), heard within cfg.chatR (25 m). ALL-CAPS words or a word
---     ending in "!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through;
+--     ending in "!" are shouted and reach cfg.shoutR (40 m), where only the shouted words get through;
 --     from there to cfg.shoutMumbleR (55 m) the shouted words are garbled too (their own buffer).
 --     The BUFFER chatR-cfg.mumbleR (25-35 m): the babble and a bubble with the message GARBLED
 --     (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
@@ -33,7 +33,7 @@
 --
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
---   25-45 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
+--   25-40 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
 --   (whispers in lavender). Bounded to cfg.keepHist.
 --
 -- THE WINDOW: Enter opens the input line and the chat window (interactive: mouse cursor). The line
@@ -97,7 +97,7 @@ PC.hooks = PC.hooks or {}
 do
 	local defaults = {
 		chatR = 25,              -- m: who hears you (nearby)
-		shoutR = 45,             -- m: who hears your shouted words (nearby only)
+		shoutR = 40,             -- m: who hears your shouted words (nearby only)
 		shoutMumbleR = 55,       -- m: the shouts' buffer beyond shoutR: the shouted words garbled, the rest boxes
 		whisperR = 8,            -- m: who hears a whisper
 		mumbleR = 35,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
@@ -563,7 +563,7 @@ end
 --   ... .mode   "speak" / "whisper" / "global"       ... .shout  bool: a shouted word (Speak only)
 --   ... .x .y .z  where the speaker stood (feet)       ... .text   string
 --   ... .radius   m: how far anyone hears anything (the babble): whisper 13, speak 35, shout 55, global 0
---   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, shout 45 (shouted words only)
+--   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, shout 40 (shouted words only)
 --   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
