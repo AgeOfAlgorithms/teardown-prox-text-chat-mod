@@ -7,7 +7,7 @@
 --     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
 --     ending in "!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
 --   "w" Whisper: heard only within cfg.whisperR (5 m); beyond it nobody gets anything, not even a
---     history line. CAPS stay a whisper (no shout reach). A small faint bubble; a breathy babble
+--     history line. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
 --   "g" Global: every player gets the line in their chat - a plain chat line only: no bubble, no babble
@@ -23,7 +23,7 @@
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
 --   20-45 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
---   (whispers faint). Bounded to cfg.keepHist.
+--   (whispers in lavender). Bounded to cfg.keepHist.
 --
 -- THE WINDOW: Enter opens the input line and the chat window (interactive: mouse cursor). The line
 --   shows the mode ("Speak:", "Whisper:", "Global:") and three mode chips at its
@@ -101,6 +101,7 @@ do
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
+		shoutVol = 0.8,          -- shouted words (shout clips, already a little louder than babble)
 		globalVol = 0.35,        -- the voice preview (Settings): this much of the voice's volume, at the listener
 		globalMaxSyl = 14,       -- the voice preview: at most this many syllables
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
@@ -727,7 +728,7 @@ function PC.voiceOf(p)
 	return (p * 37) % 5 + 1                                       -- (no pick yet: one of the first five)
 end
 
--- a message as syllables: {variant hash, pause after, pitch factor, shouted}; second result: has "!"
+-- a message as syllables: {variant hash, pause after, pitch factor, shouted}
 function PC.babbleSyllables(text)
 	local caps = {}                                               -- byte index -> in a shouted word
 	for s0, w in text:gmatch("()(%S+)") do
@@ -765,7 +766,7 @@ function PC.babbleSyllables(text)
 	if text:find("%?%s*$") or text:find("\239\188\159%s*$") or text:find("\216\159%s*$") then   -- ? / ？ / ؟ rises
 		for k = math.max(1, #out - 2), #out do out[k][3] = 1 + 0.08 * (k - #out + 3) end
 	end
-	return out, text:find("!") ~= nil
+	return out
 end
 
 -- start babbling text for player p. how: nil = in the world at the speaker (nearby: shouts, echo),
@@ -775,10 +776,10 @@ function PC.babbleSay(p, text, voice, how)
 	local B = PC.C().babble
 	local cfg = PC.cfg
 	local v = PC.VOICES[voice or PC.voiceOf(p)] or PC.VOICES[3]
-	local syl, loud = PC.babbleSyllables(text)
+	local syl = PC.babbleSyllables(text)
 	local q = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], how = how}
-	local vol = (loud and 1 or cfg.babbleVol) * v[5]
-	local shoutVol = v[5]
+	local vol = cfg.babbleVol * v[5]
+	local shoutVol = cfg.shoutVol * v[5]
 	if how == "flat" then
 		while #syl > cfg.globalMaxSyl do table.remove(syl) end
 		vol, shoutVol = vol * cfg.globalVol, shoutVol * cfg.globalVol
@@ -795,8 +796,9 @@ function PC.babbleSay(p, text, voice, how)
 end
 
 -- farther voices: quieter (on top of the engine's 3D falloff) and echoing. No reverb API: the echo is
--- 1-3 delayed, fainter repeats of each syllable from a few metres beside the speaker.
-function PC.babbleDistance(pos, vol)
+-- 1-3 delayed, fainter repeats of each syllable from a few metres beside the speaker. Shouted
+-- syllables lose less with distance (they are meant to carry: they start quieter up close instead).
+function PC.babbleDistance(pos, vol, shout)
 	local cfg = PC.cfg
 	local cam = GetCameraTransform().pos
 	local d = VecLength(VecSub(pos, cam))
@@ -811,7 +813,7 @@ function PC.babbleDistance(pos, vol)
 			echoes[k] = {delay = k * (0.08 + 0.14 * f), vol = vol * (0.25 + 0.35 * f) * 0.6 ^ (k - 1), offset = offset}
 		end
 	end
-	return vol * (1 - 0.5 * f), echoes
+	return vol * (1 - (shout and 0.2 or 0.5) * f), echoes
 end
 
 function PC.babbleTick()
@@ -847,7 +849,7 @@ function PC.babbleTick()
 					if q.how then
 						PlaySound(clip, pos, base, false, pitch)            -- (flat / whisper: no echo)
 					else
-						local vol, echoes = PC.babbleDistance(pos, base)
+						local vol, echoes = PC.babbleDistance(pos, base, s[4])
 						PlaySound(clip, pos, vol, false, pitch)
 						for _, e in ipairs(echoes) do
 							B.echoes[#B.echoes + 1] = {t = now + e.delay, clip = clip, pos = VecAdd(pos, e.offset), vol = e.vol, pitch = pitch * 0.97}
@@ -1074,15 +1076,15 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		tagW = UiGetTextSize(tag) or 0
 	end
 	local prefix = e.sys and "" or ((e.name or "?") .. ": ")
-	local pw = prefix ~= "" and PC.textWidth(prefix, size, not whisper) or 0
+	local pw = prefix ~= "" and PC.textWidth(prefix, size) or 0
 	local tw = math.max(120, w - tagW - pw)
-	UiFont(PC.chatFont(e.text, not whisper), size)
+	UiFont(PC.chatFont(e.text), size)
 	UiWordWrap(tw)
 	local vis = PC.chatVisual(e.text)
 	local _, th = UiGetTextSize(vis)
 	th = math.max(th or size, size)
 	if not measureOnly then
-		local fa = whisper and 0.6 * a or a
+		local fa = whisper and 0.92 * a or a
 		if tag ~= "" then
 			local col = info[5]
 			UiColor(col[1], col[2], col[3], 0.85 * fa)
@@ -1096,15 +1098,15 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		if prefix ~= "" then
 			local col = info[5]
 			UiColor(col[1], col[2], col[3], fa)
-			PC.text(prefix, size, not whisper)
+			PC.text(prefix, size)
 			UiTranslate(pw, 0)
 		end
 		if e.sys then UiColor(0.6, 0.95, 0.85, a)
 		elseif e.shout then UiColor(1, 0.45, 0.35, a)
-		elseif whisper then UiColor(0.85, 0.85, 0.92, fa)
+		elseif whisper then UiColor(0.8, 0.82, 1, fa)                    -- (lavender: readable, still not a Speak line)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
 		else UiColor(1, 1, 1, a) end
-		UiFont(PC.chatFont(e.text, not whisper), size)
+		UiFont(PC.chatFont(e.text), size)
 		UiWordWrap(tw)
 		UiText(vis)
 	end
@@ -1112,7 +1114,7 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	return th
 end
 
--- a speech bubble over player p. small: the "..." of someone typing; whisper: smaller, faint, grey
+-- a speech bubble over player p. small: the "..." of someone typing; whisper: a bit smaller, pale lavender
 function PC.bubble(p, text, shout, a, small, whisper)
 	local okT, tr = pcall(GetPlayerTransform, p)
 	if not (okT and tr and tr.pos) then return end
@@ -1121,8 +1123,8 @@ function PC.bubble(p, text, shout, a, small, whisper)
 	UiPush()
 	UiTranslate(x, y)
 	if shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end      -- (shaking with anger)
-	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * ((small or whisper) and 0.75 or 1))
-	UiFont(PC.bubbleFont(text, not whisper))
+	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1)))
+	UiFont(PC.bubbleFont(text))
 	local vis = PC.chatVisual(text)
 	UiWordWrap(640)
 	local tw, th = UiGetTextSize(vis)
@@ -1130,12 +1132,12 @@ function PC.bubble(p, text, shout, a, small, whisper)
 	local h = (th or 28) + 22
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
-	UiColor(1, 1, 1, (whisper and 0.45 or 0.92) * a)
+	if whisper then UiColor(0.86, 0.87, 1, 0.88 * a) else UiColor(1, 1, 1, 0.92 * a) end
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail
 	if shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
-	if whisper then UiColor(0.25, 0.25, 0.3, 0.75 * a)
+	if whisper then UiColor(0.2, 0.2, 0.38, a)
 	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, a) end
 	UiText(vis)
 	UiPop()
@@ -1243,7 +1245,7 @@ function PC.drawHistory(W, H)
 		UiTranslate(14, top + 6)
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.45)
-		UiText("Nothing yet. Nearby: " .. cfg.chatR .. " m (CAPS carry to " .. cfg.shoutR .. " m), whisper: " .. cfg.whisperR .. " m, everyone: all players.")
+		UiText("Nothing yet. Speak: " .. cfg.chatR .. " m (CAPS or ! carry to " .. cfg.shoutR .. " m), Whisper: " .. cfg.whisperR .. " m, Global: all players.")
 		UiPop()
 	end
 	for i = #h - c.scroll, 1, -1 do
@@ -1385,7 +1387,7 @@ function PC.drawTyping()
 	UiColor(col[1], col[2], col[3], 0.95)
 	UiRoundedRectOutline(W, 54, 8, 2)
 	local label = (m == "w") and ("Whisper (" .. cfg.whisperR .. " m): ") or info[2]
-	UiFont(m == "w" and "regular.ttf" or "bold.ttf", 28)
+	UiFont("bold.ttf", 28)
 	local lw = UiGetTextSize(label) or 160
 	UiPush()
 	UiTranslate(14, 27)
@@ -1393,8 +1395,8 @@ function PC.drawTyping()
 	UiText(label)
 	UiPop()
 	UiTranslate(14 + lw, 0)
-	UiColor(1, 1, 1, m == "w" and 0.8 or 1)
-	UiFont(PC.chatFont(c.text, m ~= "w"), 28)
+	UiColor(1, 1, 1, 1)
+	UiFont(PC.chatFont(c.text), 28)
 	PC.field(W - 38 - lw - chipsW, 54)
 	UiPop()
 	UiPush()
@@ -1403,7 +1405,7 @@ function PC.drawTyping()
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
 	UiText(PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
-		or "Enter: say it   Tab / chips: nearby, whisper, everyone   Esc: close   Settings: your voice and more   /help")
+		or "Enter: say it   Tab / chips: Speak, Whisper, Global   Esc: close   Settings: your voice and more   /help")
 	UiPop()
 end
 
@@ -1419,7 +1421,7 @@ function PC.drawHint()
 	if intro then
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.8)
-		UiText("Proximity Chat - Enter: talk to players near you (Tab: whisper / everyone)" .. key .. "   /help   (hide: /hint)")
+		UiText("Proximity Chat - Enter: talk to players near you (Tab: Whisper / Global)" .. key .. "   /help   (hide: /hint)")
 	else
 		UiFont("regular.ttf", 18)
 		UiColor(1, 1, 1, 0.35)
