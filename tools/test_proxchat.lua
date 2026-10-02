@@ -91,7 +91,7 @@ local function machine(me, isHost, presetReg, prePC)
 		return t, true
 	end
 	for _, f in ipairs({"UiPush", "UiPop", "UiTranslate", "UiAlign", "UiColor", "UiRoundedRect", "UiRoundedRectOutline", "UiFont",
-		"UiTextShadow", "UiScale", "UiRect", "UiRotate"}) do api[f] = function() end end
+		"UiTextShadow", "UiScale", "UiRect", "UiRotate", "UiWindow"}) do api[f] = function() end end
 	api.UiWordWrap = function(w) env.wrap = w end
 	api.UiMakeInteractive = function() env.interactive = true end
 	api.UiText = function(s) env.texts[#env.texts + 1] = s end
@@ -234,7 +234,7 @@ check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$")
 check(drawn(P2, "^Chat$") and drawn(P2, "^Settings$") and not drawn(P2, "^Proximity$"), "the window: one history ('Chat'), a Settings button, no history tabs")
 check(drawn(P1, "...", true) ~= nil and not drawn(P3, "^%.%.%.$"), "P1 (4 m) sees P2's '...' typing bubble, P3 (26 m) does not")
 press(P2, "tab")
-check(P2.PC.mode() == "w" and drawn(P2, "^Whisper %(5 m%): $"), "Tab: 'Whisper (5 m):' (the same frame)")
+check(P2.PC.mode() == "w" and drawn(P2, "^Whisper %(8 m%): $"), "Tab: 'Whisper (8 m):' (the same frame)")
 step()
 check(P1.PC.s.typing[2] == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the server knows P2 whispers; the mode is saved as P2's default")
 press(P2, "tab")
@@ -323,7 +323,7 @@ P1.sounds, P5.sounds = {}, {}
 press(P2, "return"); step()
 local lw = lastLine(P1, "w")
 check(lw and lw.text == "psst the SECRET plan" and not lw.shout and P1.shared.pcMsgs[#P1.shared.pcMsgs].ch == "w", "P1 (4 m) gets the whole whisper; CAPS stay a whisper (no shout)")
-check(not hasLine(P5, "w", "psst the SECRET plan") and not hasLine(P3, "w", "psst the SECRET plan") and #hist(P5, "w") == 0, "P5 (10 m) and P3 (26 m) get nothing, not even history")
+check(not hasLine(P5, "w", "psst the SECRET plan") and not hasLine(P3, "w", "psst the SECRET plan") and #hist(P5, "w") == 0, "P5 (10 m: the whisper buffer) and P3 (26 m) get no words, not even history")
 check(hasLine(P2, "w", "psst the SECRET plan"), "the whisperer has it")
 check(P1.PC.c.bubbles[2] and P1.PC.c.bubbles[2].whisper and not P1.PC.c.bubbles[2].shout, "P1 sees a whisper bubble (small, faint)")
 check(drawn(P1, "^%[whisper%] $") ~= nil, "P1's feed marks it [whisper]")
@@ -331,7 +331,7 @@ steps(60)
 local nw, vw = soundsFrom(P1, 4, "MOD/snd/whisper")
 local nOther = #P1.sounds - nw
 check(nw >= 4 and vw <= 0.451 and nOther == 0, string.format("whisper babble: breathy clips at P2's head, quiet (%d syllables, vol %.2f), no echo, no shout clips", nw, vw))
-check(#P5.sounds == 0, "P5 (10 m) hears no whisper babble")
+check(soundsFrom(P5, 4, "whisper") >= 2 and P5.PC.c.bubbles[2] and P5.PC.c.bubbles[2].mumble, "P5 (10 m: the whisper buffer, 8-13 m) hears the breathy babble and gets a garbled bubble")
 check(P2.PC.mode() == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the mode sticks for the next line (and is saved)")
 P1.server.pc_voice(2, 6)                                         -- (P2 picks Robot)
 steps(2)
@@ -414,11 +414,11 @@ check(lastLine(P3, "p").text == "KEY" and #hist(P3) == n3 + 2, "a shout from 26 
 W.pos[3] = Vec(20, 0, 0); step(); step()
 check(lastLine(P3, "p").text == "the KEY is here" and not lastLine(P3, "p").far and #hist(P3) == n3 + 2, "closer: that history line is completed (not a second one)")
 W.pos[3] = Vec(30, 0, 0)
-W.pos[5] = Vec(11, 0, 0)                                            -- (7 m from P2)
+W.pos[5] = Vec(15, 0, 0)                                            -- (11 m from P2)
 waitRate()
 say(P2, "/w quiet now")
 local b5 = P5.PC.c.bubbles[2]
-check(b5 and b5.mumble and b5.whisper and b5.text == "..." and lastLine(P5).text ~= "quiet now", "a whisper from 7 m (its buffer): '...'")
+check(b5 and b5.mumble and b5.whisper and b5.text == "..." and lastLine(P5).text ~= "quiet now", "a whisper from 11 m (its buffer, 8-13 m): garbled")
 W.pos[5] = Vec(14, 0, 0)
 waitRate()
 say(P2, "/s over here")
@@ -675,6 +675,23 @@ local P8 = addMachine(8, false, O.reg)
 W.pos[8] = Vec(0, 0, -3)
 steps(30)
 check(P1.shared.pcVoice[8] == 6 and P8.PC.c.hideHint and not drawn(P8, "Enter: chat", true), "the Options settings are used in game (voice synced, hint hidden)")
+
+-- ================================================================== long messages scroll inside the bubble
+local LONG = string.rep("abcdefghi ", 9)                                  -- (90 characters: the mock wraps it in 3 lines)
+local now0 = W.time
+local L0 = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0)
+local Lmid = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0 - (1.5 + 0.9))
+local Lend = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0 - 30)
+local Lshort = P1.PC.bubbleLayout(2, "short one", false, 1, false, false, false, now0)
+check(L0 and L0.th == 72 and L0.vh == 48 and L0.h == 70 and L0.off == 0 and math.abs(L0.scrollTime - 1.8) < 1e-6,
+	"a long message shows 2 of its 3 lines; it scrolls one line in 1.8 s")
+check(math.abs(Lmid.off - 12) < 1e-6 and Lend.off == 24, "it waits 1.5 s, then scrolls down smoothly (half a line after 0.9 s) and stops at the end")
+check(Lshort.scrollTime == 0 and Lshort.vh == Lshort.th, "a short message does not scroll")
+waitRate()
+say(P2, "/s " .. LONG)
+steps(3)
+local bl = P1.PC.c.bubbles[2]
+check(bl and math.abs((bl.extra or 0) - 1.8) < 1e-6, "its bubble stays up longer by the scrolling time")
 
 -- ================================================================== the test dummies (/dummy)
 waitRate()

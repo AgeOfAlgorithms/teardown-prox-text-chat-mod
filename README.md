@@ -7,7 +7,7 @@ where you stand. Three ways to speak:
 | mode | who gets it |
 |---|---|
 | **Speak** | players within 20 m: a speech bubble, plus babble from your position. From 20 to 30 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are; the whole line appears if they come within 20 m while it's up. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 45 m, and only those words get through. |
-| **Whisper** | players within 5 m: a pale lavender bubble and a breathy babble (⬚ boxes from 5 to 8 m) |
+| **Whisper** | players within 8 m: a pale lavender bubble and a breathy babble (⬚ boxes from 8 to 13 m) |
 | **Global** | every player: a plain chat line, with no bubble and no babble |
 
 The chat window keeps **your own history**: every Global line, plus the Speak lines and whispers you
@@ -42,7 +42,8 @@ copies.
     lines at the same time, in every voice and several languages. Walk back and forth to see and hear
     every range. Only you see them. `/dummy` again removes them.
 
-Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
+A bubble shows two lines; a longer message scrolls down inside it at reading pace (a thin bar shows
+where it is) and the bubble stays up until it has finished. Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
 a thin line connects it to its speaker.
 
 ## For game-mode makers
@@ -65,8 +66,8 @@ are kept in a ring of the last 16:
 | `mode` | `"speak"`, `"whisper"` or `"global"` |
 | `shout` | bool: the message has a shouted word (Speak only) |
 | `x`, `y`, `z` | where the speaker stood (feet) |
-| `radius` | m: how far anyone hears anything (the babble): whisper 8, speak 30, shout 45, global 0 |
-| `wordsRadius` | m: how far the words are heard: whisper 5, speak 20, shout 45 |
+| `radius` | m: how far anyone hears anything (the babble): whisper 13, speak 30, shout 45, global 0 |
+| `wordsRadius` | m: how far the words are heard: whisper 8, speak 20, shout 45 |
 | `text` | the message |
 | `lobby` | bool: said while your lobby was up |
 
