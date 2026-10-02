@@ -792,6 +792,18 @@ typeText(P2, string.rep("c", 40)); step(); step()
 check(P2.PC.utf8Len(P2.PC.c.text) == 90 and drawn(P2, "^90/90$") ~= nil, "the field stops at 90 characters (90/90, red)")
 press(P2, "esc"); step()
 
+-- ================================================================== 2 bubbles a speaker at most
+waitRate(); say(P2, "/s first one")
+waitRate(); say(P2, "/s second one")
+waitRate(); say(P2, "/s third one")
+step()
+local nb, pb = P1.PC.c.bubbles[2], P1.PC.c.prevBubbles[2]
+local mine = {}
+for _, r in ipairs(P1.PC.c.bubbleRects or {}) do if r.p == 2 then mine[#mine + 1] = r end end
+check(nb and nb.full == "third one" and pb and pb.full == "second one" and #mine == 2,
+	"three quick messages: the 2 newest show (the first is gone)")
+check(mine[1].bottom > mine[2].bottom and mine[1].top >= mine[2].bottom, "the newest nearest the head, the one before it stacked above")
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
