@@ -6,7 +6,7 @@ where you stand. Three ways to speak:
 
 | mode | who gets it |
 |---|---|
-| **Speak** | players within 25 m: a speech bubble, plus babble from your position. From 25 to 35 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are; the whole line appears if they come within 25 m while it's up. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 45 m, and only those words get through. |
+| **Speak** | players within 25 m: a speech bubble, plus babble from your position. From 25 to 35 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are. Their chat history keeps the most they made out, and the whole line appears if they come within 25 m while it's up. Walking toward someone who is mid-sentence shows their bubble too. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 45 m, and only those words get through. |
 | **Whisper** | players within 8 m: a pale lavender bubble and a breathy babble (⬚ boxes from 8 to 13 m) |
 | **Global** | every player: a plain chat line, with no bubble and no babble |
 
