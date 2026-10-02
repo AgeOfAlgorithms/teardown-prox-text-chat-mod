@@ -10,9 +10,9 @@
 --     (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
 --     cfg.garbleMax; shouted words readable), on the screen edge in the speaker's direction when off
 --     screen. The history line holds the most of it you made out (it only gains letters); coming
---     within range while the bubble is up shows the words and completes that line. A message said out
---     of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while it is up
---     shows it (no babble then).
+--     within range while the bubble is up shows the words and completes that line. A Speak message
+--     said out of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while
+--     it is up shows it (no babble then). Not a whisper: it is private to who was within its reach.
 --   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (13 m) is garbled
 --     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
@@ -801,11 +801,14 @@ function PC.receive(m)
 		local whisper = mode == "w"
 		local level, d
 		heard, far, level, d = PC.heard(m.p, m.text, mode)
-		-- kept for its bubble's life even out of earshot (hidden): walking in while it is up shows it
-		local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
-			level = "none", hidden = true, bestF = -1}
-		c.bubbles[m.p] = b
-		PC.updateBubble(m.p, b, b.t, true)
+		-- kept for its bubble's life even out of earshot (hidden): walking in while it is up shows it.
+		-- Not a whisper: it is private - only who was within whisperMumbleR when it was said gets it.
+		if heard or not whisper then
+			local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
+				level = "none", hidden = true, bestF = -1}
+			c.bubbles[m.p] = b
+			PC.updateBubble(m.p, b, b.t, true)
+		end
 		if heard then
 			-- the babble: all of it, except beyond the buffer where only the shouted words carry
 			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
