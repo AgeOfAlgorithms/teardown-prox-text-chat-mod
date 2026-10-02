@@ -9,8 +9,10 @@
 --     The BUFFER chatR-cfg.mumbleR (25-35 m): the babble and a bubble with the message GARBLED
 --     (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
 --     cfg.garbleMax; shouted words readable), on the screen edge in the speaker's direction when off
---     screen; no history line. Coming within range while the bubble is up shows the words and adds
---     the line (a far shout's line is completed instead).
+--     screen. The history line holds the most of it you made out (it only gains letters); coming
+--     within range while the bubble is up shows the words and completes that line. A message said out
+--     of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while it is up
+--     shows it (no babble then).
 --   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (13 m) is garbled
 --     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
@@ -295,13 +297,26 @@ end
 -- the listener is (up to cfg.garbleMax just outside the range)
 function PC.bubbleText(p, b, now)
 	if b.level ~= "mumble" and b.level ~= "shout" then return b.text end
+	local f = PC.bufferF(p, b)
+	if b.level == "shout" and not f then return b.text end              -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
+	return PC.garble(b.full, f or 0, b.id or 0, math.floor(now * 3), b.level == "shout")
+end
+
+-- the share of the letters revealed now (0 at the buffer's outer edge, cfg.garbleMax at its inner one);
+-- nil beyond the buffer
+function PC.bufferF(p, b)
 	local cfg = PC.cfg
 	local inner = b.whisper and cfg.whisperR or cfg.chatR
 	local outer = b.whisper and cfg.whisperMumbleR or cfg.mumbleR
 	local d = PC.distTo(p)
-	if b.level == "shout" and not (d and d <= outer) then return b.text end   -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
-	local f = d and math.max(0, math.min(1, (outer - d) / (outer - inner))) or 0
-	return PC.garble(b.full, f * cfg.garbleMax, b.id or 0, math.floor(now * 3), b.level == "shout")
+	if not (d and d <= outer) then return nil end
+	return math.max(0, math.min(1, (outer - d) / (outer - inner))) * cfg.garbleMax
+end
+
+-- the history line of a bubble: the most of it this player ever made out
+function PC.histText(b)
+	if b.level == "full" then return b.full end
+	return PC.garble(b.full, math.max(0, b.bestF or 0), b.id or 0, 0, b.level == "shout")
 end
 
 -- sanitize: ASCII control bytes only (never %c: it would eat UTF-8), trimmed, cfg.maxLen characters
@@ -749,8 +764,8 @@ end
 -- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (Speak
 -- within chatR, Whisper within whisperR), "shout" (only the shouted words, within shoutR: far = true),
 -- "mumble" (the buffer just beyond: chatR-mumbleR / whisperR-whisperMumbleR: the babble and a garbled
--- bubble, no words, no history line). nil = nothing.
-PC.LEVEL = {mumble = 1, shout = 2, full = 3}
+-- bubble, the history line as much as was made out). nil = nothing (yet: PC.updateBubble).
+PC.LEVEL = {none = 0, mumble = 1, shout = 2, full = 3}
 function PC.heard(p, text, mode)
 	if p == GetLocalPlayer() then return text, false, "full", 0 end
 	local cfg = PC.cfg
@@ -783,48 +798,60 @@ function PC.receive(m)
 		-- (Global: a chat line only - no bubble, no babble)
 	else
 		local mode = (m.ch == "w") and "w" or "p"
+		local whisper = mode == "w"
 		local level, d
 		heard, far, level, d = PC.heard(m.p, m.text, mode)
+		-- kept for its bubble's life even out of earshot (hidden): walking in while it is up shows it
+		local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
+			level = "none", hidden = true, bestF = -1}
+		c.bubbles[m.p] = b
+		PC.updateBubble(m.p, b, b.t, true)
 		if heard then
-			local whisper = mode == "w"
-			local mumble = level == "mumble"
-			local shout = not whisper and not mumble and #PC.shoutWords(heard) > 0   -- (CAPS stay a whisper)
-			local entry
-			if not mumble then
-				entry = {ch = mode, p = m.p, name = m.name, text = heard, shout = shout, far = far, me = m.p == me}
-				PC.addHist(entry)
-			end
-			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout, whisper = whisper, mumble = mumble,
-				full = m.text, mode = mode, level = level, name = m.name, entry = entry, id = m.id}
 			-- the babble: all of it, except beyond the buffer where only the shouted words carry
 			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
 			PC.babbleSay(m.p, (level == "shout" and not inBuffer) and table.concat(PC.shoutWords(m.text), " ") or m.text, nil, whisper and "whisper" or nil)
-			if mumble then heard, far = nil, nil end                           -- (the hook: no words heard)
+			if level == "mumble" then heard, far = nil, nil end               -- (the hook: no words heard)
 		end
 	end
 	if PC.hooks.onMessage and not PC.isDummy(m.p) then PC.hooks.onMessage(m, heard) end
 end
 
--- a bubble heard only in part (garbled in the buffer, or only the shouted words) shows the words once
--- the listener comes within range while it is still up; the history gets the line then
-function PC.revealBubbles(now)
-	local c, cfg = PC.C(), PC.cfg
-	for p, b in pairs(c.bubbles) do
-		if b.level and b.level ~= "full" then
-			local text, far, level = PC.heard(p, b.full, b.mode)
-			if text and PC.LEVEL[level] > PC.LEVEL[b.level] then
-				b.text, b.level, b.mumble = text, level, false
-				b.shout = not b.whisper and #PC.shoutWords(text) > 0
-				b.t = math.max(b.t, now - cfg.life + 4)                    -- (up at least 4 s more)
-				b.scrollT = now                                             -- (the words scroll from the top)
-				if b.entry then
-					b.entry.text, b.entry.far, b.entry.shout = text, far, b.shout
-				else
-					b.entry = {ch = b.mode, p = p, name = b.name, text = text, shout = b.shout, far = far}
-					PC.addHist(b.entry)
-				end
-			end
+-- a bubble not fully heard follows the listener while it is up: out of earshot it stays hidden; in the
+-- buffer it shows (garbled); in range the words show. Its history line is added when it is first
+-- heard and always holds the most the listener made out (PC.histText): it only ever gains letters.
+-- fresh: the message just arrived (no extra time on screen).
+function PC.updateBubble(p, b, now, fresh)
+	local cfg = PC.cfg
+	local text, _, level = PC.heard(p, b.full, b.mode)
+	local changed = false
+	if text and PC.LEVEL[level] > PC.LEVEL[b.level] then
+		b.level, b.text, b.hidden = level, text, false
+		b.mumble = level == "mumble"
+		b.shout = not b.whisper and level ~= "mumble" and #PC.shoutWords(text) > 0   -- (CAPS stay a whisper)
+		if not fresh then
+			b.t = math.max(b.t, now - cfg.life + 4)                          -- (up at least 4 s more)
+			if level == "full" then b.scrollT = now end                      -- (the words scroll from the top)
 		end
+		changed = true
+	end
+	if b.level == "mumble" or b.level == "shout" then
+		local f = PC.bufferF(p, b) or 0
+		if f > b.bestF + 1e-6 then b.bestF, changed = f, true end
+	end
+	if changed and not b.hidden then
+		local htext, far = PC.histText(b), b.level ~= "full"
+		if b.entry then
+			b.entry.text, b.entry.far, b.entry.shout = htext, far, b.shout
+		else
+			b.entry = {ch = b.mode, p = p, name = b.name, text = htext, shout = b.shout, far = far, me = p == GetLocalPlayer()}
+			PC.addHist(b.entry)
+		end
+	end
+end
+
+function PC.revealBubbles(now)
+	for p, b in pairs(PC.C().bubbles) do
+		if b.level ~= "full" then PC.updateBubble(p, b, now) end
 	end
 end
 
@@ -1503,14 +1530,14 @@ function PC.drawBubbles()
 	local list = {}
 	local function add(L) if L then list[#list + 1] = L end end
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then
+		if (p ~= me or third) and not b.hidden then
 			local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
 			if L then b.extra = math.max(b.extra or 0, L.scrollTime) end
 			add(L)
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
-		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
+		if (mode == "p" or mode == "w") and p ~= me and not (c.bubbles[p] and not c.bubbles[p].hidden) then
 			local d = PC.distTo(p)
 			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(p, "...", false, 0.75, true, mode == "w")) end
 		end
@@ -1518,7 +1545,7 @@ function PC.drawBubbles()
 	local dm = c.dummy
 	if dm and now < dm.typingUntil then
 		for _, du in ipairs(dm.list) do
-			local d = not c.bubbles[du.p] and PC.distTo(du.p)
+			local d = not (c.bubbles[du.p] and not c.bubbles[du.p].hidden) and PC.distTo(du.p)
 			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
 		end
 	end
