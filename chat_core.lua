@@ -126,7 +126,9 @@ do
 		globalMaxSyl = 14,       -- the voice preview: at most this many syllables
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
 		echoFrom = 6,            -- m: farther voices echo
-		winW = 1000, winH = 400, -- the chat window (and the input line's width)
+		winW = 1000, winH = 400, -- the chat window (and the input line's width), before uiScale
+		uiScale = 0.8,           -- the chat window, feed, input line and hint, scaled from the bottom-left corner
+		countFrom = 60,          -- characters typed from which the input line shows "n/maxLen"
 		feedLines = 6,
 		hintIntro = 15,          -- s the longer hint shows after loading
 	}
@@ -1822,6 +1824,17 @@ function PC.drawTyping()
 	UiText(PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
 		or "Enter: say it   Tab / chips: Speak, Whisper, Global   Esc: close   Settings: your voice and more   /help")
 	UiPop()
+	-- the character limit: a count once it gets close, red when full
+	local n = PC.utf8Len(c.text)
+	if n >= cfg.countFrom then
+		UiPush()
+		UiTranslate(24 + W, UiHeight() - 86)
+		UiAlign("right top")
+		UiFont("bold.ttf", 20)
+		if n >= cfg.maxLen then UiColor(1, 0.35, 0.3, 1) else UiColor(1, 1, 1, 0.7) end
+		UiText(n .. "/" .. cfg.maxLen)
+		UiPop()
+	end
 end
 
 function PC.drawHint()
@@ -1850,8 +1863,13 @@ function PC.draw()
 	PC.preKeys()
 	UiPush()
 	PC.drawBubbles()
+	UiPush()
+	UiTranslate(0, UiHeight())                                          -- (the chat UI scales from the bottom-left corner)
+	UiScale(PC.cfg.uiScale)
+	UiTranslate(0, -UiHeight())
 	if PC.windowOpen() then PC.drawWindow() else PC.drawFeed() end
 	if c.typing then PC.drawTyping() else PC.drawHint() end
+	UiPop()
 	UiPop()
 	PC.keys()
 end
