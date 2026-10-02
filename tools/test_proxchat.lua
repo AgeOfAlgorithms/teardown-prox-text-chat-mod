@@ -824,6 +824,8 @@ P1.pixel = {1918, 2}
 local Lc2 = P1.PC.bubbleLayout(2, "hello there, top right", false, 1, false, false, false, W.time)
 P1.pixel = nil
 check(inside(Lc) and inside(Lc2), "a speaker at a corner of the screen: the whole bubble stays on screen")
+local Lmid = P1.PC.bubbleLayout(2, "hello there", false, 1, false, false, false, W.time)
+check(Lsh.docked and Lc.docked and Lc2.docked and Lmid and not Lmid.docked, "docked bubbles (on the edge, or pushed on screen) are marked: no line to the speaker; one over its speaker is not")
 
 -- ================================================================== the test dummies (/dummy)
 waitRate()
