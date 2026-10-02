@@ -304,9 +304,9 @@ W.pos[4] = Vec(8, 0, 0); steps(5)
 local said = P1.reg["proxchat.said.last"]
 local sk = "proxchat.said." .. (said % 16) .. "."
 check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "speak" and P1.reg[sk .. "shout"] == true
-	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 45
+	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 40
 	and math.abs(P1.reg[sk .. "x"] - 4) < 0.01 and P1.reg[sk .. "lobby"] == false,
-	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, words to 45 m, babble to 55 m)")
+	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, words to 40 m, babble to 55 m)")
 local pk = "proxchat.said." .. ((said - 1) % 16) .. "."
 check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "radius"] == 55, "API: the one before it is kept too (a ring of 16)")
 check(P2.reg["proxchat.said.last"] == nil, "API: host only (clients do not run the server)")
@@ -426,8 +426,8 @@ say(P2, "/s please HELP me NOW")
 local b40 = P3.PC.c.bubbles[2]
 local X = "\226\172\154"
 check(b40 and P3.PC.bubbleText(2, b40, W.time) == string.rep(X, 6) .. " HELP " .. string.rep(X, 2) .. " NOW" and not b40.text:find("...", 1, true),
-	"35-45 m: the shouted words in place, every other word as boxes (no '...')")
--- the shouts' own buffer, 45-55 m: the shouted words garbled (more of them closer), the rest boxes
+	"35-40 m: the shouted words in place, every other word as boxes (no '...')")
+-- the shouts' own buffer, 40-55 m: the shouted words garbled (more of them closer), the rest boxes
 W.pos[3] = Vec(58, 0, 0)                                            -- (54 m)
 waitRate()
 say(P2, "/s come HERE RIGHT NOW")
@@ -441,7 +441,7 @@ local t46 = P3.PC.bubbleText(2, bs5, W.time)
 check(upper(t46) > upper(t54) and letters(t46) == 0 and upper(t46) < 12, "46 m: more of the shouted words, still not all; 'come' stays boxes: " .. t46)
 W.pos[3] = Vec(44, 0, 0); step(); step()                            -- (40 m)
 check(bs5.level == "shout" and P3.PC.bubbleText(2, bs5, W.time):find(" HERE RIGHT NOW$") and lastLine(P3, "p").text:find(" HERE RIGHT NOW$"),
-	"40 m (within 45): the shouted words read in full; the same history line")
+	"40 m (within 40): the shouted words read in full; the same history line")
 W.pos[3] = Vec(64, 0, 0)                                            -- (60 m: beyond 55)
 waitRate()
 say(P2, "/s ANYONE THERE")
