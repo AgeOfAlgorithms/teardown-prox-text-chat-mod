@@ -1,0 +1,5 @@
+name = Proximity Chat
+author = McPuppetFace
+description = Text chat for multiplayer in any level or game mode. Press Enter to talk: players near you see a speech bubble over your head and hear you babble in your own cartoon voice; WRITE IN CAPS to shout farther. The chat window has three tabs: Proximity (what you heard nearby), Global (everyone) and Voice (click to pick your voice); Tab switches between them while you type. Commands: /voice, /voice robot, /g, /p, /mute, /hint, /window, /help. Default voice in Options. Every language supported. In multiplayer the host enables it for the session (Global mods); joining players get it from the Workshop.
+tags = Gameplay
+version = 2
