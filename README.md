@@ -6,7 +6,7 @@ where you stand. Three ways to speak:
 
 | mode | who gets it |
 |---|---|
-| **Speak** | players within 25 m: a speech bubble, plus babble from your position. From 25 to 35 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are. Their chat history keeps the most they made out, and the whole line appears if they come within 25 m while it's up. Walking toward someone who is mid-sentence shows their bubble too. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 45 m, and only those words get through. |
+| **Speak** | players within 25 m: a speech bubble, plus babble from your position. From 25 to 35 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are. Their chat history keeps the most they made out, and the whole line appears if they come within 25 m while it's up. Walking toward someone who is mid-sentence shows their bubble too. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 45 m, and only those words get through; from 45 to 55 m even they are ⬚ boxes, with more real letters the closer you are. |
 | **Whisper** | players within 8 m: a pale lavender bubble and a breathy babble (⬚ boxes from 8 to 13 m). Private: walking up to someone mid-whisper shows nothing. |
 | **Global** | every player: a plain chat line, with no bubble and no babble |
 
@@ -68,7 +68,7 @@ are kept in a ring of the last 16:
 | `mode` | `"speak"`, `"whisper"` or `"global"` |
 | `shout` | bool: the message has a shouted word (Speak only) |
 | `x`, `y`, `z` | where the speaker stood (feet) |
-| `radius` | m: how far anyone hears anything (the babble): whisper 13, speak 35, shout 45, global 0 |
+| `radius` | m: how far anyone hears anything (the babble): whisper 13, speak 35, shout 55, global 0 |
 | `wordsRadius` | m: how far the words are heard: whisper 8, speak 25, shout 45 |
 | `text` | the message |
 | `lobby` | bool: said while your lobby was up |

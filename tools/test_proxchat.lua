@@ -304,11 +304,11 @@ W.pos[4] = Vec(8, 0, 0); steps(5)
 local said = P1.reg["proxchat.said.last"]
 local sk = "proxchat.said." .. (said % 16) .. "."
 check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "speak" and P1.reg[sk .. "shout"] == true
-	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 45 and P1.reg[sk .. "wordsRadius"] == 45
+	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 45
 	and math.abs(P1.reg[sk .. "x"] - 4) < 0.01 and P1.reg[sk .. "lobby"] == false,
-	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, heard to 45 m)")
+	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, words to 45 m, babble to 55 m)")
 local pk = "proxchat.said." .. ((said - 1) % 16) .. "."
-check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "radius"] == 45, "API: the one before it is kept too (a ring of 16)")
+check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "radius"] == 55, "API: the one before it is kept too (a ring of 16)")
 check(P2.reg["proxchat.said.last"] == nil, "API: host only (clients do not run the server)")
 check(#hist(P4) == 1 and lastLine(P4, "p").text == "come here now!", "P4 walked over while P2's last bubble was up: it shows, in full, and joins P4's history (older ones: no)")
 waitRate()
@@ -427,6 +427,25 @@ local b40 = P3.PC.c.bubbles[2]
 local X = "\226\172\154"
 check(b40 and P3.PC.bubbleText(2, b40, W.time) == string.rep(X, 6) .. " HELP " .. string.rep(X, 2) .. " NOW" and not b40.text:find("...", 1, true),
 	"35-45 m: the shouted words in place, every other word as boxes (no '...')")
+-- the shouts' own buffer, 45-55 m: the shouted words garbled (more of them closer), the rest boxes
+W.pos[3] = Vec(58, 0, 0)                                            -- (54 m)
+waitRate()
+say(P2, "/s come HERE RIGHT NOW")
+local bs5 = P3.PC.c.bubbles[2]
+local function upper(t) local n = 0 for _ in t:gmatch("[A-Z]") do n = n + 1 end return n end
+local t54 = bs5 and P3.PC.bubbleText(2, bs5, W.time) or ""
+check(bs5 and bs5.level == "shoutmumble" and bs5.shout and not bs5.hidden and garbled(t54) and letters(t54) == 0 and garbled(lastLine(P3, "p").text),
+	"54 m: a red bubble with the shout garbled, a history line too: " .. t54)
+W.pos[3] = Vec(50, 0, 0); step(); step()                            -- (46 m)
+local t46 = P3.PC.bubbleText(2, bs5, W.time)
+check(upper(t46) > upper(t54) and letters(t46) == 0 and upper(t46) < 12, "46 m: more of the shouted words, still not all; 'come' stays boxes: " .. t46)
+W.pos[3] = Vec(44, 0, 0); step(); step()                            -- (40 m)
+check(bs5.level == "shout" and P3.PC.bubbleText(2, bs5, W.time):find(" HERE RIGHT NOW$") and lastLine(P3, "p").text:find(" HERE RIGHT NOW$"),
+	"40 m (within 45): the shouted words read in full; the same history line")
+W.pos[3] = Vec(64, 0, 0)                                            -- (60 m: beyond 55)
+waitRate()
+say(P2, "/s ANYONE THERE")
+check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].hidden and lastLine(P3, "p").text ~= "ANYONE THERE", "beyond 55 m: no shout at all")
 -- the history keeps the most the listener made out
 W.pos[3] = Vec(38, 0, 0)                                            -- (34 m: the buffer's far end)
 waitRate()
