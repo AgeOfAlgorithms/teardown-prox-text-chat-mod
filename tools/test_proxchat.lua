@@ -818,6 +818,24 @@ steps(60)
 check(longUp and not P1.PC.c.bubbles[2], "43 characters: still up at 5 s, gone by 6 s")
 check(math.abs(P1.PC.bubbleLife({full = string.rep("x", 90)}) - 9) < 1e-9, "the longest stay 9 s at most (plus any scrolling)")
 
+-- ================================================================== a reveal keeps a bubble up 1 s at most
+W.pos[3] = Vec(30, 0, 0)                                                  -- (26 m: P2's buffer)
+waitRate(); say(P2, "/s hey you")                                         -- (7 characters: 2.56 s)
+steps(60 * 2.3)
+W.pos[3] = Vec(20, 0, 0); step()                                          -- (16 m: fully revealed with 0.25 s left)
+steps(50)
+local heldUp = P3.PC.c.bubbles[2] ~= nil and P3.PC.c.bubbles[2].level == "full"
+steps(20)
+check(heldUp and not P3.PC.c.bubbles[2], "fully revealed near its end: up 1 s more, then gone")
+W.pos[3] = Vec(44, 0, 0)                                                  -- (40 m: out of earshot)
+waitRate(); say(P2, "/s hello again")                                     -- (11 characters: 2.88 s)
+steps(60 * 2.5)
+W.pos[3] = Vec(34, 0, 0); step()                                          -- (30 m: walks into the buffer)
+local seen = P3.PC.c.bubbles[2] ~= nil and not P3.PC.c.bubbles[2].hidden
+steps(30)
+check(seen and not P3.PC.c.bubbles[2], "walking into the buffer late: it shows for what is left of it (no extra time)")
+W.pos[3] = Vec(30, 0, 0)
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
