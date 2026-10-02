@@ -221,23 +221,23 @@ check(P2.PC.c.typing and P2.interactive, "Enter opens the line (UiMakeInteractiv
 step()
 check(P2.interactive and P2.focused, "while typing: interactive, the field has the keyboard")
 check(P1.PC.isTyping(2) and P1.reg["proxchat.typing.2"] == true, "the server knows P2 types (PC.isTyping, registry proxchat.typing.2)")
-check(drawn(P2, "^Say %(nearby%): $") and drawn(P2, "^Nearby$") and drawn(P2, "^Whisper$") and drawn(P2, "^Everyone$"), "the line: 'Say (nearby):' and the three mode chips")
-check(drawn(P2, "^Chat$") and drawn(P2, "^Settings$") and not drawn(P2, "^Proximity$") and not drawn(P2, "^Global$"), "the window: one history ('Chat'), a Settings button, no history tabs")
+check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the three mode chips (Speak / Whisper / Global)")
+check(drawn(P2, "^Chat$") and drawn(P2, "^Settings$") and not drawn(P2, "^Proximity$"), "the window: one history ('Chat'), a Settings button, no history tabs")
 check(drawn(P1, "...", true) ~= nil and not drawn(P3, "^%.%.%.$"), "P1 (4 m) sees P2's '...' typing bubble, P3 (26 m) does not")
 press(P2, "tab")
 check(P2.PC.mode() == "w" and drawn(P2, "^Whisper %(5 m%): $"), "Tab: 'Whisper (5 m):' (the same frame)")
 step()
 check(P1.PC.s.typing[2] == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the server knows P2 whispers; the mode is saved as P2's default")
 press(P2, "tab")
-check(P2.PC.mode() == "g" and drawn(P2, "^Say %(everyone%): $"), "Tab: 'Say (everyone):'")
+check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "Tab: 'Global:'")
 typeText(P2, "\t"); step()
-check(P2.PC.mode() == "p" and P2.PC.c.text == "" and drawn(P2, "^Say %(nearby%): $"), "a Tab returned by the field: back to nearby (no tab character typed)")
+check(P2.PC.mode() == "p" and P2.PC.c.text == "" and drawn(P2, "^Speak: $"), "a Tab returned by the field: back to Speak (no tab character typed)")
 P2.keys.tab = true; typeText(P2, "\t")
 check(P2.PC.mode() == "w", "the Tab key and a field Tab in one frame move one mode, not two")
-P2.hover = {104, 34, 3}; P2.keys.lmb = true; step()                -- (press on the 3rd chip: Everyone)
+P2.hover = {104, 34, 3}; P2.keys.lmb = true; step()                -- (press on the 3rd chip: Global)
 P2.release = true; step()                                       -- (its release: ignored)
 P2.hover = nil
-check(P2.PC.mode() == "g" and drawn(P2, "^Say %(everyone%): $"), "clicking the Everyone chip (press fires, release de-duplicated)")
+check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "clicking the Global chip (press fires, release de-duplicated)")
 P2.hover = {104, 34, 1}; P2.release = true; step(); P2.hover = nil
 check(P2.PC.mode() == "p", "a release alone on the Nearby chip also works (UiBlankButton fallback)")
 P2.hover = {104, 34, 2}; step(); P2.hover = nil
@@ -255,7 +255,7 @@ check(m and m.text == "hello there" and m.ch == "p" and m.p == 2 and m.name == "
 check(hasLine(P1, "p", "hello there") and hasLine(P5, "p", "hello there") and hasLine(P2, "p", "hello there"), "P1 (4 m), P5 (10 m) and P2 itself have it")
 check(#hist(P3) == 0 and #hist(P4) == 0, "P3 (26 m) and P4 (56 m) did not get it, not even in history")
 check(P1.PC.c.bubbles[2] and P1.PC.c.bubbles[2].text == "hello there" and not P1.PC.c.bubbles[2].whisper, "P1 has a normal speech bubble over P2")
-check(drawn(P1, "^%[near%] $") and drawn(P1, "^P2: $") and drawn(P1, "^hello there$"), "P1's feed: '[near] P2: hello there'")
+check(drawn(P1, "^%[speak%] $") and drawn(P1, "^P2: $") and drawn(P1, "^hello there$"), "P1's feed: '[speak] P2: hello there'")
 P1.sounds, P4.sounds = {}, {}
 steps(60)
 local nb = soundsFrom(P1, 4, "babble")
@@ -320,21 +320,17 @@ check(q[1] > 1.1 and q[2] < 0.9, string.format("the voice's pitch still shifts t
 -- ================================================================== everyone
 waitRate()
 press(P3, "return"); press(P3, "tab"); press(P3, "tab")
-check(P3.PC.mode() == "g" and drawn(P3, "^Say %(everyone%): $"), "P3: Tab twice = everyone")
+check(P3.PC.mode() == "g" and drawn(P3, "^Global: $"), "P3: Tab twice = Global")
 typeText(P3, "hi all")
 P1.sounds, P4.sounds = {}, {}
 press(P3, "return"); step()
 for _, M in ipairs({P1, P2, P3, P4, P5}) do
 	check(lastLine(M, "g") and lastLine(M, "g").text == "hi all", "P" .. M.me .. " has the everyone line")
 end
-check(not P1.PC.c.bubbles[3] and not P4.PC.c.bubbles[3], "everyone: no bubble")
+check(not P1.PC.c.bubbles[3] and not P4.PC.c.bubbles[3], "Global: no bubble")
+P4.sounds = {}; P1.sounds = {}
 steps(60)
-local flat, loudest = 0, 0
-for _, s in ipairs(P4.sounds) do
-	if math.abs(s.pos[1] - 60) < 0.01 then flat = flat + 1 end
-	loudest = math.max(loudest, s.vol)
-end
-check(flat >= 3 and loudest <= 0.36, string.format("everyone babble plays at the listener, quiet (%d syllables, max vol %.2f)", flat, loudest))
+check(#P4.sounds == 0 and #P1.sounds == 0, "Global: no babble either (a plain chat line)")
 
 -- ================================================================== one history per player, different
 local function modes(M) local t = {} for _, e in ipairs(hist(M)) do t[#t + 1] = e.ch end return table.concat(t, " ") end
@@ -346,8 +342,8 @@ local n1 = #hist(P1)
 steps(120)
 check(#hist(P1) == n1, "no message is received twice although every shared read is a new table")
 press(P1, "return"); step()
-check(drawn(P1, "^%[near%] $") and drawn(P1, "^%[whisper%] $") and drawn(P1, "^%[all%] $") and drawn(P1, "^psst the SECRET plan$") and drawn(P1, "^hi all$"),
-	"P1's window shows one history with [near] / [whisper] / [all] tags")
+check(drawn(P1, "^%[speak%] $") and drawn(P1, "^%[whisper%] $") and drawn(P1, "^%[global%] $") and drawn(P1, "^psst the SECRET plan$") and drawn(P1, "^hi all$"),
+	"P1's window shows one history with [speak] / [whisper] / [global] tags")
 press(P1, "esc"); step()
 check(not P1.PC.c.typing and not drawn(P1, "^Chat$") and not drawn(P1, "^Say "), "Esc closes the line and the window")
 
@@ -358,7 +354,7 @@ P2.release = true; step()                                       -- (its release:
 P2.hover = nil
 check(P2.PC.page() == "settings" and drawn(P2, "^Settings$") and drawn(P2, "^< Back$") and drawn(P2, "^Squeaky$") and drawn(P2, "^Robot$"), "Settings button: the Settings page (voices, '< Back')")
 check(not drawn(P2, "hello there", true), "... the history is not shown meanwhile")
-check(drawn(P2, "^Babble for messages to everyone$") and drawn(P2, "^\"Enter: chat\" hint on screen$") and drawn(P2, "^Keep the chat window open$"), "... with the switches")
+check(not drawn(P2, "^Babble for messages to everyone$") and drawn(P2, "^\"Enter: chat\" hint on screen$") and drawn(P2, "^Keep the chat window open$"), "... with the switches (no Global babble one)")
 P2.sounds = {}
 local picks, setVoice0 = 0, P2.PC.setVoice
 P2.PC.setVoice = function(i) picks = picks + 1; setVoice0(i) end
@@ -377,10 +373,8 @@ check(P1.shared.pcVoice[2] == 2, "a release alone picks too (Chirpy)")
 P2.hover = {300, 52, 4}; step(); P2.hover = nil; steps(5)
 check(P1.shared.pcVoice[2] == 2, "hovering does not pick")
 P2.hover = {120, 40, 2}; P2.keys.lmb = true; step(); P2.hover = nil
-check(P2.PC.c.muteGlobal and P2.reg["savegame.mod.pcmuteglobal"] == true, "switch: everyone babble Off (saved)")
-P2.hover = {120, 40, 4}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.c.hideHint and P2.reg["savegame.mod.pchidehint"] == true, "switch: hint Hide (saved)")
-P2.hover = {120, 40, 5}; P2.keys.lmb = true; step(); P2.hover = nil
+P2.hover = {120, 40, 3}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.c.pinned, "switch: keep the window open")
 P2.hover = {150, 40, 1}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.page() == "chat" and drawn(P2, "^Chat$") and drawn(P2, "^Settings$"), "'< Back' returns to the history")
@@ -388,16 +382,11 @@ press(P2, "esc"); step()
 check(not P2.PC.c.typing and P2.PC.c.pinned and drawn(P2, "^Chat$") and not drawn(P2, "^Say "), "pinned: the window stays after Esc (history page)")
 P2.hover = {150, 40, 1}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.page() == "chat", "pinned but not typing: read-only (no clicks taken from the game)")
-steps(120)                                                       -- (the voice previews are over)
-P2.sounds = {}
-P3.PC.say("muted test", "g"); step(); steps(40)
-check(#P2.sounds == 0 and lastLine(P2, "g").text == "muted test", "muted: the everyone line arrives, no babble")
 say(P2, "/settings"); step()
 check(P2.PC.c.typing and P2.PC.page() == "settings", "/settings opens the line on the Settings page")
-P2.hover = {120, 40, 1}; P2.keys.lmb = true; step()            -- (everyone babble On)
-P2.hover = {120, 40, 3}; P2.keys.lmb = true; step()            -- (hint Show)
-P2.hover = {120, 40, 6}; P2.keys.lmb = true; step(); P2.hover = nil   -- (keep open: No)
-check(not P2.PC.c.muteGlobal and not P2.PC.c.hideHint and not P2.PC.c.pinned, "switches back on / shown / not pinned")
+P2.hover = {120, 40, 1}; P2.keys.lmb = true; step()            -- (hint Show)
+P2.hover = {120, 40, 4}; P2.keys.lmb = true; step(); P2.hover = nil   -- (keep open: No)
+check(not P2.PC.c.hideHint and not P2.PC.c.pinned, "switches back: shown / not pinned")
 press(P2, "esc"); step()
 check(P2.PC.page() == "chat" and not drawn(P2, "^Chat$"), "Esc: closed (next time it opens on the history)")
 P2.PC.setMode("p")
@@ -435,13 +424,14 @@ check(lastLine(P1, "p").text == "/slash", "//text sends a line starting with /")
 say(P2, "/frobnicate")
 check(lastLine(P2).text:find("Unknown command", 1, true) ~= nil, "unknown command echoed")
 say(P2, "/help")
-check(lastLine(P2).text:find("/p /w /g", 1, true) ~= nil, "/help lists commands")
+check(lastLine(P2).text:find("/s /w /g", 1, true) ~= nil, "/help lists commands")
+say(P2, "/g"); say(P2, "/s")
+check(P2.PC.mode() == "p" and P2.PC.page() ~= "settings", "/s switches to Speak (Settings is /settings)")
 say(P2, "/hint"); step()
 check(P2.PC.c.hideHint and not drawn(P2, "^Enter: chat$") and not drawn(P2, "^Proximity Chat %- Enter"), "/hint hides the hint (saved)")
 say(P2, "/hint")
 say(P2, "/mute")
-check(P2.PC.c.muteGlobal, "/mute silences everyone babble")
-say(P2, "/mute")
+check(lastLine(P2).text:find("Unknown command", 1, true) ~= nil, "/mute is gone (Global has no babble to mute)")
 say(P2, "/clear")
 check(#hist(P2) == 0, "/clear empties your history")
 
@@ -507,7 +497,7 @@ P1.PC.hooks.inLobby = function() return true end
 step(); step()
 check(P2.PC.mode() == "g", "lobby: clients say everything to everyone")
 press(P2, "return"); press(P2, "tab")
-check(P2.PC.mode() == "g" and drawn(P2, "^Say %(everyone%): $"), "lobby: Tab does not leave everyone")
+check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "lobby: Tab does not leave Global")
 P2.hover = {104, 34, 2}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.mode() == "g", "lobby: the Whisper chip is disabled")
 waitRate()
@@ -586,19 +576,17 @@ end
 local O = optionsEnv()
 O.frame()
 local function otext(pat) for _, t in ipairs(O.texts) do if t:find(pat, 1, true) then return t end end end
-check(otext("nearby / whisper / everyone") and otext("Not picked"), "Options: explains the keys; no voice picked yet")
+check(otext("Speak / Whisper / Global") and otext("Not picked"), "Options: explains the keys; no voice picked yet")
 O.frame("Robot")
 check(O.reg["savegame.mod.pcvoice"] == 6, "Options: picking Robot saves savegame.mod.pcvoice = 6")
 O.frame("Hide")
 check(O.reg["savegame.mod.pchidehint"] == true, "Options: hide the hint")
-O.frame("Off")
-check(O.reg["savegame.mod.pcmuteglobal"] == true, "Options: everyone babble off")
 O.frame("Close")
 check(O.closed, "Options: Close")
 local P8 = addMachine(8, false, O.reg)
 W.pos[8] = Vec(0, 0, -3)
 steps(30)
-check(P1.shared.pcVoice[8] == 6 and P8.PC.c.hideHint and P8.PC.c.muteGlobal and not drawn(P8, "Enter: chat", true), "the Options settings are used in game (voice synced, hint hidden, everyone muted)")
+check(P1.shared.pcVoice[8] == 6 and P8.PC.c.hideHint and not drawn(P8, "Enter: chat", true), "the Options settings are used in game (voice synced, hint hidden)")
 
 print(string.format("\n%d checks, %d failed", NCHECK, FAILED))
 if FAILED > 0 then os.exit(1) end

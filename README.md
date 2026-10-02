@@ -6,12 +6,12 @@ where you stand. Three ways to speak:
 
 | mode | who gets it |
 |---|---|
-| **Nearby** | players within 20 m: a bubble, plus babble from your position. WRITE IN CAPS (or end a word with `!!`) to shout: shouted words carry to 45 m, and only those words get through. |
+| **Speak** | players within 20 m: a speech bubble, plus babble from your position. WRITE IN CAPS (or end a word with `!!`) to shout: shouted words carry to 45 m, and only those words get through. |
 | **Whisper** | players within 5 m only: a small grey bubble and a breathy babble |
-| **Everyone** | every player: a chat line, no bubble |
+| **Global** | every player: a plain chat line, with no bubble and no babble |
 
-The chat window keeps **your own history**: everything said to everyone, plus the nearby lines and
-whispers you were close enough to hear when they were said. Every player's history is different.
+The chat window keeps **your own history**: every Global line, plus the Speak lines and whispers you
+were close enough to hear when they were said. Every player's history is different.
 
 Every language works: the right game font for each script, Arabic and Hebrew drawn right to left, and
 babble for every alphabet.
@@ -29,15 +29,14 @@ copies.
 ## Use
 
 - **Enter**: open the chat line and the chat window. Enter again sends; **Esc** closes.
-- **Tab** while typing, or click **Nearby / Whisper / Everyone** at the end of the line, to choose
+- **Tab** while typing, or click **Speak / Whisper / Global** at the end of the line, to choose
   how you speak. Your last choice is remembered.
 - **Settings** (button at the top right of the chat window): pick your voice (Squeaky, Chirpy, Plain,
-  Low, Deep, Robot; click to hear it), babble on "everyone" lines, the hint, and keeping the window
-  open.
+  Low, Deep, Robot; click to hear it), the hint, and keeping the window open.
 - **Commands:**
-  - `/p`, `/w` and `/g` choose the mode, or say one line in it: `/w psst`.
+  - `/s`, `/w` and `/g` choose the mode (Speak, Whisper, Global), or say one line in it: `/w psst`.
   - `/voice` lists the voices; `/voice robot` picks one.
-  - `/mute`, `/hint`, `/window`, `/clear`, `/help`.
+  - `/hint`, `/window`, `/clear`, `/help`.
 
 ## For game-mode makers
 
