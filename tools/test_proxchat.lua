@@ -963,6 +963,23 @@ check(#(P1.PC.c.bubbleRects or {}) >= 1 and drawn(P1, "^and now at a quarter$") 
 	string.format("bubbles 25%% (still drawn, the text too) and babble 25%% (vol %.3f)", vq))
 P1.PC.setBubbleLevel(5); P1.PC.setBabbleLevel(5)
 
+-- ================================================================== drawing order: far first
+W.pos[3] = Vec(30, 0, 0)
+if P3.PC.c.typing then press(P3, "esc"); step() end                    -- (P3's line was left open)
+waitRate(); say(P3, "/s from far away")
+waitRate(); say(P2, "/s from close by")
+step()
+local ord = P1.PC.drawOrder or {}
+local i2, i3
+for i, L in ipairs(ord) do if L.p == 2 then i2 = i elseif L.p == 3 then i3 = i end end
+check(i2 and i3 and i3 < i2 and ord[i3].dist > ord[i2].dist, "the farther speaker's bubble (and its line) is drawn first: the nearer one covers it")
+waitRate(); say(P2, "/s and a second one")
+step()
+ord = P1.PC.drawOrder or {}
+local old2, new2
+for i, L in ipairs(ord) do if L.p == 2 then if L.age == 2 then old2 = i else new2 = i end end end
+check(old2 and new2 and old2 < new2, "a speaker's older bubble (raised, with its line) is drawn before the newest: the line goes behind it")
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
