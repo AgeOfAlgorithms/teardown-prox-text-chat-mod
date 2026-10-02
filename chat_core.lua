@@ -151,7 +151,7 @@ do
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
 		echoFrom = 6,            -- m: farther voices echo
 		soundNear = 5,           -- m: farther voices are played this far away in their direction (PC.soundPos)
-		soundFar = 0.35,         -- loudness at the edge of a message's reach (1 up close; PC.loudness)
+		soundFar = 0.35,         -- the distance curve's value at a message's reach (1 up close; the buffer then fades it to 0; PC.loudness)
 		winW = 1000, winH = 400, -- the chat window (and the input line's width), before uiScale
 		uiScale = 0.8,           -- the chat window, feed, input line and hint, scaled from the bottom-left corner
 		countFrom = 60,          -- characters typed from which the input line shows "n/maxLen"
@@ -1277,14 +1277,20 @@ end
 
 -- how a voice carries: past cfg.soundNear the syllable is played that far away IN THE SPEAKER'S
 -- DIRECTION (PC.soundPos), so the game's own distance fade is the same for every speaker and ours sets
--- the loudness: full near, falling gently to cfg.soundFar at the edge of the message's reach (speech
--- mumbleR, shouted words shoutMumbleR, whispers whisperMumbleR). The game's fade on top of ours made far
+-- the loudness: full near, falling gently with distance, then fading smoothly to nothing across the
+-- buffer (speech chatR-mumbleR, shouted words shoutR-shoutMumbleR, whispers whisperR-whisperMumbleR). The game's fade on top of ours made far
 -- shouts with a readable bubble almost silent. Speech echoes more the farther it carries (1-3 delayed,
 -- fainter repeats from beside and behind the speaker's direction).
-function PC.loudness(d, reach)
+function PC.loudness(d, reach, inner)
 	local cfg = PC.cfg
 	local t = math.max(0, math.min(1, (d - cfg.soundNear) / math.max(1, reach - cfg.soundNear)))
-	return 1 - (1 - cfg.soundFar) * t ^ 1.5
+	local loud = 1 - (1 - cfg.soundFar) * t ^ 1.5
+	-- across the buffer (inner .. reach) it fades smoothly to nothing: no sudden drop at the edge
+	if inner and d > inner then
+		local x = math.min(1, (d - inner) / math.max(0.5, reach - inner))
+		loud = loud * (1 - x * x * (3 - 2 * x))
+	end
+	return loud
 end
 
 function PC.soundPos(pos, cam)
@@ -1293,13 +1299,14 @@ function PC.soundPos(pos, cam)
 	return VecAdd(cam, VecScale(VecSub(pos, cam), PC.cfg.soundNear / d))
 end
 
-function PC.babbleDistance(pos, vol, shout, reach)
+function PC.babbleDistance(pos, vol, shout, reach, inner)
 	local cfg = PC.cfg
 	local cam = GetCameraTransform().pos
 	local d = VecLength(VecSub(pos, cam))
 	reach = reach or (shout and cfg.shoutMumbleR or cfg.mumbleR)
+	inner = inner or (shout and cfg.shoutR or cfg.chatR)
 	local f = math.max(0, math.min(1, (d - cfg.echoFrom) / math.max(1, reach - cfg.echoFrom)))
-	local loud = vol * PC.loudness(d, reach)
+	local loud = vol * PC.loudness(d, reach, inner)
 	local echoes = {}
 	if f > 0.05 then
 		local n = f > 0.55 and 3 or (f > 0.2 and 2 or 1)
@@ -1355,9 +1362,9 @@ function PC.babbleTick()
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
 					elseif q.how == "whisper" then                          -- (no echo; quiet toward 13 m)
 						local d = VecLength(VecSub(pos, cam))
-						PlaySound(clip, PC.soundPos(pos, cam), base * PC.loudness(d, PC.cfg.whisperMumbleR), false, pitch)
+						PlaySound(clip, PC.soundPos(pos, cam), base * PC.loudness(d, PC.cfg.whisperMumbleR, PC.cfg.whisperR), false, pitch)
 					else
-						local vol, echoes = PC.babbleDistance(pos, base, s[4], s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR)
+						local vol, echoes = PC.babbleDistance(pos, base, s[4], s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR, s[4] and PC.cfg.shoutR or PC.cfg.chatR)
 						PlaySound(clip, PC.soundPos(pos, cam), vol, false, pitch)
 						for _, e in ipairs(echoes) do
 							B.echoes[#B.echoes + 1] = {t = now + e.delay, clip = clip, pos = PC.soundPos(VecAdd(pos, e.offset), cam), vol = e.vol, pitch = pitch * 0.97}
