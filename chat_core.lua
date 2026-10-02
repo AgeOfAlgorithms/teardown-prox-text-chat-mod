@@ -48,8 +48,8 @@
 --   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
---   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /dummy (three
---   local test speakers), /help, //text sends "/text".
+--   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /dummy [1|2|3|clear]
+--   (local test speakers), /help, //text sends "/text".
 --
 -- (copy fonts/ too for the bubble font; without it the bubbles use the game fonts)
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
@@ -904,8 +904,9 @@ function PC.clientTick(dt)
 	PC.babbleTick()
 end
 
--- ---- the test dummies (/dummy): three figures in a row in front of you - a whisperer, a speaker and
--- a shouter - only for you (client-side, no server, not synced). They say the same line at the same
+-- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
+-- and a shouter; /dummy 1 / 2 / 3 one of them (moved if it exists); /dummy clear removes them. Only
+-- for you (client-side, no server, not synced). They say the same line at the same
 -- moment (the shouter in CAPS / with "!"), line after line, the voices rotating, so you can walk back
 -- and forth and compare the bubbles and the babble at every distance. Each line: "..." typing for
 -- cfg.dummyType s, then the message as if a player said it (PC.receive).
@@ -931,41 +932,80 @@ function PC.isDummy(p) return type(p) == "number" and p >= PC.DUMMY and p < PC.D
 
 function PC.dummyOf(p)
 	local c = PC.c
-	return c and c.dummy and PC.isDummy(p) and c.dummy.list[p - PC.DUMMY + 1] or nil
+	return c and c.dummy and c.dummy.byP[p] or nil
 end
 
-function PC.dummyToggle()
-	local c, cfg = PC.C(), PC.cfg
-	if c.dummy then
-		for _, d in ipairs(c.dummy.list) do
-			for _, e in ipairs(d.ents) do pcall(Delete, e) end
-			c.bubbles[d.p], c.babble.queue[d.p] = nil, nil
-		end
-		c.dummy = nil
-		PC.system("The test dummies are gone.")
-		return
-	end
+-- where you stand and which way you look (flat), for placing dummies
+local function dummyFrame()
 	local cam = GetCameraTransform()
 	local okF, fwd = pcall(TransformToParentVec, cam, Vec(0, 0, -1))
 	fwd = okF and fwd or Vec(0, 0, -1)
 	fwd = VecNormalize(Vec(fwd[1], 0, fwd[3]))
-	local right = VecCross(fwd, Vec(0, 1, 0))
-	local me = PC.speakerPos(GetLocalPlayer()) or cam.pos
-	local list = {}
-	for i, kind in ipairs(PC.DUMMY_KINDS) do
-		local pos = VecAdd(VecAdd(me, VecScale(fwd, 3)), VecScale(right, (i - 2) * 2.5))
-		local okR, hit, dist = pcall(QueryRaycast, VecAdd(pos, Vec(0, 2, 0)), Vec(0, -1, 0), 6)
-		if okR and hit then pos = Vec(pos[1], pos[2] + 2 - dist, pos[3]) end
-		-- a box figure (legs, body, head); client-side, static, just for looks
-		local xml = '<body dynamic="false"><voxbox size="5 9 3" pos="-0.25 0 -0.15" color="0.3 0.33 0.45"/>'
-			.. '<voxbox size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox size="4 4 4" pos="-0.2 1.6 -0.2" color="0.95 0.8 0.65"/></body>'
-		local okS, ents = pcall(Spawn, xml, Transform(pos), true)
-		list[i] = {p = PC.DUMMY + i - 1, kind = kind[1], name = kind[2], pos = pos, ents = okS and ents or {}, voice = i}
+	return PC.speakerPos(GetLocalPlayer()) or cam.pos, fwd, VecCross(fwd, Vec(0, 1, 0))
+end
+
+-- remove one dummy (its figure, bubble and babble)
+function PC.dummyRemove(d)
+	local c = PC.C()
+	for _, e in ipairs(d.ents) do pcall(Delete, e) end
+	c.bubbles[d.p], c.babble.queue[d.p] = nil, nil
+	local dm = c.dummy
+	dm.byP[d.p] = nil
+	for i = #dm.list, 1, -1 do if dm.list[i] == d then table.remove(dm.list, i) end end
+	if #dm.list == 0 then c.dummy = nil end
+end
+
+-- dummy kind i (PC.DUMMY_KINDS) at pos, on the ground; one already there of that kind is replaced
+function PC.dummySpawn(i, pos)
+	local c = PC.C()
+	local kind = PC.DUMMY_KINDS[i]
+	c.dummy = c.dummy or {list = {}, byP = {}, k = 0, round = 0, nextT = GetTime() + 0.5, typingUntil = 0}
+	local dm = c.dummy
+	local old = dm.byP[PC.DUMMY + i - 1]
+	if old then PC.dummyRemove(old); c.dummy = c.dummy or dm end
+	local okR, hit, dist = pcall(QueryRaycast, VecAdd(pos, Vec(0, 2, 0)), Vec(0, -1, 0), 6)
+	if okR and hit then pos = Vec(pos[1], pos[2] + 2 - dist, pos[3]) end
+	-- a box figure (legs, body, head); client-side, static, just for looks
+	local xml = '<body dynamic="false"><voxbox size="5 9 3" pos="-0.25 0 -0.15" color="0.3 0.33 0.45"/>'
+		.. '<voxbox size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox size="4 4 4" pos="-0.2 1.6 -0.2" color="0.95 0.8 0.65"/></body>'
+	local okS, ents = pcall(Spawn, xml, Transform(pos), true)
+	local d = {p = PC.DUMMY + i - 1, idx = i, kind = kind[1], name = kind[2], pos = pos, ents = okS and ents or {}, voice = i}
+	dm.byP[d.p] = d
+	dm.list[#dm.list + 1] = d
+	table.sort(dm.list, function(u, v) return u.idx < v.idx end)        -- (they speak in kind order)
+	return d
+end
+
+-- /dummy [1|2|3|clear]: all three in a row (a fresh set) / the whisperer, speaker or shouter 3 m in
+-- front of you (moved there if it exists) / remove them all
+function PC.dummyCommand(arg)
+	local c, cfg = PC.C(), PC.cfg
+	arg = (arg or ""):lower()
+	if arg == "clear" or arg == "off" or arg == "remove" then
+		if c.dummy then
+			while c.dummy do PC.dummyRemove(c.dummy.list[1]) end
+			PC.system("The test dummies are gone.")
+		else
+			PC.system("No test dummies to clear.")
+		end
+		return
 	end
-	c.dummy = {list = list, k = 0, round = 0, nextT = GetTime() + 0.5, typingUntil = 0}
-	PC.system("Three test dummies in front of you (left to right: whisperer, speaker, shouter) say the same lines. Walk back and forth: whisper "
-		.. cfg.whisperR .. " m (garbled to " .. cfg.whisperMumbleR .. "), speech " .. cfg.chatR .. " m (garbled to " .. cfg.mumbleR
-		.. "), shouts " .. cfg.shoutR .. " m. /dummy again removes them.")
+	local me, fwd, right = dummyFrame()
+	local i = tonumber(arg)
+	if arg == "" then
+		if c.dummy then while c.dummy do PC.dummyRemove(c.dummy.list[1]) end end
+		for k = 1, #PC.DUMMY_KINDS do
+			PC.dummySpawn(k, VecAdd(VecAdd(me, VecScale(fwd, 3)), VecScale(right, (k - 2) * 2.5)))
+		end
+		PC.system("Three test dummies in front of you (left to right: whisperer, speaker, shouter) say the same lines. Walk back and forth: whisper "
+			.. cfg.whisperR .. " m (garbled to " .. cfg.whisperMumbleR .. "), speech " .. cfg.chatR .. " m (garbled to " .. cfg.mumbleR
+			.. "), shouts " .. cfg.shoutR .. " m (garbled to " .. cfg.shoutMumbleR .. "). /dummy clear removes them.")
+	elseif i and PC.DUMMY_KINDS[i] then
+		PC.dummySpawn(i, VecAdd(me, VecScale(fwd, 3)))
+		PC.system("The " .. PC.DUMMY_KINDS[i][2]:lower() .. " dummy stands in front of you. /dummy clear removes the dummies.")
+	else
+		PC.system("/dummy: all three test dummies.  /dummy 1: whisperer, 2: speaker, 3: shouter.  /dummy clear: remove them.")
+	end
 end
 
 function PC.dummyTick(now)
@@ -987,8 +1027,8 @@ function PC.dummyTick(now)
 	else                                                              -- (all say it, each in its own voice)
 		local line = PC.DUMMY_LINES[dm.k]
 		dm.typingUntil = 0
-		for i, d in ipairs(dm.list) do
-			d.voice = (dm.round + i - 2) % #PC.VOICES + 1                -- (each round shifts the voices)
+		for _, d in ipairs(dm.list) do
+			d.voice = (dm.round + d.idx - 2) % #PC.VOICES + 1            -- (each round shifts the voices)
 			dm.n = (dm.n or 0) + 1
 			PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
 				ch = d.kind == "w" and "w" or "p", text = d.kind == "s" and line[2] or line[1]})
@@ -1259,14 +1299,14 @@ function PC.command(text)
 		c.pinned = not c.pinned
 		PC.system(c.pinned and "The chat window stays open (Enter to use it). /window again to close it." or "The chat window closes when you stop typing.")
 	elseif cmd == "dummy" then
-		PC.dummyToggle()
+		PC.dummyCommand(rest)
 	elseif cmd == "clear" then
 		c.hist = {}
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or ! shouts farther (Speak only).")
-		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /dummy (test speakers)")
+		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /dummy [1|2|3|clear] (test speakers)")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
