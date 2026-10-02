@@ -786,6 +786,12 @@ local Lwh = P1.PC.bubbleLayout(2, "psst over here", false, 1, false, true, false
 local Ltd = P1.PC.bubbleLayout(2, "...", false, 1, true, false)
 P1.offscreen = nil
 check(inside(Lsh) and inside(Lwh) and not Ltd and Lsh.x > 960, "speaker off screen: shout and whisper bubbles too, on the edge on the speaker's side (not the typing dots)")
+P1.offscreen = true
+local Lnear = P1.PC.bubbleLayout(2, "hello", false, 1, false, false, false, W.time)     -- (P2: 4 m)
+local Lfar = P1.PC.bubbleLayout(3, "hello", false, 1, false, false, false, W.time)      -- (P3: 30 m)
+P1.offscreen = nil
+check(Lnear and Lfar and math.abs(Lnear.right - (1920 - 8)) < 1 and Lnear.s > Lfar.s,
+	string.format("on the edge: right at the border (8 px), still sized by distance (4 m: %.2f, 30 m: %.2f)", Lnear.s, Lfar.s))
 P1.pixel = {3, 1076}
 local Lc = P1.PC.bubbleLayout(2, string.rep("abcdefghi ", 9), false, 1, false, false, false, W.time)
 P1.pixel = {1918, 2}
