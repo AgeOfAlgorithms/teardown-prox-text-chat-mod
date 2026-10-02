@@ -376,7 +376,8 @@ for i in pairs(a3) do if not a6[i] then sub = false end end
 check(sub, "closer only adds letters (the same ones stay)")
 check(G("come HERE now", 0, 9, 0, true):find(" HERE ", 1, true) ~= nil, "garble keeps shouted words readable")
 check(g0 == "\226\172\154\226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154\226\172\154\226\172\154!"
-	and P3.PC.bubbleFont(g0) == "bold_sc.ttf" and P3.PC.bubbleFont("hi") == "MOD/fonts/pangolin.ttf", "the mystery letters are all U+2B1A, drawn in bold_sc (it has the glyph); plain bubbles stay Pangolin")
+	and P3.PC.bubbleFont(g0) == "MOD/fonts/pangolin.ttf" and P3.PC.chatFont(g0) == "bold_sc.ttf",
+	"the mystery letters are all U+2B1A, in our Pangolin (without it: bold_sc, the game font that has the glyph)")
 local bm = P3.PC.c.bubbles[2]
 W.pos[3] = Vec(33, 0, 0); local tFar = P3.PC.bubbleText(2, bm, 0)     -- (29 m)
 W.pos[3] = Vec(25, 0, 0); local tNear = P3.PC.bubbleText(2, bm, 0)    -- (21 m)
