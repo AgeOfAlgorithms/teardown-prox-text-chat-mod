@@ -1399,9 +1399,11 @@ function PC.edgePoint(pos)
 	return cx + dx * k, cy + dy * k
 end
 
--- a speech bubble over player p, measured but not drawn yet (nil: not on screen). small: the "..." of
--- someone typing; whisper: a bit smaller, pale lavender; mumble: a garbled message from the buffer
--- range - kept on the screen edge in their direction when they are off screen
+-- a speech bubble over player p, measured but not drawn yet. small: the "..." of someone typing (nil
+-- when they are off screen); whisper: a bit smaller, pale lavender; mumble: a garbled message from the
+-- buffer range. A speaker off screen gets the bubble on the screen edge on their side; every bubble is
+-- kept wholly on screen (PC.EDGE_MARGIN px).
+PC.EDGE_MARGIN = 8
 function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	local feet = PC.speakerPos(p)
 	if not feet then return nil end
@@ -1410,11 +1412,11 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	local scale
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, d)))
-	elseif mumble then
-		x, y = PC.edgePoint(head)
-		scale = 0.8
+	elseif small then
+		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
-		return nil
+		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
+		scale = 0.8
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local font, size = PC.bubbleFont(text)
@@ -1437,6 +1439,11 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	end
 	local w = math.min(cfg.bubbleW, tw or 200) + 30
 	local h = vh + 22
+	-- the whole bubble stays on screen (a speaker near the edge, or pinned to it)
+	local M = PC.EDGE_MARGIN
+	local halfW, up = (w / 2 + 2) * s, (h + 16) * s
+	x = math.max(M + halfW, math.min(UiWidth() - M - halfW, x))
+	y = math.max(M + up, math.min(UiHeight() - M, y))
 	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime,
 		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
@@ -1446,11 +1453,17 @@ end
 -- to the speaker's head
 function PC.bubbleDraw(L)
 	local a, s, w, h = L.a, L.s, L.w, L.h
-	if L.lift > 0 then
+	if L.lift > 0 then                                                   -- (raised: a line down to the speaker)
 		UiPush()
 		UiTranslate(L.x - 1, L.bottom - L.lift)
 		UiColor(0, 0, 0, 0.55 * a)
 		UiRect(2, L.lift)
+		UiPop()
+	elseif L.lift < 0 and L.top - L.lift > L.bottom then                 -- (put below: a line up to the speaker)
+		UiPush()
+		UiTranslate(L.x - 1, L.bottom)
+		UiColor(0, 0, 0, 0.55 * a)
+		UiRect(2, L.top - L.lift - L.bottom)
 		UiPop()
 	end
 	UiPush()
@@ -1495,24 +1508,30 @@ function PC.bubbleDraw(L)
 end
 
 -- no bubble hides another: lowest on screen first, each one that would overlap one already placed is
--- raised just above it (only up, so the line to its speaker stays straight). c.bubbleRects: the result.
+-- raised just above it (straight up, a line down to its speaker); with no room left above, it goes
+-- below the others instead (a line up). c.bubbleRects: the result.
 function PC.layoutBubbles(list)
 	table.sort(list, function(u, v)
 		if u.bottom ~= v.bottom then return u.bottom > v.bottom end
 		return u.p < v.p
 	end)
 	local placed = {}
+	local M = PC.EDGE_MARGIN
 	for _, L in ipairs(list) do
-		for _ = 1, 3 * #list do
+		local down = false                                                -- (no room above: below the others instead)
+		for _ = 1, 3 * #list + 2 do
 			local moved = false
 			for _, P in ipairs(placed) do
 				if L.left < P.right and L.right > P.left and L.top - L.lift < P.bottom and L.bottom - L.lift > P.top then
-					L.lift = L.bottom - P.top + 4
+					local up = L.bottom - P.top + 4
+					if not down and L.top - up < M then down = true end
+					L.lift = down and math.min(L.lift, L.top - P.bottom - 4) or up
 					moved = true
 				end
 			end
 			if not moved then break end
 		end
+		L.lift = math.max(L.bottom - (UiHeight() - M), math.min(L.lift, L.top - M))   -- (on screen whatever happens)
 		placed[#placed + 1] = {p = L.p, left = L.left, right = L.right, top = L.top - L.lift, bottom = L.bottom - L.lift}
 	end
 	PC.C().bubbleRects = placed
