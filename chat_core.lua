@@ -981,9 +981,10 @@ function PC.dummySpawn(i, pos)
 	if old then PC.dummyRemove(old); c.dummy = c.dummy or dm end
 	local okR, hit, dist = pcall(QueryRaycast, VecAdd(pos, Vec(0, 2, 0)), Vec(0, -1, 0), 6)
 	if okR and hit then pos = Vec(pos[1], pos[2] + 2 - dist, pos[3]) end
-	-- a box figure (legs, body, head); client-side, static, just for looks
-	local xml = '<body dynamic="false"><voxbox size="5 9 3" pos="-0.25 0 -0.15" color="0.3 0.33 0.45"/>'
-		.. '<voxbox size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox size="4 4 4" pos="-0.2 1.6 -0.2" color="0.95 0.8 0.65"/></body>'
+	-- a box figure (legs, body, head); client-side, static, just for looks. nocull (as the game's own
+	-- multiplayer pickups): small shapes are otherwise faded out at a distance
+	local xml = '<body tags="nocull" dynamic="false"><voxbox tags="nocull" size="5 9 3" pos="-0.25 0 -0.15" color="0.3 0.33 0.45"/>'
+		.. '<voxbox tags="nocull" size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox tags="nocull" size="4 4 4" pos="-0.2 1.6 -0.2" color="0.95 0.8 0.65"/></body>'
 	local okS, ents = pcall(Spawn, xml, Transform(pos), true)
 	local d = {p = PC.DUMMY + i - 1, idx = i, kind = kind[1], name = kind[2], pos = pos, ents = okS and ents or {}, voice = i}
 	dm.byP[d.p] = d
