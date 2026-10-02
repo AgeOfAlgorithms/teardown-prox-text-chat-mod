@@ -65,6 +65,7 @@ local function machine(me, isHost, presetReg, prePC)
 	api.GetRemovedPlayers = function() local r = W.removed; return r end
 	api.SetBool = function(k, v) env.reg[k] = v and true or false end
 	api.GetBool = function(k) return env.reg[k] == true end
+	api.HasFile = function(f) return f == "MOD/fonts/pangolin.ttf" and not NO_FONT_FILE end
 	api.SetInt = function(k, v) env.reg[k] = math.floor(v) end
 	api.GetInt = function(k) return tonumber(env.reg[k]) or 0 end
 	api.SetString = function(k, v) env.reg[k] = tostring(v) end
@@ -472,6 +473,14 @@ check(PC.isShout("\206\148\206\145") and PC.isShout("\228\189\160\229\165\189\23
 check(#PC.babbleSyllables("\228\189\160\229\165\189\229\144\151") == 3 and PC.chatFont("\228\189\160\229\165\189\229\144\151") == "bold_sc.ttf", "Chinese: a syllable per character, the Chinese font")
 check(#PC.babbleSyllables("\227\129\147\227\130\147\227\129\171\227\129\161\227\129\175") == 5 and PC.chatFont("\227\129\147\227\130\147\227\129\171\227\129\161\227\129\175") == "bold_jp.ttf", "Japanese: a syllable per kana, the Japanese font")
 check(PC.chatFont("\236\149\136\235\133\149") == "bold_sc.ttf", "Korean: a font with Hangul")
+check(PC.bubbleFont("hey, wait! caf\195\169") == "MOD/fonts/pangolin.ttf" and select(2, PC.bubbleFont("hi")) == 32, "bubbles: Latin in the shipped font (Pangolin, 32)")
+check(PC.bubbleFont("dzie\197\132 dobry") == "MOD/fonts/pangolin.ttf" and PC.bubbleFont("\208\191\209\128\208\184\208\178\208\181\209\130") == "MOD/fonts/pangolin.ttf", "bubbles: Polish and Cyrillic in Pangolin too")
+check(PC.bubbleFont("\206\179\206\181\206\185\206\177") == "bold.ttf"
+	and PC.bubbleFont("\228\189\160\229\165\189") == "bold_sc.ttf" and select(2, PC.bubbleFont("\228\189\160")) == 30, "bubbles: Greek / Chinese: the game fonts (30)")
+local okF = PC.bubbleFontOk
+PC.bubbleFontOk = nil; NO_FONT_FILE = true
+check(PC.bubbleFont("hello") == "bold.ttf" and PC.bubbleFont("hello", false) == "regular.ttf", "bubbles: no fonts/ (an #include without it): the game fonts")
+PC.bubbleFontOk = okF; NO_FONT_FILE = nil
 check(PC.chatFont("\217\133\216\177\216\173\216\168\216\167") == "arial.ttf" and PC.chatFont("hello") == "bold.ttf" and PC.chatFont("hello", false) == "regular.ttf", "Arabic: arial.ttf; Latin: bold.ttf (whispers: regular)")
 check(PC.chatVisual("\216\168\216\168") == "\239\186\144\239\186\145", "Arabic joined and laid right to left")
 check(PC.chatVisual("\217\132\216\167") == "\239\187\187", "Arabic lam + alef ligature")

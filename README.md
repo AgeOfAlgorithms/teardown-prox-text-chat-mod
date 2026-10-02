@@ -13,7 +13,8 @@ where you stand. Three ways to speak:
 The chat window keeps **your own history**: every Global line, plus the Speak lines and whispers you
 were close enough to hear when they were said. Every player's history is different.
 
-Every language works: the right game font for each script, Arabic and Hebrew drawn right to left, and
+Bubbles are drawn in the hand-lettered Pangolin font (Latin and Cyrillic; SIL Open Font License, see
+`fonts/OFL.txt`). Every language works: the right game font for each script, Arabic and Hebrew drawn right to left, and
 babble for every alphabet.
 
 ## Install
