@@ -46,7 +46,8 @@ copies.
 
 A bubble shows three lines; a longer message scrolls down inside it at reading pace (a thin bar shows
 where it is) and the bubble stays up until it has finished. When a speaker is off screen, their bubble sits on the screen edge on their side, and a bubble always
-stays wholly on screen. A player shows at most two bubbles: their newest message, with the one before it above it.
+stays wholly on screen. A bubble is only shown while you are within its reach (35 m, a shout 55 m, a whisper 13 m): walk
+away and it goes, walk back while it is up and it is there again. A player shows at most two bubbles: their newest message, with the one before it above it.
 Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
 a thin line connects it to its speaker.
 

@@ -836,6 +836,23 @@ steps(30)
 check(seen and not P3.PC.c.bubbles[2], "walking into the buffer late: it shows for what is left of it (no extra time)")
 W.pos[3] = Vec(30, 0, 0)
 
+-- ================================================================== out of reach: no bubble
+local function shows(M, sp) for _, r in ipairs(M.PC.c.bubbleRects or {}) do if r.p == sp then return true end end return false end
+W.pos[3] = Vec(30, 0, 0)                                                  -- (26 m: the buffer)
+waitRate(); say(P2, "/s walk away from me and see")
+step()
+local in26 = shows(P3, 2)
+W.pos[3] = Vec(44, 0, 0); step()                                          -- (40 m: beyond the 35 m reach)
+local out40 = shows(P3, 2)
+W.pos[3] = Vec(32, 0, 0); step()                                          -- (28 m: back while it is up)
+check(in26 and not out40 and shows(P3, 2), "walking out of the buffer hides the bubble; coming back while it is up shows it again")
+waitRate(); say(P2, "/s COME BACK HERE")
+W.pos[3] = Vec(54, 0, 0); step()                                          -- (50 m: a shout reaches 55)
+local sh50 = shows(P3, 2)
+W.pos[3] = Vec(62, 0, 0); step()                                          -- (58 m)
+check(sh50 and not shows(P3, 2), "a shout's bubble goes beyond 55 m (its buffer's end)")
+W.pos[3] = Vec(30, 0, 0); step()
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
