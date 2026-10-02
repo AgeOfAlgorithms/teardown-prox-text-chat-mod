@@ -364,7 +364,25 @@ check(not P1.PC.c.typing and not drawn(P1, "^Chat$") and not drawn(P1, "^Say "),
 waitRate()
 say(P2, "/s meet me at the tower")
 local n3 = #hist(P3)
-check(P3.PC.c.bubbles[2].mumble and lastLine(P3, "p").text ~= "meet me at the tower", "P3 (26 m): '...' only")
+check(P3.PC.c.bubbles[2].mumble and lastLine(P3, "p").text ~= "meet me at the tower", "P3 (26 m): no words in the history")
+local function letters(t) local n = 0 for _ in t:gmatch("[a-z]") do n = n + 1 end return n end
+local G = P3.PC.garble
+local g0 = G("meet me at the tower!", 0, 7, 0)
+check(letters(g0) == 0 and g0:find("!$") and select(2, g0:gsub(" ", " ")) == 4 and P3.PC.utf8Len(g0) == 21, "garble at 0: every letter a glyph; spaces, punctuation and length stay: " .. g0)
+check(G("meet me at the tower!", 1, 7, 0) == "meet me at the tower!", "garble at 1: the message")
+local function shown(t) local o, i = {}, 0 for ch in t:gmatch(P3.PC.UTF8_CHAR) do i = i + 1; if ch:find("[a-z]") then o[i] = true end end return o end
+local a3, a6, sub = shown(G("meet me at the tower now", 0.3, 9, 0)), shown(G("meet me at the tower now", 0.6, 9, 5)), true
+for i in pairs(a3) do if not a6[i] then sub = false end end
+check(sub, "closer only adds letters (the same ones stay)")
+check(G("come HERE now", 0, 9, 0, true):find(" HERE ", 1, true) ~= nil, "garble keeps shouted words readable")
+check(g0 == "\226\172\154\226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154\226\172\154\226\172\154!"
+	and P3.PC.bubbleFont(g0) == "bold_sc.ttf" and P3.PC.bubbleFont("hi") == "MOD/fonts/pangolin.ttf", "the mystery letters are all U+2B1A, drawn in bold_sc (it has the glyph); plain bubbles stay Pangolin")
+local bm = P3.PC.c.bubbles[2]
+W.pos[3] = Vec(33, 0, 0); local tFar = P3.PC.bubbleText(2, bm, 0)     -- (29 m)
+W.pos[3] = Vec(25, 0, 0); local tNear = P3.PC.bubbleText(2, bm, 0)    -- (21 m)
+W.pos[3] = Vec(30, 0, 0)
+check(letters(tFar) < letters(tNear) and letters(tNear) < 16 and P3.PC.utf8Len(tNear) == 20,
+	string.format("the bubble from 29 m: %s / from 21 m: %s (more letters closer, never all)", tFar, tNear))
 W.pos[3] = Vec(20, 0, 0); step(); step()                            -- (16 m from P2)
 local b3 = P3.PC.c.bubbles[2]
 check(b3 and not b3.mumble and b3.text == "meet me at the tower" and lastLine(P3, "p").text == "meet me at the tower" and #hist(P3) == n3 + 1,
@@ -387,7 +405,8 @@ W.pos[5] = Vec(14, 0, 0)
 waitRate()
 say(P2, "/s over here")
 P3.offscreen = true; step()
-check(drawn(P3, "^%.%.%.$"), "P2 off P3's screen: the '...' is still drawn (on the screen edge)")
+local function garbledDrawn(m) for _, t in ipairs(m.texts) do for _, g in ipairs(m.PC.GARBLE) do if t:find(g, 1, true) then return t end end end end
+check(garbledDrawn(P3) ~= nil, "P2 off P3's screen: the garbled bubble is still drawn (on the screen edge): " .. tostring(garbledDrawn(P3)))
 P3.offscreen = nil
 
 -- ================================================================== the Settings page
