@@ -43,8 +43,8 @@ copies.
   - `/mute <name>` hides a player's messages, only for you (`/unmute <name>`, `/unmute all`;
     `/mute` alone lists who is muted).
   - `/hint`, `/window`, `/clear`, `/help`.
-  - `/dummy`: three test figures in front of you (a whisperer, a speaker and a shouter) say the same
-    lines at the same time, in every voice and several languages. Walk back and forth to see and hear
+  - `/dummy`: three test figures in front of you (a whisperer, a speaker and a shouter) take turns on the same
+    lines, 2 s apart, in every voice and several languages. Walk back and forth to see and hear
     every range. Only you see them. `/dummy 1`, `/dummy 2` and `/dummy 3` put just the whisperer,
     speaker or shouter in front of you (moved there if it is already out); `/dummy clear` removes them.
 
