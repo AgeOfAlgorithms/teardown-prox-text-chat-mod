@@ -396,11 +396,11 @@ check(g0 == "\226\172\154\226\172\154\226\172\154\226\172\154 \226\172\154\226\1
 	and P3.PC.bubbleFont(g0) == "MOD/fonts/pangolin.ttf" and P3.PC.chatFont(g0) == "bold_sc.ttf",
 	"the mystery letters are all U+2B1A, in our Pangolin (without it: bold_sc, the game font that has the glyph)")
 local bm = P3.PC.c.bubbles[2]
-W.pos[3] = Vec(33, 0, 0); local tFar = P3.PC.bubbleText(2, bm, 0)     -- (29 m)
-W.pos[3] = Vec(25, 0, 0); local tNear = P3.PC.bubbleText(2, bm, 0)    -- (21 m)
+W.pos[3] = Vec(38, 0, 0); local tFar = P3.PC.bubbleText(2, bm, 0)     -- (34 m)
+W.pos[3] = Vec(30, 0, 0); local tNear = P3.PC.bubbleText(2, bm, 0)    -- (26 m)
 W.pos[3] = Vec(30, 0, 0)
 check(letters(tFar) < letters(tNear) and letters(tNear) < 16 and P3.PC.utf8Len(tNear) == 20,
-	string.format("the bubble from 29 m: %s / from 21 m: %s (more letters closer, never all)", tFar, tNear))
+	string.format("the bubble from 34 m: %s / from 26 m: %s (more letters closer, never all)", tFar, tNear))
 W.pos[3] = Vec(20, 0, 0); step(); step()                            -- (16 m from P2)
 local b3 = P3.PC.c.bubbles[2]
 check(b3 and not b3.mumble and b3.text == "meet me at the tower" and lastLine(P3, "p").text == "meet me at the tower" and #hist(P3) == n3 + 1,
@@ -732,12 +732,12 @@ for _, x in ipairs(P1.sounds) do
 	end
 end
 check(wsnd >= 2 and ssnd >= 2, string.format("you hear them: whisper clips (%d) and shout clips (%d) from where they stand", wsnd, ssnd))
-W.pos[1] = Vec(0, 0, 21)                                                    -- (walk back: 24 m)
+W.pos[1] = Vec(0, 0, 25)                                                    -- (walk back: 28 m)
 steps(60 * 6)
 bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
 local L2 = P1.PC.DUMMY_LINES[2]
 check(not bw and bs and bs.mumble and bh and bh.level == "shout" and P1.PC.bubbleText(DH, bh, 0) == L2[2],
-	"from 24 m: no whisper, the speaker garbled, the shouter readable (all shouted)")
+	"from 28 m: no whisper, the speaker garbled, the shouter readable (all shouted)")
 W.pos[1] = Vec(0, 0, 0)
 steps(60 * 6 * 8)
 local seen = {}
