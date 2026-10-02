@@ -38,7 +38,7 @@ local function deep(v)
 end
 
 -- ---------------------------------------------------------------- the world
-local W = {time = 0, pos = {}, names = {}, calls = {}, removed = {}}
+local W = {time = 0, pos = {}, names = {}, calls = {}, ccalls = {}, removed = {}, dropSay = 0}
 local function Vec(x, y, z) return {x or 0, y or 0, z or 0} end
 W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
 for p = 1, 8 do W.names[p] = "P" .. p end
@@ -77,6 +77,12 @@ local function machine(me, isHost, presetReg, prePC)
 	api.LoadSound = function(path) env.loads[#env.loads + 1] = path; return #env.loads end
 	api.PlaySound = function(h, pos, vol, reg, pitch) env.sounds[#env.sounds + 1] = {h = h, pos = pos, vol = vol, pitch = pitch} end
 	api.ServerCall = function(name, ...) W.calls[#W.calls + 1] = {name = name:match("^server%.(.+)$"), args = deep({...}), n = select("#", ...)} end
+	api.ClientCall = function(p, name, ...) W.ccalls[#W.ccalls + 1] = {p = p, name = name:match("^client%.(.+)$"), args = deep({...}), n = select("#", ...)} end
+	api.Players = function()
+		local list, i = {}, 0
+		for _, m in ipairs(MACHINES) do if W.pos[m.me] then list[#list + 1] = m.me end end
+		return function() i = i + 1; return list[i] end
+	end
 	api.InputPressed = function(k) return env.keys[k] == true end
 	api.InputValue = function(k) return env.values[k] or 0 end
 	api.UiTextInput = function(str, w, h, focus)
@@ -162,8 +168,18 @@ local function step(dt)
 	W.time = W.time + dt
 	local calls = W.calls
 	W.calls = {}
-	for _, c in ipairs(calls) do HOST.server[c.name](unpack(c.args, 1, c.n)) end
+	for _, c in ipairs(calls) do
+		if c.name == "pc_say" and W.dropSay > 0 then W.dropSay = W.dropSay - 1      -- (a lost message)
+		else HOST.server[c.name](unpack(c.args, 1, c.n)) end
+	end
 	HOST.server.tick(dt)
+	local cc = W.ccalls
+	W.ccalls = {}
+	for _, c in ipairs(cc) do
+		for _, m in ipairs(MACHINES) do
+			if c.p == 0 or c.p == m.me then m.client[c.name](unpack(c.args, 1, c.n)) end
+		end
+	end
 	W.removed = {}
 	for _, m in ipairs(MACHINES) do
 		m.client.tick(dt)
@@ -328,7 +344,10 @@ typeText(P2, "psst the SECRET plan")
 P1.sounds, P5.sounds = {}, {}
 press(P2, "return"); step()
 local lw = lastLine(P1, "w")
-check(lw and lw.text == "psst the SECRET plan" and not lw.shout and P1.shared.pcMsgs[#P1.shared.pcMsgs].ch == "w", "P1 (4 m) gets the whole whisper; CAPS stay a whisper (no shout)")
+local inShared = false
+for _, m in ipairs(P1.shared.pcMsgs) do if m.text == "psst the SECRET plan" then inShared = true end end
+check(lw and lw.text == "psst the SECRET plan" and not lw.shout and not inShared,
+	"P1 (4 m) gets the whole whisper; CAPS stay a whisper; the whisper is not in the shared messages (private)")
 check(not hasLine(P5, "w", "psst the SECRET plan") and #hist(P5, "w") == 1 and garbled(lastLine(P5, "w").text) and #hist(P3, "w") == 0,
 	"P5 (10 m: the whisper buffer) gets only a garbled history line; P3 (26 m) nothing")
 check(hasLine(P2, "w", "psst the SECRET plan"), "the whisperer has it")
@@ -584,14 +603,16 @@ say(P2, "/hint"); step()
 check(P2.PC.c.hideHint and not drawn(P2, "^Enter: chat$") and not drawn(P2, "^Proximity Chat %- Enter"), "/hint hides the hint (saved)")
 say(P2, "/hint")
 say(P2, "/mute")
-check(lastLine(P2).text:find("Unknown command", 1, true) ~= nil, "/mute is gone (Global has no babble to mute)")
+check(lastLine(P2).text:find("Nobody is muted", 1, true) ~= nil, "/mute alone: who is muted")
 say(P2, "/clear")
 check(#hist(P2) == 0, "/clear empties your history")
 
 -- ================================================================== bounds, scrolling, sanitizing
 waitRate()
 say(P2, "one"); say(P2, "two")
-check(hasLine(P1, "p", "one") and not hasLine(P1, "p", "two"), "rate limit: a second line within 0.45 s is dropped")
+check(hasLine(P1, "p", "one") and not hasLine(P1, "p", "two"), "rate limit: a second line within 0.45 s is held back...")
+steps(45)
+check(hasLine(P1, "p", "two"), "... and gets in with the resend (not lost)")
 for i = 1, 40 do waitRate(); P2.PC.say("line " .. i, "p"); step() end
 for i = 1, 25 do waitRate(); P3.PC.say("g" .. i, "g"); step() end
 step()
@@ -599,8 +620,8 @@ local h1 = hist(P1)
 check(#h1 == 50 and h1[#h1].text == "g25" and h1[1].text == "line 16", "the history keeps the last 50 lines (both modes together)")
 check(#P1.shared.pcMsgs <= 30, "shared keeps at most 30 messages (" .. #P1.shared.pcMsgs .. ")")
 check(#hist(P3, "p") == 0 or lastLine(P3, "p").text ~= "line 40", "P3 (26 m) still got none of the nearby lines")
-steps(60 * 14, 1 / 60)
-check(#P1.shared.pcMsgs == 0 and #hist(P1) == 50, "shared messages expire; local histories stay")
+steps(60 * 32, 1 / 60)
+check(#P1.shared.pcMsgs == 0 and #hist(P1) == 50, "shared messages expire (30 s); local histories stay")
 press(P1, "return")
 P1.values.mousewheel = 1; step()
 P1.keys.pgup = true; step()
@@ -852,6 +873,69 @@ local sh50 = shows(P3, 2)
 W.pos[3] = Vec(62, 0, 0); step()                                          -- (58 m)
 check(sh50 and not shows(P3, 2), "a shout's bubble goes beyond 55 m (its buffer's end)")
 W.pos[3] = Vec(30, 0, 0); step()
+
+-- ================================================================== multiplayer robustness
+-- a lost message is resent until the host confirms it; a resend is taken once
+waitRate()
+W.dropSay = 1
+say(P2, "/s lost on the way")
+check(not hasLine(P1, "p", "lost on the way"), "a message lost on the way: not there yet")
+steps(40)
+check(hasLine(P1, "p", "lost on the way") and #P2.PC.c.outbox == 0, "... resent and confirmed: everyone has it, the outbox is empty")
+local nAll = #hist(P1)
+HOST.server.pc_say(2, "p", "lost on the way", P2.PC.c.seq)                -- (a late duplicate of the resend)
+step()
+check(#hist(P1) == nAll, "a duplicate of a message already taken is ignored")
+W.dropSay = 1000
+say(P2, "/s nobody will get this")
+steps(60 * 9)
+W.dropSay = 0
+check(lastLine(P2).text == "Not sent (no answer from the host): nobody will get this" and #P2.PC.c.outbox == 0, "no answer for 8 s: given up, and the sender is told")
+-- late messages (a lagging client): timed from when they were said
+local now0 = HOST.shared.pcNow
+P1.sounds = {}
+P1.PC.receive({id = 990001, p = 3, name = "P3", ch = "g", text = "global news", t = now0 - 20})
+P1.PC.receive({id = 990002, p = 2, name = "P2", ch = "p", text = "said long ago", t = now0 - 20})
+check(hasLine(P1, "p", "said long ago") and (not P1.PC.c.bubbles[2] or P1.PC.c.bubbles[2].full ~= "said long ago") and #P1.sounds == 0,
+	"20 s late: in the history only (no bubble, no babble)")
+P1.PC.receive({id = 990003, p = 2, name = "P2", ch = "p", text = "a bit late this one", t = now0 - 3})
+local bl3 = P1.PC.c.bubbles[2]
+steps(30)
+check(bl3 and bl3.full == "a bit late this one" and math.abs((W.time - 0.5 - bl3.t) - 3) < 0.6 and #P1.sounds == 0,
+	"3 s late: the bubble shows for what is left of it, no babble")
+-- sanitizing: accent towers, invisible and direction-flipping characters, long names
+local Z = "a" .. string.rep("\204\129", 12) .. "b"                         -- (a + 12 combining acute accents)
+check(P1.PC.clean(Z) == "a\204\129\204\129b", "an accent tower is cut to 2 marks a letter")
+check(P1.PC.clean("ab\226\128\174cd\226\128\139e\226\128\168f") == "abcdef", "direction override, zero-width and line separator characters are removed")
+check(P1.PC.clean("\217\133\217\143\216\173\217\142\217\133\217\143\216\175") == "\217\133\217\143\216\173\217\142\217\133\217\143\216\175", "Arabic vowel marks are kept")
+check(P1.PC.utf8Len(P1.PC.cleanName(string.rep("N", 40), 7)) == 24 and P1.PC.cleanName("", 7) == "Player 7", "names: 24 characters at most; none: 'Player n'")
+-- /mute
+say(P1, "/mute P")
+check(lastLine(P1).text:find("could be", 1, true) ~= nil, "/mute with a name that fits several: asks for more")
+say(P1, "/mute Nobody")
+check(lastLine(P1).text:find("No player called", 1, true) ~= nil, "/mute someone who has not spoken: says so")
+say(P1, "/mute p2")
+waitRate(); say(P2, "/s can you hear me")
+steps(5)
+check(not hasLine(P1, "p", "can you hear me") and not P1.PC.c.bubbles[2] and hasLine(P5, "p", "can you hear me"),
+	"/mute p2: nothing of P2's (bubble, history) - only for P1")
+say(P1, "/mute")
+check(lastLine(P1).text:find("Muted (only for you): P2", 1, true) ~= nil, "/mute lists who is muted")
+say(P1, "/unmute all")
+waitRate(); say(P2, "/s and now")
+check(hasLine(P1, "p", "and now"), "/unmute all: heard again")
+-- a low frame rate: the babble keeps time instead of dragging
+local function babbleTime(dt)
+	P1.PC.babbleSay(2, "one two three four five six seven eight nine ten eleven twelve")
+	local t = 0
+	while P1.PC.c.babble.queue[2] and t < 20 do step(dt); t = t + dt end
+	return t
+end
+local t60, t5 = babbleTime(1 / 60), babbleTime(1 / 5)
+check(t5 <= t60 + 0.45, string.format("at 5 fps the babble ends in time (%.2f s, at 60 fps %.2f s)", t5, t60))
+-- the text of a bubble is measured once
+local m1 = P1.PC.measure("measure me once")
+check(P1.PC.measure("measure me once") == m1, "a bubble's text is measured once and reused")
 
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
