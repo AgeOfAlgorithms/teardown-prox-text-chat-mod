@@ -1015,6 +1015,21 @@ check(LD(4, 35, 25) == 1 and math.abs(LD(20, 35, 25) - 0.77) < 0.01 and LD(25, 3
 	string.format("loudness: full up close, gently lower (20 m: %.2f), then across the buffer smoothly to nothing (25: %.2f, 28: %.2f, 32: %.2f, 34: %.3f, 35: 0)",
 		LD(20, 35, 25), LD(25, 35, 25), LD(28, 35, 25), LD(32, 35, 25), LD(34, 35, 25)))
 check(LD(45, 55, 40) > LD(30, 35, 25), "a shout 45 m away is louder than speech 30 m away (each by its own reach)")
+if P3.PC.c.typing then press(P3, "esc"); step() end
+W.pos[3] = Vec(40, 0, 0)                                                  -- (36 m from P2: just past the 35 m bubble reach)
+P3.sounds = {}
+waitRate(); say(P2, "/s can you hear the murmur")
+steps(90)
+local ng, vg = soundsToward(P3, 4, "babble")
+local b36 = P3.PC.c.bubbles[2]
+check(ng >= 2 and vg > 0 and vg < 0.03 and not shows(P3, 2), string.format("36 m: no bubble, but a last faint murmur (%d syllables, vol %.3f) - the sound goes a little after the bubble", ng, vg))
+steps(60 * 4)                                                             -- (that babble and its echoes are over)
+W.pos[3] = Vec(42, 0, 0)                                                  -- (38 m)
+P3.sounds = {}
+waitRate(); say(P2, "/s and now nothing")
+steps(90)
+check(#P3.sounds == 0, "38 m: nothing at all")
+W.pos[3] = Vec(30, 0, 0)
 
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
