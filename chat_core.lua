@@ -26,7 +26,8 @@
 -- BUBBLES are drawn in cfg.bubbleFont (Pangolin, a thick marker-hand font shipped in fonts/, OFL)
 --   when that file exists and has every letter of the message (Latin incl. Vietnamese, Cyrillic);
 --   anything else (Greek, CJK, Arabic, Thai...) uses the game font for its script (PC.chatFont). The
---   window stays in the game fonts. At most 2 bubbles a speaker (c.bubbles: the newest, c.prevBubbles: the
+--   window stays in the game fonts. A bubble shows only while the listener is within its message's
+--   reach (PC.inReach: buffer included). At most 2 bubbles a speaker (c.bubbles: the newest, c.prevBubbles: the
 --   one before it, stacked above). Bubbles never cover each other (PC.layoutBubbles): lowest first,
 --   an overlapping one is raised above, with a thin line down to its speaker. A bubble shows
 --   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
@@ -312,6 +313,18 @@ function PC.bubbleText(p, b, now)
 	if b.level == "shoutmumble" then return PC.garble(b.full, 0, b.id or 0, math.floor(now * 3), false, f or 0) end
 	if b.level == "shout" and not f then return b.text end              -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
 	return PC.garble(b.full, f or 0, b.id or 0, math.floor(now * 3), b.level == "shout")
+end
+
+-- the listener is within the farthest reach of this bubble's message (its buffer included): beyond it
+-- the bubble is not shown (it shows again on coming back while it is up)
+function PC.inReach(p, b)
+	local cfg = PC.cfg
+	if p == GetLocalPlayer() then return true end
+	if not b.whisper and PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return true end
+	local d = PC.distTo(p)
+	if not d then return false end
+	local reach = b.whisper and cfg.whisperMumbleR or (#PC.shoutWords(b.full or "") > 0 and cfg.shoutMumbleR or cfg.mumbleR)
+	return d <= reach
 end
 
 -- how long a bubble stays (before any scrolling time): short messages go sooner
@@ -1632,7 +1645,7 @@ function PC.drawBubbles()
 	local function add(L) if L then list[#list + 1] = L end end
 	for age, tbl in ipairs({c.bubbles, c.prevBubbles}) do              -- (the newest, then the one before it)
 		for p, b in pairs(tbl) do
-			if (p ~= me or third) and not b.hidden then
+			if (p ~= me or third) and not b.hidden and PC.inReach(p, b) then
 				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
