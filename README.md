@@ -35,7 +35,7 @@ copies.
   how you speak. Your last choice is remembered.
 - **Settings** (button at the top right of the chat window, or Options in the Mod Manager): pick your
   voice (Squeaky, Chirpy, Plain, Low, Deep, Robot; click to hear it), the hint, keeping the window
-  open, how solid speech bubbles are (Off, 25 % to 100 %; the text stays readable) and the babble
+  open, your own bubble (third person: Show / Hide), how solid speech bubbles are (Off, 25 % to 100 %; the text stays readable) and the babble
   volume (Off, 25 % to 100 %).
 - **Commands:**
   - `/s`, `/w` and `/g` choose the mode (Speak, Whisper, Global), or say one line in it: `/w psst`.

@@ -530,7 +530,7 @@ check(not drawn(P2, "^Babble for messages to everyone$") and drawn(P2, "^\"Enter
 P2.sounds = {}
 local picks, setVoice0 = 0, P2.PC.setVoice
 P2.PC.setVoice = function(i) picks = picks + 1; setVoice0(i) end
-P2.hover = {300, 44, 6}; P2.keys.lmb = true; step()             -- (Robot)
+P2.hover = {300, 38, 6}; P2.keys.lmb = true; step()             -- (Robot)
 P2.release = true; step()
 P2.hover = nil
 P2.PC.setVoice = setVoice0
@@ -540,9 +540,9 @@ check(drawn(P2, "^Your voice: Robot", false) ~= nil, "Robot shown as yours")
 local prev = 0
 for _, s in ipairs(P2.sounds) do if math.abs(s.pos[1] - 4) < 0.01 and math.abs(s.pos[2] - 1.7) < 0.01 then prev = prev + 1 end end
 check(prev >= 3, "a short preview at the listener (" .. prev .. " syllables)")
-P2.hover = {300, 44, 2}; P2.release = true; step(); P2.hover = nil; steps(5)
+P2.hover = {300, 38, 2}; P2.release = true; step(); P2.hover = nil; steps(5)
 check(P1.shared.pcVoice[2] == 2, "a release alone picks too (Chirpy)")
-P2.hover = {300, 44, 4}; step(); P2.hover = nil; steps(5)
+P2.hover = {300, 38, 4}; step(); P2.hover = nil; steps(5)
 check(P1.shared.pcVoice[2] == 2, "hovering does not pick")
 P2.hover = {120, 40, 2}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.c.hideHint and P2.reg["savegame.mod.pchidehint"] == true, "switch: hint Hide (saved)")
@@ -567,6 +567,10 @@ check(P2.PC.c.bubbleLevel == 3 and P2.reg["savegame.mod.pcbubbles"] == 3 and P2.
 P2.hover = {90, 36, 5}; P2.keys.lmb = true; step()
 P2.hover = {90, 36, 10}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.c.bubbleLevel == 5 and P2.PC.c.babbleLevel == 5, "... and back to 100%")
+P2.hover = {120, 40, 6}; P2.keys.lmb = true; step(); P2.hover = nil          -- (your own bubble: Hide)
+check(P2.PC.c.hideOwn and P2.reg["savegame.mod.pchideown"] == true, "your own bubble: Hide (saved)")
+P2.hover = {120, 40, 5}; P2.keys.lmb = true; step(); P2.hover = nil          -- (Show)
+check(not P2.PC.c.hideOwn, "... and Show")
 press(P2, "esc"); step()
 check(P2.PC.page() == "chat" and not drawn(P2, "^Chat$"), "Esc: closed (next time it opens on the history)")
 P2.PC.setMode("p")
@@ -980,6 +984,15 @@ local old2, new2
 for i, L in ipairs(ord) do if L.p == 2 then if L.age == 2 then old2 = i else new2 = i end end end
 check(old2 and new2 and old2 < new2, "a speaker's older bubble (raised, with its line) is drawn before the newest: the line goes behind it")
 
+-- ================================================================== your own bubble (third person)
+P2.reg["game.thirdperson"] = true
+waitRate(); say(P2, "/s look at me")
+step()
+local ownShown = shows(P2, 2)
+P2.PC.setHideOwn(true); step()
+check(ownShown and not shows(P2, 2) and shows(P1, 2), "your own bubble shows in third person; Hide removes it for you (others still see it)")
+P2.PC.setHideOwn(false); P2.reg["game.thirdperson"] = nil
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
@@ -1017,13 +1030,19 @@ check(DM and #DM.list == 3 and #P1.spawned == 3 and math.abs(DM.list[1].pos[3] +
 	and math.abs(DM.list[1].pos[1] - DM.list[3].pos[1]) > 4.9, "/dummy: three figures in a row 3 m in front of you, 2.5 m apart")
 local _, ncull = P1.spawned[1].xml:gsub('tags="nocull"', "")
 check(ncull == 4, "the figures are nocull (body and its 3 boxes): they do not fade out far away")
+P1.sounds = {}
 steps(60)
-check(drawn(P1, "^%.%.%.$") ~= nil and not P1.PC.c.bubbles[DS], "they show '...' while they type")
-steps(70)
+check(drawn(P1, "^%.%.%.$") ~= nil and not P1.PC.c.bubbles[DW] and not P1.PC.c.bubbles[DS], "the whisperer shows '...' while it types")
+steps(70)                                                                   -- (2.2 s)
 local L1 = P1.PC.DUMMY_LINES[1]
 local bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
-check(bw and bw.whisper and bw.text == L1[1] and bs and not bs.whisper and not bs.shout and bs.text == L1[1] and bh and bh.shout and bh.text == L1[2],
-	"all three say the first line at once: whispered, spoken, shouted (3-5 m away: all full)")
+check(bw and bw.whisper and bw.text == L1[1] and not bs and not bh, "they take turns: the whisperer first")
+steps(120)                                                                  -- (4.2 s)
+bs, bh = P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
+check(bs and not bs.whisper and not bs.shout and bs.text == L1[1] and not bh, "2 s later the speaker")
+steps(120)                                                                  -- (6.2 s)
+bh = P1.PC.c.bubbles[DH]
+check(bh and bh.shout and bh.text == L1[2] and P1.PC.c.bubbles[DW] and P1.PC.c.bubbles[DS], "2 s later the shouter (the first two still up)")
 step()
 local R = P1.PC.c.bubbleRects or {}
 local apart, raised = #R >= 3, 0
@@ -1039,7 +1058,6 @@ local names = {}
 for _, e in ipairs(hist(P1)) do if P1.PC.isDummy(e.p) then names[#names + 1] = e.name end end
 check(#names == 3 and names[1]:find("^Whisperer %(") and names[2]:find("^Speaker %(") and names[3]:find("^Shouter %(") and names[1] ~= names[2]:gsub("Speaker", "Whisperer"),
 	"history: Whisperer / Speaker / Shouter, each in another voice: " .. table.concat(names, ", "))
-P1.sounds = {}
 steps(60)
 local wsnd, ssnd = 0, 0
 for _, x in ipairs(P1.sounds) do
@@ -1050,13 +1068,13 @@ for _, x in ipairs(P1.sounds) do
 end
 check(wsnd >= 2 and ssnd >= 2, string.format("you hear them: whisper clips (%d) and shout clips (%d) from where they stand", wsnd, ssnd))
 W.pos[1] = Vec(0, 0, 25)                                                    -- (walk back: 28 m)
-steps(60 * 6)
+steps(60 * 9.5)                                                             -- (the 2nd line: all three have spoken)
 bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
 local L2 = P1.PC.DUMMY_LINES[2]
 check((not bw or bw.hidden) and bs and bs.mumble and bh and bh.level == "shout" and P1.PC.bubbleText(DH, bh, 0) == L2[2],
 	"from 28 m: no whisper, the speaker garbled, the shouter readable (all shouted)")
 W.pos[1] = Vec(0, 0, 0)
-steps(60 * 6 * 8)
+steps(60 * 11 * 8)
 local seen = {}
 for _, e in ipairs(hist(P1)) do if e.p == DS then seen[e.text] = true end end
 local all = true
@@ -1078,9 +1096,10 @@ say(P1, "/dummy 2")                                                          -- 
 local D3 = P1.PC.c.dummy
 check(#D3.list == 2 and D3.list[1].kind == "p" and D3.list[2].kind == "s" and math.abs(D3.byP[DS].pos[3] - 3) < 0.01 and P1.deleted[nsp + 901],
 	"/dummy 3 adds the shouter; /dummy 2 again moves the speaker (its old figure removed)")
-steps(60 * 3)
+steps(60 * 4.5)
 local s2, s3 = P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
-check(s2 and s3 and s2.full == P1.PC.DUMMY_LINES[D3.k][1] and s3.full == P1.PC.DUMMY_LINES[D3.k][2], "summoned one by one, they still say the same line together")
+check(s2 and s3 and s2.full == P1.PC.DUMMY_LINES[D3.k][1] and s3.full == P1.PC.DUMMY_LINES[D3.k][2] and s3.t - s2.t > 1.9,
+	"summoned one by one, they still take turns on the same line (2 s apart)")
 say(P1, "/dummy 1")
 check(#P1.PC.c.dummy.list == 3 and P1.PC.c.dummy.list[1].kind == "w", "/dummy 1: the whisperer")
 say(P1, "/dummy what")
