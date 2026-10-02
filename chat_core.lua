@@ -151,6 +151,7 @@ do
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
 		echoFrom = 6,            -- m: farther voices echo
 		soundNear = 5,           -- m: farther voices are played this far away in their direction (PC.soundPos)
+		soundGrace = 1.5,        -- m the babble carries past the bubble's reach (fading to nothing there)
 		soundFar = 0.35,         -- the distance curve's value at a message's reach (1 up close; the buffer then fades it to 0; PC.loudness)
 		winW = 1000, winH = 400, -- the chat window (and the input line's width), before uiScale
 		uiScale = 0.8,           -- the chat window, feed, input line and hint, scaled from the bottom-left corner
@@ -955,10 +956,16 @@ function PC.receive(m)
 			end
 			PC.updateBubble(m.p, b, b.t, true)
 		end
-		if heard and not late then
-			-- the babble: all of it, except beyond the buffer where only the shouted words carry
-			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
-			local onlyShouts = (level == "shout" and not inBuffer) or level == "shoutmumble"
+		-- the babble: also cfg.soundGrace m past the bubble's reach (the bubble goes a little before the sound)
+		local cfg = PC.cfg
+		local shouted = not whisper and #PC.shoutWords(m.text) > 0
+		local dd = d or PC.distTo(m.p)
+		local inGrace = not heard and dd and m.p ~= me
+			and dd <= (whisper and cfg.whisperMumbleR or (shouted and cfg.shoutMumbleR or cfg.mumbleR)) + cfg.soundGrace
+		if (heard or inGrace) and not late then
+			-- all of it, except beyond the speech buffer where only the shouted words carry
+			local inBuffer = dd and dd <= (whisper and cfg.whisperMumbleR or cfg.mumbleR)
+			local onlyShouts = shouted and not inBuffer
 			PC.babbleSay(m.p, onlyShouts and table.concat(PC.shoutWords(m.text), " ") or m.text, nil, whisper and "whisper" or nil)
 		end
 		if level == "mumble" or level == "shoutmumble" then heard, far = nil, nil end   -- (the hook: no words heard)
@@ -1278,7 +1285,8 @@ end
 -- how a voice carries: past cfg.soundNear the syllable is played that far away IN THE SPEAKER'S
 -- DIRECTION (PC.soundPos), so the game's own distance fade is the same for every speaker and ours sets
 -- the loudness: full near, falling gently with distance, then fading smoothly to nothing across the
--- buffer (speech chatR-mumbleR, shouted words shoutR-shoutMumbleR, whispers whisperR-whisperMumbleR). The game's fade on top of ours made far
+-- buffer and cfg.soundGrace m past it (speech chatR-mumbleR, shouted words shoutR-shoutMumbleR,
+-- whispers whisperR-whisperMumbleR): the bubble goes a little before the sound does. The game's fade on top of ours made far
 -- shouts with a readable bubble almost silent. Speech echoes more the farther it carries (1-3 delayed,
 -- fainter repeats from beside and behind the speaker's direction).
 function PC.loudness(d, reach, inner)
@@ -1362,11 +1370,12 @@ function PC.babbleTick()
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
 					elseif q.how == "whisper" then                          -- (no echo; quiet toward 13 m)
 						local d = VecLength(VecSub(pos, cam))
-						PlaySound(clip, PC.soundPos(pos, cam), base * PC.loudness(d, PC.cfg.whisperMumbleR, PC.cfg.whisperR), false, pitch)
+						local v = base * PC.loudness(d, PC.cfg.whisperMumbleR + PC.cfg.soundGrace, PC.cfg.whisperR)
+						if v > 0 then PlaySound(clip, PC.soundPos(pos, cam), v, false, pitch) end   -- (walked out of earshot: silent)
 					else
-						local vol, echoes = PC.babbleDistance(pos, base, s[4], s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR, s[4] and PC.cfg.shoutR or PC.cfg.chatR)
-						PlaySound(clip, PC.soundPos(pos, cam), vol, false, pitch)
-						for _, e in ipairs(echoes) do
+						local vol, echoes = PC.babbleDistance(pos, base, s[4], (s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR) + PC.cfg.soundGrace, s[4] and PC.cfg.shoutR or PC.cfg.chatR)
+						if vol > 0 then PlaySound(clip, PC.soundPos(pos, cam), vol, false, pitch) end
+						for _, e in ipairs(vol > 0 and echoes or {}) do
 							B.echoes[#B.echoes + 1] = {t = now + e.delay, clip = clip, pos = PC.soundPos(VecAdd(pos, e.offset), cam), vol = e.vol, pitch = pitch * 0.97}
 						end
 					end
