@@ -299,7 +299,7 @@ function PC.bubbleText(p, b, now)
 	local inner = b.whisper and cfg.whisperR or cfg.chatR
 	local outer = b.whisper and cfg.whisperMumbleR or cfg.mumbleR
 	local d = PC.distTo(p)
-	if b.level == "shout" and not (d and d <= outer) then return b.text end   -- (farther: "HELP ... NOW")
+	if b.level == "shout" and not (d and d <= outer) then return b.text end   -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
 	local f = d and math.max(0, math.min(1, (outer - d) / (outer - inner))) or 0
 	return PC.garble(b.full, f * cfg.garbleMax, b.id or 0, math.floor(now * 3), b.level == "shout")
 end
@@ -766,7 +766,7 @@ function PC.heard(p, text, mode)
 	if d <= cfg.chatR then return text, false, "full", d end
 	if d <= cfg.shoutR then
 		local sw = PC.shoutWords(text)
-		if #sw > 0 then return table.concat(sw, " ... "), true, "shout", d end
+		if #sw > 0 then return PC.garble(text, 0, 0, 0, true), true, "shout", d end   -- (the shouted words, the rest as boxes)
 	end
 	if d <= cfg.mumbleR then return "...", true, "mumble", d end
 	return nil
@@ -798,7 +798,7 @@ function PC.receive(m)
 				full = m.text, mode = mode, level = level, name = m.name, entry = entry, id = m.id}
 			-- the babble: all of it, except beyond the buffer where only the shouted words carry
 			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
-			PC.babbleSay(m.p, (level == "shout" and not inBuffer) and heard or m.text, nil, whisper and "whisper" or nil)
+			PC.babbleSay(m.p, (level == "shout" and not inBuffer) and table.concat(PC.shoutWords(m.text), " ") or m.text, nil, whisper and "whisper" or nil)
 			if mumble then heard, far = nil, nil end                           -- (the hook: no words heard)
 		end
 	end
