@@ -530,7 +530,7 @@ check(not drawn(P2, "^Babble for messages to everyone$") and drawn(P2, "^\"Enter
 P2.sounds = {}
 local picks, setVoice0 = 0, P2.PC.setVoice
 P2.PC.setVoice = function(i) picks = picks + 1; setVoice0(i) end
-P2.hover = {300, 52, 6}; P2.keys.lmb = true; step()             -- (Robot)
+P2.hover = {300, 44, 6}; P2.keys.lmb = true; step()             -- (Robot)
 P2.release = true; step()
 P2.hover = nil
 P2.PC.setVoice = setVoice0
@@ -540,9 +540,9 @@ check(drawn(P2, "^Your voice: Robot", false) ~= nil, "Robot shown as yours")
 local prev = 0
 for _, s in ipairs(P2.sounds) do if math.abs(s.pos[1] - 4) < 0.01 and math.abs(s.pos[2] - 1.7) < 0.01 then prev = prev + 1 end end
 check(prev >= 3, "a short preview at the listener (" .. prev .. " syllables)")
-P2.hover = {300, 52, 2}; P2.release = true; step(); P2.hover = nil; steps(5)
+P2.hover = {300, 44, 2}; P2.release = true; step(); P2.hover = nil; steps(5)
 check(P1.shared.pcVoice[2] == 2, "a release alone picks too (Chirpy)")
-P2.hover = {300, 52, 4}; step(); P2.hover = nil; steps(5)
+P2.hover = {300, 44, 4}; step(); P2.hover = nil; steps(5)
 check(P1.shared.pcVoice[2] == 2, "hovering does not pick")
 P2.hover = {120, 40, 2}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.c.hideHint and P2.reg["savegame.mod.pchidehint"] == true, "switch: hint Hide (saved)")
@@ -559,6 +559,14 @@ check(P2.PC.c.typing and P2.PC.page() == "settings", "/settings opens the line o
 P2.hover = {120, 40, 1}; P2.keys.lmb = true; step()            -- (hint Show)
 P2.hover = {120, 40, 4}; P2.keys.lmb = true; step(); P2.hover = nil   -- (keep open: No)
 check(not P2.PC.c.hideHint and not P2.PC.c.pinned, "switches back: shown / not pinned")
+check(drawn(P2, "^Speech bubbles$") and drawn(P2, "^Babble volume$") and drawn(P2, "^25%%$"), "Settings: speech bubbles and babble volume, Off to 100%")
+P2.hover = {90, 36, 3}; P2.keys.lmb = true; step(); P2.hover = nil          -- (speech bubbles: 50%)
+P2.hover = {90, 36, 6}; P2.keys.lmb = true; step(); P2.hover = nil          -- (babble: Off)
+check(P2.PC.c.bubbleLevel == 3 and P2.reg["savegame.mod.pcbubbles"] == 3 and P2.PC.c.babbleLevel == 1 and P2.reg["savegame.mod.pcbabblevol"] == 1,
+	"picking bubbles 50% and babble Off (saved)")
+P2.hover = {90, 36, 5}; P2.keys.lmb = true; step()
+P2.hover = {90, 36, 10}; P2.keys.lmb = true; step(); P2.hover = nil
+check(P2.PC.c.bubbleLevel == 5 and P2.PC.c.babbleLevel == 5, "... and back to 100%")
 press(P2, "esc"); step()
 check(P2.PC.page() == "chat" and not drawn(P2, "^Chat$"), "Esc: closed (next time it opens on the history)")
 P2.PC.setMode("p")
@@ -763,6 +771,8 @@ O.frame("Robot")
 check(O.reg["savegame.mod.pcvoice"] == 6, "Options: picking Robot saves savegame.mod.pcvoice = 6")
 O.frame("Hide")
 check(O.reg["savegame.mod.pchidehint"] == true, "Options: hide the hint")
+O.frame("50%")
+check(O.reg["savegame.mod.pcbubbles"] == 3 and otext("Babble volume"), "Options: speech bubbles 50% (and the babble volume row)")
 O.frame("Close")
 check(O.closed, "Options: Close")
 local P8 = addMachine(8, false, O.reg)
@@ -936,6 +946,22 @@ check(t5 <= t60 + 0.45, string.format("at 5 fps the babble ends in time (%.2f s,
 -- the text of a bubble is measured once
 local m1 = P1.PC.measure("measure me once")
 check(P1.PC.measure("measure me once") == m1, "a bubble's text is measured once and reused")
+
+-- ================================================================== the bubble and babble settings at work
+P1.PC.setBubbleLevel(1); P1.PC.setBabbleLevel(1)
+P1.sounds = {}
+waitRate(); say(P2, "/s can you see this")
+steps(30)
+check(hasLine(P1, "p", "can you see this") and #(P1.PC.c.bubbleRects or {}) == 0 and #P1.sounds == 0,
+	"bubbles Off and babble Off: only the chat line (no bubble, no sound)")
+P1.PC.setBubbleLevel(2); P1.PC.setBabbleLevel(2)
+P1.sounds = {}
+waitRate(); say(P2, "/s and now at a quarter")
+steps(40)
+local nq, vq = soundsFrom(P1, 4, "babble")
+check(#(P1.PC.c.bubbleRects or {}) >= 1 and drawn(P1, "^and now at a quarter$") and nq >= 2 and vq <= 0.75 * 0.25 + 1e-6,
+	string.format("bubbles 25%% (still drawn, the text too) and babble 25%% (vol %.3f)", vq))
+P1.PC.setBubbleLevel(5); P1.PC.setBabbleLevel(5)
 
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
