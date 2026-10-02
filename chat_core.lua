@@ -110,7 +110,9 @@ do
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s its bubble stays before it types the next one
-		life = 9,                -- s a bubble / a feed line stays
+		life = 9,                -- s a feed line stays, and the longest a bubble does
+		lifeMin = 2,             -- s a bubble stays: lifeMin + lifePerChar a character, at most life (+ scrolling)
+		lifePerChar = 0.08,
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
 		sharedLife = 12,         -- s a message stays in shared (clients copy it on arrival)
@@ -309,6 +311,12 @@ function PC.bubbleText(p, b, now)
 	if b.level == "shoutmumble" then return PC.garble(b.full, 0, b.id or 0, math.floor(now * 3), false, f or 0) end
 	if b.level == "shout" and not f then return b.text end              -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
 	return PC.garble(b.full, f or 0, b.id or 0, math.floor(now * 3), b.level == "shout")
+end
+
+-- how long a bubble stays (before any scrolling time): short messages go sooner
+function PC.bubbleLife(b)
+	local cfg = PC.cfg
+	return math.min(cfg.life, cfg.lifeMin + PC.utf8Len(b.full or b.text or "") * cfg.lifePerChar)
 end
 
 -- the share of the letters revealed now (0 at the buffer's outer edge, cfg.garbleMax at its inner one);
@@ -847,7 +855,7 @@ function PC.updateBubble(p, b, now, fresh)
 		b.shout = not b.whisper and (level == "shoutmumble" or (level ~= "mumble" and #PC.shoutWords(text) > 0))   -- (CAPS stay a whisper)
 		b.bestF = -1                                                         -- (a new level: its own best share)
 		if not fresh then
-			b.t = math.max(b.t, now - cfg.life + 4)                          -- (up at least 4 s more)
+			b.t = math.max(b.t, now - PC.bubbleLife(b) + 4)                  -- (up at least 4 s more)
 		end
 		changed = true
 	end
@@ -904,7 +912,7 @@ function PC.clientTick(dt)
 	end
 	for _, tbl in ipairs({c.bubbles, c.prevBubbles}) do
 		for p, b in pairs(tbl) do
-			if now - b.t > PC.cfg.life + (b.extra or 0) then tbl[p] = nil end
+			if now - b.t > PC.bubbleLife(b) + (b.extra or 0) then tbl[p] = nil end
 		end
 	end
 	PC.dummyTick(now)
@@ -1623,7 +1631,7 @@ function PC.drawBubbles()
 	for age, tbl in ipairs({c.bubbles, c.prevBubbles}) do              -- (the newest, then the one before it)
 		for p, b in pairs(tbl) do
 			if (p ~= me or third) and not b.hidden then
-				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
+				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
 					L.age = age
