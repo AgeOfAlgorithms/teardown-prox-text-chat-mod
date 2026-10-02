@@ -1,2 +1,62 @@
-# teardown-prox-text-chat-mod
-proximity text chat with speech bubbles. 3 types of chat: global, regular, and whisper
+# Proximity Chat (Teardown mod)
+
+Text chat for Teardown multiplayer that works in **any level or game mode**. Players near you see what
+you say as a **speech bubble** over your head and hear you **babble** in your own cartoon voice, from
+where you stand. Three ways to speak:
+
+| mode | who gets it |
+|---|---|
+| **Nearby** | players within 20 m: a bubble, plus babble from your position. WRITE IN CAPS (or end a word with `!!`) to shout: shouted words carry to 45 m, and only those words get through. |
+| **Whisper** | players within 5 m only: a small grey bubble and a breathy babble |
+| **Everyone** | every player: a chat line, no bubble |
+
+The chat window keeps **your own history**: everything said to everyone, plus the nearby lines and
+whispers you were close enough to hear when they were said. Every player's history is different.
+
+Every language works: the right game font for each script, Arabic and Hebrew drawn right to left, and
+babble for every alphabet.
+
+## Install
+
+- **Workshop:** subscribe, then enable it in the Mod Manager. It's a **global mod**, so it runs in every
+  level.
+- **From this repo:** clone or copy this folder into `Documents/Teardown/mods/proximity chat/`.
+
+**Multiplayer:** the host enables it for the session (Multiplayer → Global mods). Players who join get
+it automatically from the Workshop. Teardown only allows Workshop mods in multiplayer, not local
+copies.
+
+## Use
+
+- **Enter**: open the chat line and the chat window. Enter again sends; **Esc** closes.
+- **Tab** while typing, or click **Nearby / Whisper / Everyone** at the end of the line, to choose
+  how you speak. Your last choice is remembered.
+- **Settings** (button at the top right of the chat window): pick your voice (Squeaky, Chirpy, Plain,
+  Low, Deep, Robot; click to hear it), babble on "everyone" lines, the hint, and keeping the window
+  open.
+- **Commands:**
+  - `/p`, `/w` and `/g` choose the mode, or say one line in it: `/w psst`.
+  - `/voice` lists the voices; `/voice robot` picks one.
+  - `/mute`, `/hint`, `/window`, `/clear`, `/help`.
+
+## For game-mode makers
+
+Mods can't call each other's functions, but the registry is shared. Your mod can use these keys:
+
+```lua
+SetBool("proxchat.lobby", true)          -- server: your lobby is up, everyone hears everything (false after)
+SetBool("proxchat.block", true)          -- client: Enter must not open the chat (your own text input is up)
+GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
+```
+
+You can also `#include "chat_core.lua"` in your own script. Its API is documented at the top of that
+file.
+
+## Development
+
+- `tools/test_proxchat.lua`: offline test with a mocked engine. Run
+  `luajit -joff tools/test_proxchat.lua ./`; all checks must pass.
+- `tools/babble_sounds.py`: makes the voice clips in `snd/`. Needs numpy, scipy and ffmpeg. Run
+  `python tools/babble_sounds.py snd`.
+
+MIT License.
