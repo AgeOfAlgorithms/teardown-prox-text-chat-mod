@@ -41,7 +41,8 @@ copies.
   - `/hint`, `/window`, `/clear`, `/help`.
   - `/dummy`: three test figures in front of you (a whisperer, a speaker and a shouter) say the same
     lines at the same time, in every voice and several languages. Walk back and forth to see and hear
-    every range. Only you see them. `/dummy` again removes them.
+    every range. Only you see them. `/dummy 1`, `/dummy 2` and `/dummy 3` put just the whisperer,
+    speaker or shouter in front of you (moved there if it is already out); `/dummy clear` removes them.
 
 A bubble shows three lines; a longer message scrolls down inside it at reading pace (a thin bar shows
 where it is) and the bubble stays up until it has finished. When a speaker is off screen, their bubble sits on the screen edge on their side, and a bubble always

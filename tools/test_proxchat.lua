@@ -868,8 +868,31 @@ check(all, "they go through every line")
 local others = 0
 for _, e in ipairs(hist(P2)) do if P1.PC.isDummy(e.p) then others = others + 1 end end
 check(others == 0, "only you have the dummies: nobody else hears them")
-say(P1, "/dummy")
-check(not P1.PC.c.dummy and P1.deleted[901] and P1.deleted[903] and not P1.PC.c.bubbles[DS], "/dummy again removes them")
+say(P1, "/dummy clear")
+check(not P1.PC.c.dummy and P1.deleted[901] and P1.deleted[903] and not P1.PC.c.bubbles[DS], "/dummy clear removes them")
+local nsp = #P1.spawned
+say(P1, "/dummy 2")
+local D2 = P1.PC.c.dummy
+check(D2 and #D2.list == 1 and D2.list[1].kind == "p" and D2.byP[DS] and math.abs(D2.list[1].pos[3] + 3) < 0.01 and #P1.spawned == nsp + 1,
+	"/dummy 2: just the speaker, 3 m in front of you")
+W.pos[1] = Vec(0, 0, 6)
+say(P1, "/dummy 3")
+say(P1, "/dummy 2")                                                          -- (again: moved to the new spot)
+local D3 = P1.PC.c.dummy
+check(#D3.list == 2 and D3.list[1].kind == "p" and D3.list[2].kind == "s" and math.abs(D3.byP[DS].pos[3] - 3) < 0.01 and P1.deleted[nsp + 901],
+	"/dummy 3 adds the shouter; /dummy 2 again moves the speaker (its old figure removed)")
+steps(60 * 3)
+local s2, s3 = P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
+check(s2 and s3 and s2.full == P1.PC.DUMMY_LINES[D3.k][1] and s3.full == P1.PC.DUMMY_LINES[D3.k][2], "summoned one by one, they still say the same line together")
+say(P1, "/dummy 1")
+check(#P1.PC.c.dummy.list == 3 and P1.PC.c.dummy.list[1].kind == "w", "/dummy 1: the whisperer")
+say(P1, "/dummy what")
+check(lastLine(P1).text:find("/dummy 1: whisperer", 1, true) ~= nil, "/dummy with anything else: how to use it")
+say(P1, "/dummy clear")
+check(not P1.PC.c.dummy, "/dummy clear removes them all")
+say(P1, "/dummy clear")
+check(lastLine(P1).text == "No test dummies to clear.", "... and says so when there are none")
+W.pos[1] = Vec(0, 0, 0)
 
 print(string.format("\n%d checks, %d failed", NCHECK, FAILED))
 if FAILED > 0 then os.exit(1) end
