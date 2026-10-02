@@ -60,7 +60,7 @@ local function machine(me, isHost, presetReg, prePC)
 	api.Transform = function(p) return {pos = p} end
 	api.GetLocalPlayer = function() return me end
 	api.GetPlayerTransform = function(p) if not W.pos[p] then return nil end return {pos = deep(W.pos[p])} end
-	api.GetCameraTransform = function() return {pos = api.VecAdd(W.pos[me], Vec(0, 1.7, 0))} end
+	api.GetCameraTransform = function() return {pos = api.VecAdd(api.VecAdd(W.pos[me], Vec(0, 1.7, 0)), env.camOffset or Vec(0, 0, 0))} end
 	api.GetPlayerName = function(p) return W.names[p] end
 	api.GetRemovedPlayers = function() local r = W.removed; return r end
 	api.SetBool = function(k, v) env.reg[k] = v and true or false end
@@ -1091,6 +1091,15 @@ local Lon = P1.PC.bubbleLayout(3, "same size", false, 1, false, false, false, W.
 P1.offscreen = true
 local Loff = P1.PC.bubbleLayout(3, "same size", false, 1, false, false, false, W.time)      -- (docked)
 P1.offscreen = nil
+P1.camOffset = Vec(4, 0, 0)                                                 -- (third person, facing away from P5: camera 4 m nearer)
+local Lnear5 = P1.PC.bubbleLayout(5, "turning", false, 1, false, false, false, W.time)
+local vNear5 = P1.PC.babbleDistance(Vec(14, 1.7, 0), 1)
+P1.camOffset = Vec(-4, 0, 0)                                                -- (facing P5: camera 4 m farther)
+local Lfar5 = P1.PC.bubbleLayout(5, "turning", false, 1, false, false, false, W.time)
+local vFar5 = P1.PC.babbleDistance(Vec(14, 1.7, 0), 1)
+P1.camOffset = nil
+check(Lnear5 and Lfar5 and math.abs(Lnear5.s - Lfar5.s) < 1e-9 and math.abs(vNear5 - vFar5) < 1e-9,
+	string.format("third person: turning swings the camera nearer / farther - the bubble size (%.2f / %.2f) and the loudness stay (by your character)", Lnear5.s, Lfar5.s))
 check(Lon and Loff and math.abs(Lon.s - Loff.s) < 1e-9, string.format("a bubble is the same size on screen and docked (by the real distance, not the view depth: %.2f / %.2f)", Lon.s, Loff.s))
 check(Lsh.docked and Lc.docked and Lc2.docked and Lmid and not Lmid.docked, "docked bubbles (on the edge, or pushed on screen) are marked: no line to the speaker; one over its speaker is not")
 
