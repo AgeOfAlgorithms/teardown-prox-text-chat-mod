@@ -98,8 +98,8 @@ do
 		whisperR = 8,            -- m: who hears a whisper
 		mumbleR = 35,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
 		whisperMumbleR = 13,     -- m: Whisper's buffer beyond whisperR (nothing beyond it)
-		bubbleW = 420,           -- px: a bubble's text wraps at this width
-		bubbleLines = 2,         -- lines a bubble shows; longer messages scroll down inside it
+		bubbleW = 320,           -- px: a bubble's text wraps at this width
+		bubbleLines = 3,         -- lines a bubble shows; longer messages scroll down inside it
 		scrollHold = 1.5,        -- s before a long message starts scrolling
 		scrollLine = 1.8,        -- s per line while it scrolls (the bubble stays up that much longer)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
