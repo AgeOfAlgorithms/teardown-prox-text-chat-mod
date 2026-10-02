@@ -42,7 +42,7 @@ copies.
     lines at the same time, in every voice and several languages. Walk back and forth to see and hear
     every range. Only you see them. `/dummy` again removes them.
 
-A bubble shows two lines; a longer message scrolls down inside it at reading pace (a thin bar shows
+A bubble shows three lines; a longer message scrolls down inside it at reading pace (a thin bar shows
 where it is) and the bubble stays up until it has finished. Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
 a thin line connects it to its speaker.
 

@@ -677,21 +677,23 @@ steps(30)
 check(P1.shared.pcVoice[8] == 6 and P8.PC.c.hideHint and not drawn(P8, "Enter: chat", true), "the Options settings are used in game (voice synced, hint hidden)")
 
 -- ================================================================== long messages scroll inside the bubble
-local LONG = string.rep("abcdefghi ", 9)                                  -- (90 characters: the mock wraps it in 3 lines)
+local LONG = string.rep("abcdefghi ", 13)                                 -- (130 characters: the mock wraps it in 5 lines at 320 px)
 local now0 = W.time
 local L0 = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0)
 local Lmid = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0 - (1.5 + 0.9))
 local Lend = P1.PC.bubbleLayout(2, LONG, false, 1, false, false, false, now0 - 30)
 local Lshort = P1.PC.bubbleLayout(2, "short one", false, 1, false, false, false, now0)
-check(L0 and L0.th == 72 and L0.vh == 48 and L0.h == 70 and L0.off == 0 and math.abs(L0.scrollTime - 1.8) < 1e-6,
-	"a long message shows 2 of its 3 lines; it scrolls one line in 1.8 s")
-check(math.abs(Lmid.off - 12) < 1e-6 and Lend.off == 24, "it waits 1.5 s, then scrolls down smoothly (half a line after 0.9 s) and stops at the end")
+check(L0 and L0.th == 120 and L0.vh == 72 and L0.h == 94 and L0.w == 350 and L0.off == 0 and math.abs(L0.scrollTime - 3.6) < 1e-6,
+	"a long message shows 3 of its 5 lines in a 320 px wide bubble; the 2 more scroll in 3.6 s")
+check(math.abs(Lmid.off - 12) < 1e-6 and Lend.off == 48, "it waits 1.5 s, then scrolls down smoothly (half a line after 0.9 s) and stops at the end")
 check(Lshort.scrollTime == 0 and Lshort.vh == Lshort.th, "a short message does not scroll")
 waitRate()
-say(P2, "/s " .. LONG)
+P1.PC.cfg.bubbleW = 200                                                   -- (a said message has 90 characters at most: 5 lines at 200 px)
+say(P2, "/s " .. string.rep("abcdefghi ", 9))
 steps(3)
+P1.PC.cfg.bubbleW = 320
 local bl = P1.PC.c.bubbles[2]
-check(bl and math.abs((bl.extra or 0) - 1.8) < 1e-6, "its bubble stays up longer by the scrolling time")
+check(bl and math.abs((bl.extra or 0) - 3.6) < 1e-6, "its bubble stays up longer by the scrolling time")
 
 -- ================================================================== the test dummies (/dummy)
 waitRate()
