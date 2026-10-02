@@ -1730,15 +1730,15 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	local head = VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
 	local dist = VecLength(VecSub(head, GetCameraTransform().pos))
-	local scale, docked = nil, false
+	-- sized by the real distance to the speaker, the same on screen and docked: UiWorldToPixel's depth
+	-- (along the view) shrinks toward the screen edges, so turning on the spot changed the size
+	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
-		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, d)))
 	elseif small then
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
 		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
 		docked = true
-		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, dist)))
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local cfg = PC.cfg
