@@ -5,7 +5,7 @@
 -- MODES (chosen on the input line; they decide how OTHERS hear your message)
 --   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
 --     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
---     ending in "!!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
+--     ending in "!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
 --   "w" Whisper: heard only within cfg.whisperR (5 m); beyond it nobody gets anything, not even a
 --     history line. CAPS stay a whisper (no shout reach). A small faint bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
@@ -211,9 +211,9 @@ function PC.utf8Len(s)
 	return k
 end
 
--- a word is shouted: 2+ cased letters and none lower case, or (any script) it ends in "!!" / "！！"
+-- a word is shouted: 2+ cased letters and none lower case, or (any script) it ends in "!" / "！"
 function PC.isShout(w)
-	if w:find("!!%s*$") or w:find("\239\188\129\239\188\129%s*$") then return true end
+	if w:find("!%s*$") or w:find("\239\188\129%s*$") then return true end
 	local n, low = 0, false
 	for ch in w:gmatch(PC.UTF8_CHAR) do
 		local k = PC.utf8Case(ch)
@@ -940,7 +940,7 @@ function PC.command(text)
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
-		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or !! shouts farther (Speak only).")
+		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or ! shouts farther (Speak only).")
 		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
