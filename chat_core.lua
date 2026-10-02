@@ -50,7 +50,7 @@
 --   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
---   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /dummy [1|2|3|clear]
+--   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /mute [name], /unmute name|all, /dummy [1|2|3|clear]
 --   (local test speakers), /help, //text sends "/text".
 --
 -- (copy fonts/ too for the bubble font; without it the bubbles use the game fonts)
@@ -91,6 +91,13 @@
 --   - On clients every read of `shared` hands out a fresh copy: never compare shared tables by
 --     identity; messages are matched by id, and each tick reads shared.pcMsgs once.
 --   - Text is UTF-8: counted, cased and cut as characters; fonts per script; Arabic shaped, RTL laid out.
+--   - Delivery: a client numbers its messages and resends the oldest unconfirmed one (PC.pump) until
+--     shared.pcAck[p] shows it (the server ignores a number it has taken). shared.pcNow (server time,
+--     each second) lets a lagging client time a late message from when it was said.
+--   - Whispers never go into shared: the server sends each only to the players near enough
+--     (ClientCall "client.pc_whisper"), so other games never have the text.
+--   - Sanitizing (PC.clean, also names): no invisible / direction-changing characters, at most
+--     cfg.maxMarks accents a letter.
 
 PC = PC or {}
 PC.cfg = PC.cfg or {}
@@ -117,7 +124,14 @@ do
 		lifePerChar = 0.08,
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
-		sharedLife = 12,         -- s a message stays in shared (clients copy it on arrival)
+		sharedLife = 30,         -- s a message stays in shared (clients copy it on arrival; a lagging client still gets it)
+		lateAge = 2,             -- s: a message older than this on arrival is timed from when it was said, no babble
+		resendT = 0.6,           -- s between resends of a message the server has not confirmed yet
+		resendFor = 8,           -- s before an unconfirmed message is given up (a line in your history says so)
+		outboxMax = 4,           -- messages waiting to be confirmed at most (more: "slow down")
+		whisperSlack = 2,        -- m the server adds to whisperMumbleR when it picks who gets a whisper
+		maxMarks = 2,            -- combining marks (accents) a letter may carry (no "zalgo" towers)
+		nameLen = 24,            -- characters of a player name
 		keepHist = 50,           -- lines in the local history
 		rate = 0.45,             -- s between two messages of one player
 		sndDir = "MOD/snd/",
@@ -351,13 +365,46 @@ function PC.histText(b)
 	return PC.garble(b.full, math.max(0, b.bestF or 0), b.id or 0, 0, b.level == "shout")
 end
 
--- sanitize: ASCII control bytes only (never %c: it would eat UTF-8), trimmed, cfg.maxLen characters
+-- characters removed outright: zero-width ones, direction overrides / isolates, line and paragraph
+-- separators, the BOM
+local function pcStripped(c)
+	return (c >= 0x200B and c <= 0x200F) or (c >= 0x2028 and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) or c == 0xFEFF
+end
+-- generic combining marks (stacked into "zalgo" towers); the vowel marks of Arabic, Hebrew, Thai,
+-- Devanagari... are not in these ranges and are kept
+local function pcMark(c)
+	return (c >= 0x300 and c <= 0x36F) or (c >= 0x483 and c <= 0x489) or (c >= 0x1AB0 and c <= 0x1AFF)
+		or (c >= 0x1DC0 and c <= 0x1DFF) or (c >= 0x20D0 and c <= 0x20FF) or (c >= 0xFE20 and c <= 0xFE2F)
+end
+
+-- sanitize: ASCII control bytes (never %c: it would eat UTF-8), invisible / direction-changing
+-- characters, more than cfg.maxMarks accents on a letter; trimmed, cfg.maxLen characters
 function PC.clean(text)
 	if type(text) ~= "string" then return "" end
+	local out, run = {}, 0
+	for ch in text:gmatch(PC.UTF8_CHAR) do
+		local c = PC.utf8Code(ch)
+		if pcStripped(c) then
+		elseif pcMark(c) then
+			run = run + 1
+			if run <= PC.cfg.maxMarks then out[#out + 1] = ch end
+		else
+			run = 0
+			out[#out + 1] = ch
+		end
+	end
+	text = table.concat(out)
 	text = text:gsub("[%z\1-\31\127]", " ")
 	text = text:gsub("^%s+", "")
 	text = text:gsub("%s+$", "")
 	return PC.utf8Head(text, PC.cfg.maxLen)
+end
+
+-- a player's name, cleaned like a message and at most cfg.nameLen characters
+function PC.cleanName(name, p)
+	name = PC.utf8Head(PC.clean(name), PC.cfg.nameLen)
+	if name == "" then name = "Player " .. tostring(p) end
+	return name
 end
 
 -- ---- display: which of the game's fonts has this text's script
@@ -527,12 +574,14 @@ end
 
 -- ============================================================================ server
 function PC.serverInit()
-	PC.s = {time = 0, typing = {}, last = {}, n = 0, pruneT = 0, lobby = false}
+	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false}
 	ClearKey(PC.cfg.reg)
 	shared.pcMsgs = {}
 	shared.pcVoice = {}
 	shared.pcTyping = {}
 	shared.pcLobby = false
+	shared.pcAck = {}
+	shared.pcNow = 0
 end
 
 function PC.S()
@@ -555,26 +604,60 @@ function PC.validMode(m)
 	return "p"
 end
 
--- a player says something: sanitized, rate-limited, then published (whole table: one sync)
-function server.pc_say(p, ch, text)
+-- every player (server)
+function PC.allPlayers()
+	local out = {}
+	if Players then for q in Players() do out[#out + 1] = q end end
+	return out
+end
+
+-- confirm player p's message seq (the client resends until shared.pcAck shows it)
+local function pcAck(p, seq)
+	PC.S().seq[p] = seq
+	local t = {}
+	for k, v in pairs(shared.pcAck or {}) do t[k] = v end
+	t[p] = seq
+	shared.pcAck = t
+end
+
+-- a player says something: sanitized, rate-limited, then published (whole table: one sync). seq: the
+-- client's number for it - a resend of one already taken is ignored, a taken one is confirmed in
+-- shared.pcAck. Whispers are not published: the server sends them only to the players near enough
+-- (ClientCall), so nobody else's game ever has the text.
+function server.pc_say(p, ch, text, seq)
 	local s = PC.S()
-	p = tonumber(p)
+	local cfg = PC.cfg
+	p, seq = tonumber(p), tonumber(seq)
 	if not p then return end
+	if seq and seq <= (s.seq[p] or 0) then return end                     -- (a resend of one already taken)
 	text = PC.clean(text)
-	if text == "" then return end
-	ch = PC.validMode(ch)
-	if s.time - (s.last[p] or -10) < PC.cfg.rate then return end              -- (no spamming)
-	s.last[p] = s.time
-	s.n = s.n + 1
-	local list = {}
-	for _, m in ipairs(shared.pcMsgs or {}) do
-		if s.time - m.t < PC.cfg.sharedLife then list[#list + 1] = m end
+	if text == "" then
+		if seq then pcAck(p, seq) end
+		return
 	end
-	local name = GetPlayerName(p)
-	if type(name) ~= "string" or name == "" then name = "Player " .. p end
-	list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time}
-	while #list > PC.cfg.keepShared do table.remove(list, 1) end
-	shared.pcMsgs = list
+	ch = PC.validMode(ch)
+	if s.time - (s.last[p] or -10) < cfg.rate then return end            -- (no spamming: the resend gets in later)
+	s.last[p] = s.time
+	if seq then pcAck(p, seq) end
+	s.n = s.n + 1
+	local name = PC.cleanName(GetPlayerName(p), p)
+	if ch == "w" then
+		local okT, tr = pcall(GetPlayerTransform, p)
+		for _, q in ipairs(PC.allPlayers()) do
+			local okQ, tq = pcall(GetPlayerTransform, q)
+			if q == p or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= cfg.whisperMumbleR + cfg.whisperSlack) then
+				ClientCall(q, "client.pc_whisper", s.n, p, name, text)
+			end
+		end
+	else
+		local list = {}
+		for _, m in ipairs(shared.pcMsgs or {}) do
+			if s.time - m.t < cfg.sharedLife then list[#list + 1] = m end
+		end
+		list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time}
+		while #list > cfg.keepShared do table.remove(list, 1) end
+		shared.pcMsgs = list
+	end
 	PC.publishSaid(p, ch, text)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d", p, ch, #text))
 end
@@ -652,7 +735,12 @@ function PC.serverTick(dt)
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
 	for _, p in ipairs(PC.removedPlayers()) do
-		s.last[p] = nil
+		s.last[p], s.seq[p] = nil, nil
+		if (shared.pcAck or {})[p] then
+			local t = {}
+			for k, v in pairs(shared.pcAck) do if k ~= p then t[k] = v end end
+			shared.pcAck = t
+		end
 		SetBool(PC.cfg.reg .. ".typing." .. p, false)
 		if s.typing[p] then s.typing[p] = nil; PC.publishTyping() end
 		local vs = shared.pcVoice or {}
@@ -666,6 +754,7 @@ function PC.serverTick(dt)
 	s.pruneT = s.pruneT - dt
 	if s.pruneT > 0 then return end
 	s.pruneT = 1
+	shared.pcNow = s.time                                                -- (clients tell late messages by it)
 	local msgs = shared.pcMsgs or {}
 	if #msgs == 0 then return end
 	local list = {}
@@ -690,6 +779,7 @@ function PC.clientInit()
 		page = "chat", bubbles = {}, prevBubbles = {}, scroll = 0, t0 = GetTime(),
 		hideHint = GetBool(cfg.save .. "hidehint"),
 		voiceTries = 0, voiceT = 0,
+		outbox = {}, seq = 0, muted = {}, names = {},
 		babble = {clips = {}, queue = {}, echoes = {}},
 	}
 	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
@@ -824,6 +914,14 @@ function PC.receive(m)
 	local c = PC.C()
 	local me = GetLocalPlayer()
 	local heard, far
+	if m.p and m.name then
+		if c.muted[m.p] and c.muted[m.p] ~= m.name then c.muted[m.p] = nil end   -- (another player with that number now)
+		c.names[m.p] = m.name
+		if c.muted[m.p] then return end                                       -- (/mute: nothing of theirs)
+	end
+	-- late (the client lagged): timed from when it was said, no babble
+	local age = (m.t and shared.pcNow) and math.max(0, shared.pcNow - m.t) or 0
+	local late = age > PC.cfg.lateAge
 	if m.ch == "g" then
 		heard = m.text
 		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0, me = m.p == me})
@@ -836,21 +934,23 @@ function PC.receive(m)
 		-- kept for its bubble's life even out of earshot (hidden): walking in while it is up shows it.
 		-- Not a whisper: it is private - only who was within whisperMumbleR when it was said gets it.
 		if heard or not whisper then
-			local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
+			local b = {t = GetTime() - (late and age or 0), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
 				level = "none", hidden = true, bestF = -1}
 			b.scrollT = b.t                                                  -- (the scroll's clock: fixed, a reveal never restarts it)
-			local old = c.bubbles[m.p]                                       -- (2 bubbles a speaker at most: the newest and the one
-			if old and not old.hidden then c.prevBubbles[m.p] = old end      --  before it; a third pushes the oldest out)
-			c.bubbles[m.p] = b
+			if not (late and age >= PC.bubbleLife(b)) then                  -- (so late its bubble is over: the history only)
+				local old = c.bubbles[m.p]                                   -- (2 bubbles a speaker at most: the newest and the one
+				if old and not old.hidden then c.prevBubbles[m.p] = old end  --  before it; a third pushes the oldest out)
+				c.bubbles[m.p] = b
+			end
 			PC.updateBubble(m.p, b, b.t, true)
 		end
-		if heard then
+		if heard and not late then
 			-- the babble: all of it, except beyond the buffer where only the shouted words carry
 			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
 			local onlyShouts = (level == "shout" and not inBuffer) or level == "shoutmumble"
 			PC.babbleSay(m.p, onlyShouts and table.concat(PC.shoutWords(m.text), " ") or m.text, nil, whisper and "whisper" or nil)
-			if level == "mumble" then heard, far = nil, nil end               -- (the hook: no words heard)
 		end
+		if level == "mumble" or level == "shoutmumble" then heard, far = nil, nil end   -- (the hook: no words heard)
 	end
 	if PC.hooks.onMessage and not PC.isDummy(m.p) then PC.hooks.onMessage(m, heard) end
 end
@@ -929,6 +1029,7 @@ function PC.clientTick(dt)
 			if now - b.t > PC.bubbleLife(b) + (b.extra or 0) then tbl[p] = nil end
 		end
 	end
+	PC.pump(now)
 	PC.dummyTick(now)
 	PC.revealBubbles(now)
 	PC.babbleTick()
@@ -1182,6 +1283,13 @@ function PC.babbleTick()
 	end
 	for p, q in pairs(B.queue) do
 		if now >= q.nextT then
+			local function gap(x) return q.step * (x[4] and 0.85 or 1) + x[2] end
+			-- a slow frame can be past several syllables: skip to the last one due (the babble keeps time
+			-- with the bubble instead of dragging on at one syllable a frame)
+			while q.syl[q.k] and q.syl[q.k + 1] and now >= q.nextT + gap(q.syl[q.k]) do
+				q.nextT = q.nextT + gap(q.syl[q.k])
+				q.k = q.k + 1
+			end
 			local s = q.syl[q.k]
 			if not s then
 				B.queue[p] = nil
@@ -1211,7 +1319,7 @@ function PC.babbleTick()
 					end
 				end
 				q.k = q.k + 1
-				q.nextT = now + q.step * (s[4] and 0.85 or 1) + s[2]
+				q.nextT = math.max(q.nextT + gap(s), now - 0.1)          -- (on a fixed schedule, not from this frame)
 			end
 		end
 	end
@@ -1233,10 +1341,41 @@ function PC.scrollBy(n)
 	c.scroll = math.max(0, math.min(math.max(0, #c.hist - 1), c.scroll + n))
 end
 
+-- say something: into the outbox, sent now and resent until the server confirms it (PC.pump)
 function PC.say(text, mode)
+	local c = PC.C()
 	text = PC.clean(text)
 	if text == "" then return end
-	ServerCall("server.pc_say", GetLocalPlayer(), mode or PC.mode(), text)
+	if #c.outbox >= PC.cfg.outboxMax then
+		PC.system("Slow down: your last messages are still being sent.")
+		return
+	end
+	c.seq = c.seq + 1
+	c.outbox[#c.outbox + 1] = {seq = c.seq, ch = mode or PC.mode(), text = text, t0 = GetTime(), sentT = -1e9}
+	PC.pump(GetTime())
+end
+
+-- the oldest unconfirmed message: (re)sent every cfg.resendT, given up after cfg.resendFor
+function PC.pump(now)
+	local c, cfg = PC.C(), PC.cfg
+	local ack = (shared.pcAck or {})[GetLocalPlayer()] or 0
+	while c.outbox[1] and c.outbox[1].seq <= ack do table.remove(c.outbox, 1) end
+	local m = c.outbox[1]
+	if not m then return end
+	if now - m.t0 > cfg.resendFor then
+		table.remove(c.outbox, 1)
+		PC.system("Not sent (no answer from the host): " .. m.text)
+		return
+	end
+	if now - m.sentT >= cfg.resendT then
+		m.sentT = now
+		ServerCall("server.pc_say", GetLocalPlayer(), m.ch, m.text, m.seq)
+	end
+end
+
+-- a whisper from the server: only the players near enough get one (it is never in shared)
+function client.pc_whisper(id, p, name, text)
+	PC.receive({id = id, p = p, name = name, ch = "w", text = text})
 end
 
 function PC.findVoice(s)
@@ -1300,6 +1439,51 @@ function PC.modeCommand(m, rest)
 	end
 end
 
+-- /mute [name], /unmute name|all: hide a player's messages (bubbles, babble, typing, history) - only
+-- for you. Names are those of players who have said something; the start of a name is enough.
+function PC.muteCommand(on, arg)
+	local c = PC.C()
+	local me = GetLocalPlayer()
+	if arg == "" then
+		if not on then PC.system("/unmute <name> or /unmute all."); return end
+		local names = {}
+		for _, n in pairs(c.muted) do names[#names + 1] = n end
+		table.sort(names)
+		PC.system(#names > 0 and ("Muted (only for you): " .. table.concat(names, ", ") .. ". /unmute <name> or /unmute all.")
+			or "Nobody is muted. /mute <name> hides a player's messages, only for you.")
+		return
+	end
+	if not on and arg:lower() == "all" then
+		c.muted = {}
+		PC.system("Nobody is muted now.")
+		return
+	end
+	local want, exact, part = arg:lower(), {}, {}
+	for q, n in pairs(c.names) do
+		if q ~= me then
+			local l = n:lower()
+			if l == want then exact[#exact + 1] = q elseif l:sub(1, #want) == want then part[#part + 1] = q end
+		end
+	end
+	local hits = #exact > 0 and exact or part
+	if #hits == 0 then PC.system("No player called \"" .. arg .. "\" has said anything yet."); return end
+	if #hits > 1 then
+		local names = {}
+		for _, q in ipairs(hits) do names[#names + 1] = c.names[q] end
+		PC.system("\"" .. arg .. "\" could be: " .. table.concat(names, ", ") .. ". Type more of the name.")
+		return
+	end
+	local q = hits[1]
+	if on then
+		c.muted[q] = c.names[q]
+		c.bubbles[q], c.prevBubbles[q], c.babble.queue[q] = nil, nil, nil
+		PC.system(c.names[q] .. " is muted (only for you). /unmute " .. c.names[q] .. " to hear them again.")
+	else
+		c.muted[q] = nil
+		PC.system(c.names[q] .. " is not muted any more.")
+	end
+end
+
 function PC.command(text)
 	local c = PC.C()
 	local cmd, rest = text:match("^/(%S*)%s*(.-)%s*$")
@@ -1333,6 +1517,8 @@ function PC.command(text)
 	elseif cmd == "window" then
 		c.pinned = not c.pinned
 		PC.system(c.pinned and "The chat window stays open (Enter to use it). /window again to close it." or "The chat window closes when you stop typing.")
+	elseif cmd == "mute" or cmd == "unmute" then
+		PC.muteCommand(cmd == "mute", rest)
 	elseif cmd == "dummy" then
 		PC.dummyCommand(rest)
 	elseif cmd == "clear" then
@@ -1341,7 +1527,7 @@ function PC.command(text)
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or ! shouts farther (Speak only).")
-		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /dummy [1|2|3|clear] (test speakers)")
+		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /dummy [1|2|3|clear] (test speakers)")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -1490,6 +1676,28 @@ end
 -- buffer range. A speaker off screen gets the bubble on the screen edge on their side; every bubble is
 -- kept wholly on screen (PC.EDGE_MARGIN px).
 PC.EDGE_MARGIN = 8
+-- a bubble text's font, shaped form and size, measured once and kept (every frame re-measuring every
+-- bubble cost the most of the drawing; a garbled text changes only when a letter turns)
+PC.measured, PC.measuredN = {}, 0
+function PC.measure(text)
+	local cfg = PC.cfg
+	local key = text .. " " .. cfg.bubbleW
+	local m = PC.measured[key]
+	if m then return m end
+	local font, size = PC.bubbleFont(text)
+	local vis = PC.chatVisual(text)
+	UiPush()
+	UiFont(font, size)
+	UiWordWrap(cfg.bubbleW)
+	local tw, th = UiGetTextSize(vis)
+	local _, lh = UiGetTextSize("Ag")
+	UiPop()
+	m = {font = font, size = size, vis = vis, tw = tw, th = th or 28, lh = lh or 28}
+	if PC.measuredN >= 200 then PC.measured, PC.measuredN = {}, 0 end
+	PC.measured[key], PC.measuredN = m, PC.measuredN + 1
+	return m
+end
+
 function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	local feet = PC.speakerPos(p)
 	if not feet then return nil end
@@ -1507,16 +1715,9 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, dist)))
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
-	local font, size = PC.bubbleFont(text)
-	local vis = PC.chatVisual(text)
 	local cfg = PC.cfg
-	UiPush()
-	UiFont(font, size)
-	UiWordWrap(cfg.bubbleW)
-	local tw, th = UiGetTextSize(vis)
-	local _, lh = UiGetTextSize("Ag")
-	UiPop()
-	th, lh = th or 28, lh or 28
+	local mt = PC.measure(text)
+	local font, size, vis, tw, th, lh = mt.font, mt.size, mt.vis, mt.tw, mt.th, mt.lh
 	-- a long message: cfg.bubbleLines lines visible, scrolling down at reading pace from t0
 	local vh, off, scrollTime = th, 0, 0
 	if th > cfg.bubbleLines * lh + 1 then
@@ -1656,7 +1857,7 @@ function PC.drawBubbles()
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
-		if (mode == "p" or mode == "w") and p ~= me and not (c.bubbles[p] and not c.bubbles[p].hidden) then
+		if (mode == "p" or mode == "w") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden) then
 			local d = PC.distTo(p)
 			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(p, "...", false, 0.75, true, mode == "w")) end
 		end
