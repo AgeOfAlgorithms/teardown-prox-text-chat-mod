@@ -23,7 +23,8 @@
 -- BUBBLES are drawn in cfg.bubbleFont (Pangolin, a thick marker-hand font shipped in fonts/, OFL)
 --   when that file exists and has every letter of the message (Latin incl. Vietnamese, Cyrillic);
 --   anything else (Greek, CJK, Arabic, Thai...) uses the game font for its script (PC.chatFont). The
---   window stays in the game fonts.
+--   window stays in the game fonts. Bubbles never cover each other (PC.layoutBubbles): lowest first,
+--   an overlapping one is raised above, with a thin line down to its speaker.
 --
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
@@ -42,7 +43,8 @@
 --   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
---   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /help, //text sends "/text".
+--   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /dummy (three
+--   local test speakers), /help, //text sends "/text".
 --
 -- (copy fonts/ too for the bubble font; without it the bubbles use the game fonts)
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
@@ -95,6 +97,8 @@ do
 		mumbleR = 30,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
 		whisperMumbleR = 8,      -- m: Whisper's buffer beyond whisperR (nothing beyond it)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
+		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
+		dummyShow = 4.5,         -- s its bubble stays before it types the next one
 		life = 9,                -- s a bubble / a feed line stays
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
@@ -518,7 +522,39 @@ function server.pc_say(p, ch, text)
 	list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time}
 	while #list > PC.cfg.keepShared do table.remove(list, 1) end
 	shared.pcMsgs = list
+	PC.publishSaid(p, ch, text)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d", p, ch, #text))
+end
+
+-- ---- the event API for other mods (server / host): every accepted message is written to the registry,
+-- which all scripts on the host share (mods cannot call each other). A ring of the last 16:
+--   proxchat.said.last              int: the newest event number (counts up, never resets in a session)
+--   proxchat.said.<n % 16>.player   int: who spoke
+--   ... .mode   "speak" / "whisper" / "global"       ... .shout  bool: a shouted word (Speak only)
+--   ... .x .y .z  where the speaker stood (feet)       ... .text   string
+--   ... .radius   m: how far anyone hears anything (the babble): whisper 8, speak 30, shout 45, global 0
+--   ... .wordsRadius  m: how far the words are heard: whisper 5, speak 20, shout 45 (shouted words only)
+--   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
+-- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
+PC.SAID_RING = 16
+function PC.publishSaid(p, ch, text)
+	local s, cfg = PC.S(), PC.cfg
+	local base = cfg.reg .. ".said."
+	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
+	local k = base .. (s.said % PC.SAID_RING) .. "."
+	local mode = ch == "w" and "whisper" or (ch == "g" and "global" or "speak")
+	local shout = mode == "speak" and #PC.shoutWords(text) > 0
+	local okT, tr = pcall(GetPlayerTransform, p)
+	local pos = okT and tr and tr.pos or Vec(0, 0, 0)
+	SetInt(k .. "player", p)
+	SetString(k .. "mode", mode)
+	SetBool(k .. "shout", shout)
+	SetString(k .. "text", text)
+	SetFloat(k .. "x", pos[1]); SetFloat(k .. "y", pos[2]); SetFloat(k .. "z", pos[3])
+	SetFloat(k .. "radius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperMumbleR or (shout and cfg.shoutR or cfg.mumbleR)))
+	SetFloat(k .. "wordsRadius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperR or (shout and cfg.shoutR or cfg.chatR)))
+	SetBool(k .. "lobby", PC.hooks.inLobby and PC.hooks.inLobby() or false)
+	SetInt(base .. "last", s.said)                                    -- (last: the event is complete)
 end
 
 function PC.publishTyping()
@@ -690,11 +726,18 @@ function PC.system(text)
 	PC.addHist({sys = true, ch = "sys", text = text})
 end
 
+-- where speaker p stands (feet): a player, or the local test dummy (/dummy); nil = unknown
+function PC.speakerPos(p)
+	local c = PC.c
+	if PC.isDummy(p) then local d = PC.dummyOf(p); return d and d.pos or nil end
+	local ok, tr = pcall(GetPlayerTransform, p)
+	return ok and tr and tr.pos or nil
+end
+
 function PC.distTo(p)
-	local ok1, a = pcall(GetPlayerTransform, GetLocalPlayer())
-	local ok2, b = pcall(GetPlayerTransform, p)
-	if not (ok1 and ok2 and a and b and a.pos and b.pos) then return nil end
-	return VecLength(VecSub(a.pos, b.pos))
+	local a, b = PC.speakerPos(GetLocalPlayer()), PC.speakerPos(p)
+	if not (a and b) then return nil end
+	return VecLength(VecSub(a, b))
 end
 
 -- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (Speak
@@ -753,7 +796,7 @@ function PC.receive(m)
 			if mumble then heard, far = nil, nil end                           -- (the hook: no words heard)
 		end
 	end
-	if PC.hooks.onMessage then PC.hooks.onMessage(m, heard) end
+	if PC.hooks.onMessage and not PC.isDummy(m.p) then PC.hooks.onMessage(m, heard) end
 end
 
 -- a bubble heard only in part (garbled in the buffer, or only the shouted words) shows the words once
@@ -808,14 +851,103 @@ function PC.clientTick(dt)
 	for p, b in pairs(c.bubbles) do
 		if now - b.t > PC.cfg.life then c.bubbles[p] = nil end
 	end
+	PC.dummyTick(now)
 	PC.revealBubbles(now)
 	PC.babbleTick()
+end
+
+-- ---- the test dummies (/dummy): three figures in a row in front of you - a whisperer, a speaker and
+-- a shouter - only for you (client-side, no server, not synced). They say the same line at the same
+-- moment (the shouter in CAPS / with "!"), line after line, the voices rotating, so you can walk back
+-- and forth and compare the bubbles and the babble at every distance. Each line: "..." typing for
+-- cfg.dummyType s, then the message as if a player said it (PC.receive).
+PC.DUMMY = 1000                                                       -- (speaker ids PC.DUMMY + 0..2)
+PC.DUMMY_KINDS = {                                                    -- mode, name, torso colour; left to right
+	{"w", "Whisperer", "0.6 0.6 0.9"},
+	{"p", "Speaker", "0.9 0.65 0.25"},
+	{"s", "Shouter", "0.85 0.15 0.1"},
+}
+PC.DUMMY_LINES = {                                                    -- {said, shouted}
+	{"hello there, we are the test dummies", "HELLO THERE, WE ARE THE TEST DUMMIES"},
+	{"did you find the key yet?", "DID YOU FIND THE KEY YET?"},
+	{"the secret door is behind the painting", "THE SECRET DOOR IS BEHIND THE PAINTING"},
+	{"this is a really long message to show how the speech bubble wraps when someone has a lot to say at once",
+		"THIS IS A REALLY LONG MESSAGE TO SHOW HOW THE SPEECH BUBBLE WRAPS WHEN SOMEONE HAS A LOT TO SAY AT ONCE"},
+	{"Привет, как дела?", "ПРИВЕТ, КАК ДЕЛА?"},
+	{"你好，我们一起爬吧", "你好！我们一起爬吧！"},
+	{"مرحبا يا صديقي", "مرحبا! يا! صديقي!"},
+	{"Γεια σου φίλε", "ΓΕΙΑ ΣΟΥ ΦΙΛΕ"},
+}
+
+function PC.isDummy(p) return type(p) == "number" and p >= PC.DUMMY and p < PC.DUMMY + #PC.DUMMY_KINDS end
+
+function PC.dummyOf(p)
+	local c = PC.c
+	return c and c.dummy and PC.isDummy(p) and c.dummy.list[p - PC.DUMMY + 1] or nil
+end
+
+function PC.dummyToggle()
+	local c, cfg = PC.C(), PC.cfg
+	if c.dummy then
+		for _, d in ipairs(c.dummy.list) do
+			for _, e in ipairs(d.ents) do pcall(Delete, e) end
+			c.bubbles[d.p], c.babble.queue[d.p] = nil, nil
+		end
+		c.dummy = nil
+		PC.system("The test dummies are gone.")
+		return
+	end
+	local cam = GetCameraTransform()
+	local okF, fwd = pcall(TransformToParentVec, cam, Vec(0, 0, -1))
+	fwd = okF and fwd or Vec(0, 0, -1)
+	fwd = VecNormalize(Vec(fwd[1], 0, fwd[3]))
+	local right = VecCross(fwd, Vec(0, 1, 0))
+	local me = PC.speakerPos(GetLocalPlayer()) or cam.pos
+	local list = {}
+	for i, kind in ipairs(PC.DUMMY_KINDS) do
+		local pos = VecAdd(VecAdd(me, VecScale(fwd, 3)), VecScale(right, (i - 2) * 2.5))
+		local okR, hit, dist = pcall(QueryRaycast, VecAdd(pos, Vec(0, 2, 0)), Vec(0, -1, 0), 6)
+		if okR and hit then pos = Vec(pos[1], pos[2] + 2 - dist, pos[3]) end
+		-- a box figure (legs, body, head); client-side, static, just for looks
+		local xml = '<body dynamic="false"><voxbox size="5 9 3" pos="-0.25 0 -0.15" color="0.3 0.33 0.45"/>'
+			.. '<voxbox size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox size="4 4 4" pos="-0.2 1.6 -0.2" color="0.95 0.8 0.65"/></body>'
+		local okS, ents = pcall(Spawn, xml, Transform(pos), true)
+		list[i] = {p = PC.DUMMY + i - 1, kind = kind[1], name = kind[2], pos = pos, ents = okS and ents or {}, voice = i}
+	end
+	c.dummy = {list = list, k = 0, round = 0, nextT = GetTime() + 0.5, typingUntil = 0}
+	PC.system("Three test dummies in front of you (left to right: whisperer, speaker, shouter) say the same lines. Walk back and forth: whisper "
+		.. cfg.whisperR .. " m (garbled to " .. cfg.whisperMumbleR .. "), speech " .. cfg.chatR .. " m (garbled to " .. cfg.mumbleR
+		.. "), shouts " .. cfg.shoutR .. " m. /dummy again removes them.")
+end
+
+function PC.dummyTick(now)
+	local c, cfg = PC.C(), PC.cfg
+	local dm = c.dummy
+	if not dm or now < dm.nextT then return end
+	if dm.typingUntil == 0 then                                       -- (all start typing the next line)
+		dm.k = dm.k % #PC.DUMMY_LINES + 1
+		if dm.k == 1 then dm.round = dm.round + 1 end
+		for _, d in ipairs(dm.list) do c.bubbles[d.p] = nil end       -- (the "..." shows only with no bubble up)
+		dm.typingUntil = now + cfg.dummyType
+		dm.nextT = dm.typingUntil
+	else                                                              -- (all say it, each in its own voice)
+		local line = PC.DUMMY_LINES[dm.k]
+		dm.typingUntil = 0
+		for i, d in ipairs(dm.list) do
+			d.voice = (dm.round + i - 2) % #PC.VOICES + 1                -- (each round shifts the voices)
+			dm.n = (dm.n or 0) + 1
+			PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
+				ch = d.kind == "w" and "w" or "p", text = d.kind == "s" and line[2] or line[1]})
+		end
+		dm.nextT = now + cfg.dummyShow
+	end
 end
 
 -- ---- the babble voice (Animal Crossing style)
 function PC.voiceOf(p)
 	local c = PC.c
 	if c and c.voiceWant and p == GetLocalPlayer() then return c.voiceWant end
+	if PC.isDummy(p) then local d = PC.dummyOf(p); return d and d.voice or 3 end
 	local v = (shared.pcVoice or {})[p]
 	if v and PC.VOICES[v] then return v end
 	return (p * 37) % 5 + 1                                       -- (no pick yet: one of the first five)
@@ -929,8 +1061,8 @@ function PC.babbleTick()
 				if q.how == "flat" then
 					pos = GetCameraTransform().pos
 				else
-					local okT, tr = pcall(GetPlayerTransform, p)
-					if okT and tr and tr.pos then pos = VecAdd(tr.pos, Vec(0, 1.7, 0)) end
+					local feet = PC.speakerPos(p)
+					if feet then pos = VecAdd(feet, Vec(0, 1.7, 0)) end
 				end
 				if pos then
 					local set = (s[4] and q.set == "voice") and "shout" or q.set
@@ -1072,13 +1204,15 @@ function PC.command(text)
 	elseif cmd == "window" then
 		c.pinned = not c.pinned
 		PC.system(c.pinned and "The chat window stays open (Enter to use it). /window again to close it." or "The chat window closes when you stop typing.")
+	elseif cmd == "dummy" then
+		PC.dummyToggle()
 	elseif cmd == "clear" then
 		c.hist = {}
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or ! shouts farther (Speak only).")
-		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear")
+		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /dummy (test speakers)")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -1222,13 +1356,13 @@ function PC.edgePoint(pos)
 	return cx + dx * k, cy + dy * k
 end
 
--- a speech bubble over player p, with a thin black outline. small: the "..." of someone typing;
--- whisper: a bit smaller, pale lavender; mumble: a garbled message from the buffer range - kept on
--- the screen edge in their direction when they are off screen
-function PC.bubble(p, text, shout, a, small, whisper, mumble)
-	local okT, tr = pcall(GetPlayerTransform, p)
-	if not (okT and tr and tr.pos) then return end
-	local head = VecAdd(tr.pos, Vec(0, 2.25, 0))
+-- a speech bubble over player p, measured but not drawn yet (nil: not on screen). small: the "..." of
+-- someone typing; whisper: a bit smaller, pale lavender; mumble: a garbled message from the buffer
+-- range - kept on the screen edge in their direction when they are off screen
+function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble)
+	local feet = PC.speakerPos(p)
+	if not feet then return nil end
+	local head = VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
 	local scale
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
@@ -1237,33 +1371,86 @@ function PC.bubble(p, text, shout, a, small, whisper, mumble)
 		x, y = PC.edgePoint(head)
 		scale = 0.8
 	else
-		return
+		return nil
 	end
-	UiPush()
-	UiTranslate(x, y)
-	if shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end      -- (shaking with anger)
-	UiScale(scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1)))
-	UiFont(PC.bubbleFont(text))
+	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
+	local font, size = PC.bubbleFont(text)
 	local vis = PC.chatVisual(text)
+	UiPush()
+	UiFont(font, size)
 	UiWordWrap(640)
 	local tw, th = UiGetTextSize(vis)
+	UiPop()
 	local w = math.min(640, tw or 200) + 30
 	local h = (th or 28) + 22
+	return {p = p, x = x, y = y, s = s, w = w, h = h, vis = vis, font = font, size = size, a = a, shout = shout,
+		whisper = whisper, mumble = mumble, lift = 0,
+		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
+end
+
+-- draw a laid-out bubble (thin black outline), raised by L.lift px; a raised one gets a thin line down
+-- to the speaker's head
+function PC.bubbleDraw(L)
+	local a, s, w, h = L.a, L.s, L.w, L.h
+	if L.lift > 0 then
+		UiPush()
+		UiTranslate(L.x - 1, L.bottom - L.lift)
+		UiColor(0, 0, 0, 0.55 * a)
+		UiRect(2, L.lift)
+		UiPop()
+	end
+	UiPush()
+	UiTranslate(L.x, L.y - L.lift)
+	if L.shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end    -- (shaking with anger)
+	UiScale(s)
+	UiFont(L.font, L.size)
+	UiWordWrap(640)
 	local k = 2                                                              -- (the outline)
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
 	UiColor(0, 0, 0, 0.9 * a)
 	UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop()
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
-	if whisper then UiColor(0.86, 0.87, 1, a) else UiColor(1, 1, 1, a) end
+	if L.whisper then UiColor(0.86, 0.87, 1, a) else UiColor(1, 1, 1, a) end
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
-	if shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
+	if L.shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
-	if whisper then UiColor(0.2, 0.2, 0.38, mumble and 0.85 * a or a)
-	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, mumble and 0.85 * a or a) end
-	UiText(vis)
+	if L.whisper then UiColor(0.2, 0.2, 0.38, L.mumble and 0.85 * a or a)
+	else UiColor(L.shout and 0.6 or 0.08, 0.05, L.shout and 0.03 or 0.1, L.mumble and 0.85 * a or a) end
+	UiText(L.vis)
 	UiPop()
+end
+
+-- no bubble hides another: lowest on screen first, each one that would overlap one already placed is
+-- raised just above it (only up, so the line to its speaker stays straight). c.bubbleRects: the result.
+function PC.layoutBubbles(list)
+	table.sort(list, function(u, v)
+		if u.bottom ~= v.bottom then return u.bottom > v.bottom end
+		return u.p < v.p
+	end)
+	local placed = {}
+	for _, L in ipairs(list) do
+		for _ = 1, 3 * #list do
+			local moved = false
+			for _, P in ipairs(placed) do
+				if L.left < P.right and L.right > P.left and L.top - L.lift < P.bottom and L.bottom - L.lift > P.top then
+					L.lift = L.bottom - P.top + 4
+					moved = true
+				end
+			end
+			if not moved then break end
+		end
+		placed[#placed + 1] = {p = L.p, left = L.left, right = L.right, top = L.top - L.lift, bottom = L.bottom - L.lift}
+	end
+	PC.C().bubbleRects = placed
+	return list
+end
+
+-- one bubble right away (no overlap handling)
+function PC.bubble(p, text, shout, a, small, whisper, mumble)
+	local L = PC.bubbleLayout(p, text, shout, a, small, whisper, mumble)
+	if L then PC.bubbleDraw(L) end
 end
 
 function PC.drawBubbles()
@@ -1271,15 +1458,25 @@ function PC.drawBubbles()
 	local now = GetTime()
 	local me = GetLocalPlayer()
 	local third = GetBool("game.thirdperson")
+	local list = {}
+	local function add(L) if L then list[#list + 1] = L end end
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then PC.bubble(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble) end
+		if p ~= me or third then add(PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble)) end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
 		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
 			local d = PC.distTo(p)
-			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then PC.bubble(p, "...", false, 0.75, true, mode == "w") end
+			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(p, "...", false, 0.75, true, mode == "w")) end
 		end
 	end
+	local dm = c.dummy
+	if dm and now < dm.typingUntil then
+		for _, du in ipairs(dm.list) do
+			local d = not c.bubbles[du.p] and PC.distTo(du.p)
+			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
+		end
+	end
+	for _, L in ipairs(PC.layoutBubbles(list)) do PC.bubbleDraw(L) end
 end
 
 -- a small two-way switch on the Settings page; returns the new value when clicked, else nil
