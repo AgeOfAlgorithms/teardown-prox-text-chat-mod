@@ -1,0 +1,5 @@
+name = Proximity Chat
+author = McPuppetFace
+description = Text chat for multiplayer in any level or game mode. Press Enter to talk and pick how you are heard right on the input line (Tab or click): Say (nearby) - a speech bubble over your head and a babble in your own cartoon voice for players within 20 m (WRITE IN CAPS to shout farther); Whisper - a faint bubble and a breathy babble, only within 5 m; Say (everyone) - the whole server. The chat window keeps everything you heard; its Settings button lets you pick your voice. Commands: /p, /w, /g, /voice, /settings, /mute, /hint, /help. Every language supported. In multiplayer the host enables it for the session (Global mods); joining players get it from the Workshop.
+tags = Gameplay
+version = 2
