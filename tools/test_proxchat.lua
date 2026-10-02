@@ -217,6 +217,20 @@ local function soundsFrom(m, x, pat)                              -- sounds at a
 	end
 	return n, vmax
 end
+-- sounds of a far speaker (at x on the x axis): played 5 m from the listener's camera, toward the speaker
+local function soundsToward(m, x, pat)
+	local me = W.pos[m.me]
+	local cam = {me[1], me[2] + 1.7, me[3]}
+	local n, vmax = 0, 0
+	for _, s in ipairs(m.sounds) do
+		local d = {s.pos[1] - cam[1], s.pos[2] - cam[2], s.pos[3] - cam[3]}
+		local l = math.sqrt(d[1] ^ 2 + d[2] ^ 2 + d[3] ^ 2)
+		if math.abs(l - 5) < 0.05 and d[1] * (x - cam[1]) > 0 and (not pat or clipOf(m, s):find(pat)) then
+			n = n + 1; vmax = math.max(vmax, s.vol)
+		end
+	end
+	return n, vmax
+end
 local P1 = addMachine(1, true)
 local P2 = addMachine(2, false)
 local P3 = addMachine(3, false)
@@ -293,7 +307,8 @@ local nb = soundsFrom(P1, 4, "babble")
 check(nb >= 4, "P1 hears the babble at P2's head (" .. nb .. " syllables)")
 check(#P4.sounds == 0, "P4 hears no babble")
 check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].mumble and #hist(P3) == 1 and hist(P3)[1].text ~= "hello there", "P3 (26 m, the buffer): a garbled bubble; its history line is what P3 made out, not the words")
-check(soundsFrom(P3, 4, "babble") >= 4, "P3 hears the babble from the buffer")
+local nfar, vfar = soundsToward(P3, 4, "babble")
+check(nfar >= 4 and vfar > 0.75 * 0.4, string.format("P3 hears the babble from the buffer: 5 m away in P2's direction, at %.2f (not faded out)", vfar))
 waitRate()
 press(P2, "return"); typeText(P2, "second line\n"); step(); step()
 check(lastLine(P1, "p").text == "second line" and not P2.PC.c.typing, "a newline returned by the field sends too")
@@ -357,7 +372,7 @@ steps(60)
 local nw, vw = soundsFrom(P1, 4, "MOD/snd/whisper")
 local nOther = #P1.sounds - nw
 check(nw >= 4 and vw <= 0.451 and nOther == 0, string.format("whisper babble: breathy clips at P2's head, quiet (%d syllables, vol %.2f), no echo, no shout clips", nw, vw))
-check(soundsFrom(P5, 4, "whisper") >= 2 and P5.PC.c.bubbles[2] and P5.PC.c.bubbles[2].mumble, "P5 (10 m: the whisper buffer, 8-13 m) hears the breathy babble and gets a garbled bubble")
+check(soundsToward(P5, 4, "whisper") >= 2 and P5.PC.c.bubbles[2] and P5.PC.c.bubbles[2].mumble, "P5 (10 m: the whisper buffer, 8-13 m) hears the breathy babble and gets a garbled bubble")
 check(P2.PC.mode() == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the mode sticks for the next line (and is saved)")
 P1.server.pc_voice(2, 6)                                         -- (P2 picks Robot)
 steps(2)
@@ -992,6 +1007,12 @@ local ownShown = shows(P2, 2)
 P2.PC.setHideOwn(true); step()
 check(ownShown and not shows(P2, 2) and shows(P1, 2), "your own bubble shows in third person; Hide removes it for you (others still see it)")
 P2.PC.setHideOwn(false); P2.reg["game.thirdperson"] = nil
+
+-- ================================================================== how a voice carries
+local LD = P1.PC.loudness
+check(LD(4, 35) == 1 and math.abs(LD(35, 35) - 0.35) < 1e-9 and math.abs(LD(55, 55) - 0.35) < 1e-9 and LD(20, 35) > LD(30, 35) and LD(20, 35) > 0.6,
+	string.format("loudness: full up close, gently down to 35%% at the edge of the reach (20 m of 35: %.2f, 30 m: %.2f)", LD(20, 35), LD(30, 35)))
+check(LD(45, 55) > LD(30, 35), "a shout 45 m away is louder than speech 30 m away (each by its own reach)")
 
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
