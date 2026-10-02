@@ -848,6 +848,8 @@ local DM = P1.PC.c.dummy
 local DW, DS, DH = P1.PC.DUMMY, P1.PC.DUMMY + 1, P1.PC.DUMMY + 2         -- (whisperer, speaker, shouter)
 check(DM and #DM.list == 3 and #P1.spawned == 3 and math.abs(DM.list[1].pos[3] + 3) < 0.01
 	and math.abs(DM.list[1].pos[1] - DM.list[3].pos[1]) > 4.9, "/dummy: three figures in a row 3 m in front of you, 2.5 m apart")
+local _, ncull = P1.spawned[1].xml:gsub('tags="nocull"', "")
+check(ncull == 4, "the figures are nocull (body and its 3 boxes): they do not fade out far away")
 steps(60)
 check(drawn(P1, "^%.%.%.$") ~= nil and not P1.PC.c.bubbles[DS], "they show '...' while they type")
 steps(70)
