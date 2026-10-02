@@ -273,6 +273,9 @@ check(#hist(P4) == 0, "P4 (56 m) hears nothing")
 waitRate()
 say(P2, "everyone come HERE!!")
 check(lastLine(P3, "p").text == "HERE!!", "a word ending in !! is shouted too")
+waitRate()
+say(P2, "come here now!")
+check(lastLine(P3, "p").text == "now!", "a single ! is enough: that word is shouted")
 W.pos[4] = Vec(8, 0, 0); steps(5)
 check(#hist(P4) == 0, "P4 walked over later: still has not heard the old messages")
 waitRate()
@@ -334,9 +337,9 @@ check(#P4.sounds == 0 and #P1.sounds == 0, "Global: no babble either (a plain ch
 
 -- ================================================================== one history per player, different
 local function modes(M) local t = {} for _, e in ipairs(hist(M)) do t[#t + 1] = e.ch end return table.concat(t, " ") end
-check(modes(P1) == "p p p p p w w g", "P1's history: nearby, whispers, everyone, in order: " .. modes(P1))
-check(modes(P5) == "p p p p p g", "P5 (10 m): the nearby lines, no whispers: " .. modes(P5))
-check(modes(P3) == "p p g", "P3 (26 m): two shouts and everyone: " .. modes(P3))
+check(modes(P1) == "p p p p p p w w g", "P1's history: nearby, whispers, everyone, in order: " .. modes(P1))
+check(modes(P5) == "p p p p p p g", "P5 (10 m): the nearby lines, no whispers: " .. modes(P5))
+check(modes(P3) == "p p p g", "P3 (26 m): three shouts and everyone: " .. modes(P3))
 check(modes(P4) == "p g", "P4: what it heard while close + everyone: " .. modes(P4))
 local n1 = #hist(P1)
 steps(120)
