@@ -1472,13 +1472,14 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	if not feet then return nil end
 	local head = VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
-	local scale
+	local scale, docked = nil, false
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, d)))
 	elseif small then
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
 		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
+		docked = true
 		local dist = VecLength(VecSub(head, GetCameraTransform().pos))    -- (sized by distance like any bubble)
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, dist)))
 	end
@@ -1506,10 +1507,12 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	-- the whole bubble stays on screen (a speaker near the edge, or pinned to it)
 	local M = PC.EDGE_MARGIN
 	local halfW, up = (w / 2 + 2) * s, (h + 16) * s
+	local x0, y0 = x, y
 	x = math.max(M + halfW, math.min(UiWidth() - M - halfW, x))
 	y = math.max(M + up, math.min(UiHeight() - M, y))
+	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
 	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime,
-		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0,
+		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 
@@ -1517,7 +1520,8 @@ end
 -- to the speaker's head
 function PC.bubbleDraw(L)
 	local a, s, w, h = L.a, L.s, L.w, L.h
-	if L.lift > 0 then                                                   -- (raised: a line down to the speaker)
+	if L.docked then                                                     -- (on the screen edge: no line)
+	elseif L.lift > 0 then                                               -- (raised: a line down to the speaker)
 		UiPush()
 		UiTranslate(L.x - 1, L.bottom - L.lift)
 		UiColor(0, 0, 0, 0.55 * a)
