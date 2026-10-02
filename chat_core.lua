@@ -6,10 +6,12 @@
 --   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
 --     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
 --     ending in "!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
---     The BUFFER chatR-cfg.mumbleR (20-30 m): the babble and a "..." bubble (on the screen edge in the
---     speaker's direction when off screen), no words, no history line. Coming within range while the
---     bubble is up shows the words and adds the line (a far shout's line is completed instead).
---   "w" Whisper: heard within cfg.whisperR (5 m); its buffer to cfg.whisperMumbleR (8 m) gets "..."
+--     The BUFFER chatR-cfg.mumbleR (20-30 m): the babble and a bubble with the message GARBLED
+--     (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
+--     cfg.garbleMax; shouted words readable), on the screen edge in the speaker's direction when off
+--     screen; no history line. Coming within range while the bubble is up shows the words and adds
+--     the line (a far shout's line is completed instead).
+--   "w" Whisper: heard within cfg.whisperR (5 m); its buffer to cfg.whisperMumbleR (8 m) is garbled
 --     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
@@ -90,8 +92,9 @@ do
 		chatR = 20,              -- m: who hears you (nearby)
 		shoutR = 45,             -- m: who hears your shouted words (nearby only)
 		whisperR = 5,            -- m: who hears a whisper
-		mumbleR = 30,            -- m: Speak's buffer beyond chatR: the babble and a "..." bubble, no words
+		mumbleR = 30,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
 		whisperMumbleR = 8,      -- m: Whisper's buffer beyond whisperR (nothing beyond it)
+		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		life = 9,                -- s a bubble / a feed line stays
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
@@ -246,6 +249,50 @@ function PC.shoutWords(text)
 	return out
 end
 
+-- ---- the buffer range: a message half heard. Each letter becomes a mysterious glyph unless it is
+-- revealed: a fixed share of the letters (frac, 0-1) chosen per message (seed), so walking closer
+-- uncovers more of the same message. Spaces and punctuation stay (the shape of the sentence shows);
+-- keepShouts leaves shouted words readable. With several PC.GARBLE glyphs they shimmer with tick.
+-- The glyph: ⬚ (U+2B1A). Only the game's CJK fonts have it, so a garbled bubble is drawn in bold_sc.ttf
+-- (PC.scriptOf counts it as "cjk"; that font has Latin and Cyrillic too).
+PC.GARBLE = {"\226\172\154"}
+local function hash01(a, b, c)
+	return ((a * 73856093 + b * 19349663 + c * 83492791) % 1000003) / 1000003
+end
+function PC.garble(text, frac, seed, tick, keepShouts)
+	local out, i = {}, 0
+	for sp, w in text:gmatch("(%s*)(%S+)") do
+		out[#out + 1] = sp
+		if keepShouts and PC.isShout(w) then
+			out[#out + 1] = w
+			for _ in w:gmatch(PC.UTF8_CHAR) do i = i + 1 end
+		else
+			for ch in w:gmatch(PC.UTF8_CHAR) do
+				i = i + 1
+				if (#ch == 1 and ch:find("%p")) or hash01(seed, i, 0) < frac then
+					out[#out + 1] = ch
+				else
+					out[#out + 1] = PC.GARBLE[math.floor(hash01(seed, i, tick + 1) * #PC.GARBLE) + 1]
+				end
+			end
+		end
+	end
+	return table.concat(out)
+end
+
+-- what a bubble shows now: in the buffer range the message garbled, more of it revealed the closer
+-- the listener is (up to cfg.garbleMax just outside the range)
+function PC.bubbleText(p, b, now)
+	if b.level ~= "mumble" and b.level ~= "shout" then return b.text end
+	local cfg = PC.cfg
+	local inner = b.whisper and cfg.whisperR or cfg.chatR
+	local outer = b.whisper and cfg.whisperMumbleR or cfg.mumbleR
+	local d = PC.distTo(p)
+	if b.level == "shout" and not (d and d <= outer) then return b.text end   -- (farther: "HELP ... NOW")
+	local f = d and math.max(0, math.min(1, (outer - d) / (outer - inner))) or 0
+	return PC.garble(b.full, f * cfg.garbleMax, b.id or 0, math.floor(now * 3), b.level == "shout")
+end
+
 -- sanitize: ASCII control bytes only (never %c: it would eat UTF-8), trimmed, cfg.maxLen characters
 function PC.clean(text)
 	if type(text) ~= "string" then return "" end
@@ -258,6 +305,7 @@ end
 -- ---- display: which of the game's fonts has this text's script
 function PC.scriptOf(c)
 	if c < 0x250 or (c >= 0x1E00 and c <= 0x1EFF) or (c >= 0x370 and c <= 0x52F) then return "base" end
+	if c == 0x2B1A then return "cjk" end                                  -- (⬚, PC.GARBLE: only the CJK fonts have it)
 	if (c >= 0x3040 and c <= 0x30FF) or (c >= 0x31F0 and c <= 0x31FF) then return "kana" end
 	if (c >= 0x1100 and c <= 0x11FF) or (c >= 0x3000 and c <= 0x303F) or (c >= 0x3130 and c <= 0x318F) or (c >= 0x3400 and c <= 0x9FFF)
 		or (c >= 0xAC00 and c <= 0xD7AF) or (c >= 0xF900 and c <= 0xFAFF) or (c >= 0xFF00 and c <= 0xFFEF) then return "cjk" end
@@ -649,7 +697,7 @@ end
 
 -- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (Speak
 -- within chatR, Whisper within whisperR), "shout" (only the shouted words, within shoutR: far = true),
--- "mumble" (the buffer just beyond: chatR-mumbleR / whisperR-whisperMumbleR: the babble and a "..."
+-- "mumble" (the buffer just beyond: chatR-mumbleR / whisperR-whisperMumbleR: the babble and a garbled
 -- bubble, no words, no history line). nil = nothing.
 PC.LEVEL = {mumble = 1, shout = 2, full = 3}
 function PC.heard(p, text, mode)
@@ -696,7 +744,7 @@ function PC.receive(m)
 				PC.addHist(entry)
 			end
 			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout, whisper = whisper, mumble = mumble,
-				full = m.text, mode = mode, level = level, name = m.name, entry = entry}
+				full = m.text, mode = mode, level = level, name = m.name, entry = entry, id = m.id}
 			-- the babble: all of it, except beyond the buffer where only the shouted words carry
 			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
 			PC.babbleSay(m.p, (level == "shout" and not inBuffer) and heard or m.text, nil, whisper and "whisper" or nil)
@@ -706,7 +754,7 @@ function PC.receive(m)
 	if PC.hooks.onMessage then PC.hooks.onMessage(m, heard) end
 end
 
--- a bubble heard only in part ("..." in the buffer, or only the shouted words) shows the words once
+-- a bubble heard only in part (garbled in the buffer, or only the shouted words) shows the words once
 -- the listener comes within range while it is still up; the history gets the line then
 function PC.revealBubbles(now)
 	local c, cfg = PC.C(), PC.cfg
@@ -1173,7 +1221,7 @@ function PC.edgePoint(pos)
 end
 
 -- a speech bubble over player p, with a thin black outline. small: the "..." of someone typing;
--- whisper: a bit smaller, pale lavender; mumble: the "..." of a speaker in the buffer range - kept on
+-- whisper: a bit smaller, pale lavender; mumble: a garbled message from the buffer range - kept on
 -- the screen edge in their direction when they are off screen
 function PC.bubble(p, text, shout, a, small, whisper, mumble)
 	local okT, tr = pcall(GetPlayerTransform, p)
@@ -1210,8 +1258,8 @@ function PC.bubble(p, text, shout, a, small, whisper, mumble)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
 	if shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
-	if whisper then UiColor(0.2, 0.2, 0.38, mumble and 0.6 * a or a)
-	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, mumble and 0.6 * a or a) end
+	if whisper then UiColor(0.2, 0.2, 0.38, mumble and 0.85 * a or a)
+	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, mumble and 0.85 * a or a) end
 	UiText(vis)
 	UiPop()
 end
@@ -1222,7 +1270,7 @@ function PC.drawBubbles()
 	local me = GetLocalPlayer()
 	local third = GetBool("game.thirdperson")
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then PC.bubble(p, b.text, b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble) end
+		if p ~= me or third then PC.bubble(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble) end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
 		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
