@@ -1,6 +1,6 @@
 -- Proximity Chat options (Mod Manager > Options). A menu script like the game's own speedometer
 -- options.lua: plain draw(), no #version line. Settings are this player's own (savegame.mod.pc*):
--- the default voice (also the Voice tab or /voice <name> in game), the hint, Global babble.
+-- the default voice (also chat window > Settings or /voice <name> in game), the hint, Global babble.
 PCO_VOICES = {"Squeaky", "Chirpy", "Plain", "Low", "Deep", "Robot"}
 
 function pcoButton(label, selected, w)
@@ -27,7 +27,7 @@ function draw()
 	UiTranslate(0, 60)
 	UiFont("regular.ttf", 22)
 	UiColor(1, 1, 1, 0.7)
-	UiText("In game: Enter opens the chat, Tab: Proximity / Global / Voice tab, /help for commands")
+	UiText("In game: Enter to chat, Tab: nearby / whisper / everyone, Settings in the chat window, /help")
 	UiColor(1, 1, 1, 1)
 
 	UiFont("regular.ttf", 26)
@@ -47,7 +47,7 @@ function draw()
 	UiTranslate(0, 34)
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
-	UiText(v >= 1 and v <= #PCO_VOICES and "Used whenever you play with Proximity Chat (change it in game in the Voice tab)." or "Not picked: you get one of the first five at random.")
+	UiText(v >= 1 and v <= #PCO_VOICES and "Used whenever you play with Proximity Chat (change it in game: chat window > Settings)." or "Not picked: you get one of the first five at random.")
 	UiColor(1, 1, 1, 1)
 	UiFont("regular.ttf", 26)
 

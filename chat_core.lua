@@ -1,58 +1,67 @@
--- chat_core.lua - Proximity Chat for Teardown v2 multiplayer: text chat with two channels, speech
--- bubbles and an Animal-Crossing-style "babble" voice. Works in any level / game mode; reusable by
--- #include in other mods. Source of truth: teardown-mods/proxchat/mods/proximity chat/chat_core.lua.
+-- chat_core.lua - Proximity Chat for Teardown v2 multiplayer: text chat with three speaking MODES,
+-- speech bubbles and an Animal-Crossing-style "babble" voice. Works in any level / game mode; reusable
+-- by #include in other mods. Source of truth: teardown-mods/proxchat/mods/proximity chat/chat_core.lua.
 --
--- CHANNELS
---   Proximity ("p", the default): a speech bubble over the speaker's head and a babble voice played in
---     3D at the speaker (quieter and echoing with distance). Only players within cfg.chatR (20 m) hear
---     it; ALL-CAPS words or a word ending in "!!" are shouted and reach cfg.shoutR (45 m), where only
---     the shouted words get through ("HELP ... NOW").
---     Each client decides what IT heard from the distance at the moment the message arrives and keeps
---     that in its own Proximity history, so every player has a different Proximity history.
---   Global ("g"): everyone gets the line, no bubble. Its babble is short, quiet and plays at the
---     listener (not in the world: the speaker can be anywhere, and a 3D sound from far away would be
---     silent or misleading); /mute turns it off.
---   Lobby (PC.hooks.inLobby() true on the server): everything said is Global.
+-- MODES (chosen on the input line; they decide how OTHERS hear your message)
+--   "p" Say (nearby), the default: a speech bubble over your head and a babble voice played in 3D at
+--     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
+--     ending in "!!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
+--   "w" Whisper (5 m): heard only within cfg.whisperR; beyond it nobody gets anything, not even a
+--     history line. CAPS stay a whisper (no shout reach). A small faint bubble; a breathy babble
+--     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
+--     your head, no echo; the voice's pitch still shifts it a little.
+--   "g" Say (everyone): every player gets the line, no bubble. Its babble is short, quiet and plays at
+--     the listener (the speaker can be anywhere; a 3D sound from far away would be silent or
+--     misleading); muted in Settings or with /mute.
+--   Lobby (PC.hooks.inLobby() true on the server): everything said is "everyone".
+--   Your last mode is kept as your default next time (savegame.mod.pcmode).
 --
--- THE WINDOW: Enter opens a line AND the chat window (interactive: mouse cursor, clickable tabs); Enter
---   says it, Esc closes both. Three tabs: Proximity, Global, Voice. Tab (or a click on a tab header)
---   goes to the next tab; on Proximity / Global it also picks the channel you send to ("Say (nearby):"
---   / "Say (everyone):"); the Voice tab lists the voices as buttons (yours highlighted): a click picks
---   one (synced so others hear it, saved as your default, a short preview only you hear) and keeps the
---   channel you were typing in. Wheel / PgUp / PgDn scroll. With the window closed the newest lines
---   fade out in a feed. No other hotkeys: /window pins the window open (read-only while not typing);
---   a mod that wants a hotkey for that sets PC.cfg.windowKey (default none).
+-- HISTORY: ONE list per player of everything THEY received: every "everyone" line, plus the nearby /
+--   whisper lines they were in range of at the moment each arrived (only the shouted words from
+--   20-45 m), so every player's history is different. Lines are tagged [all] / [near] / [whisper]
+--   (whispers faint). Bounded to cfg.keepHist.
+--
+-- THE WINDOW: Enter opens the input line and the chat window (interactive: mouse cursor). The line
+--   shows the mode ("Say (nearby):", "Whisper (5 m):", "Say (everyone):") and three mode chips at its
+--   right end; Tab or a click on a chip changes the mode. Enter says it, Esc closes. The window shows
+--   the history (wheel / PgUp / PgDn scroll) and, right-aligned in its header, a "Settings" button:
+--   the Settings page has the voice picker (a click picks: synced so others hear it, saved, a preview
+--   only you hear), "everyone" babble on/off, the hint on/off, keep the window open; "Back" returns.
+--   With the window closed the newest lines fade out in a feed. No hotkeys besides Enter (a host mod
+--   may set PC.cfg.windowKey to pin the window with a key).
 --   Clicks fire on the mouse PRESS (UiIsMouseInRect + InputPressed("lmb")), with UiBlankButton (fires
---   on release) as a fallback and de-duplicated: one click is one pick (UiBlankButton alone missed
---   clicks in-game in Tall Order's lobby).
--- COMMANDS (echoed locally): /voice [name|number], /g <text>, /p <text>, /mute, /hint, /window,
---   /clear, /help, //text sends "/text".
+--   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
+--   clicks in Tall Order's lobby).
+-- COMMANDS (echoed locally): /p /w /g [text] (set the mode, or say one line in it), /voice [name|n],
+--   /settings, /mute, /hint, /window, /clear, /help, //text sends "/text".
 --
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
 -- registry keys proxchat.*; persistent settings savegame.mod.pc*)
---   #include "chat_core.lua"          in a #version 2 script; copy snd/ (babble0-7, shout0-7, robot0-3)
---   PC.cfg.<key> = value              optional overrides, set before PC.serverInit / PC.clientInit
---                                     (keys: see the defaults below, e.g. chatR, shoutR, windowKey, sndDir)
+--   #include "chat_core.lua"          in a #version 2 script; copy snd/ (babble0-7, shout0-7, robot0-3,
+--                                     whisper0-7, rwhisper0-3)
+--   PC.cfg.<key> = value              optional overrides: set PC = {cfg = {...}} before the include, or
+--                                     PC.cfg.x before init (keys: the defaults below)
 --   PC.serverInit()                   in server.init
 --   PC.serverTick(dt)                 in server.tick
 --   PC.clientInit()                   in client.init
 --   PC.clientTick(dt)                 in client.tick (receives messages, plays the babble)
---   PC.draw()                         in client.draw (bubbles, window / feed, typing line, keys)
+--   PC.draw()                         in client.draw (bubbles, window / feed, input line, keys)
 --   PC.isTyping(p)                    server: any player; client: the local player. Skip your own keys
 --                                     while it is true. Other scripts: GetBool("proxchat.typing." .. p)
---   PC.say(text, ch)                  client: say something as the local player (ch "p" or "g")
---   PC.system(text)                   client: a local line in the current tab (only this player sees it)
---   PC.history(ch)                    client: the local history of "p" or "g" (entries: name, text, p,
---                                     ch, shout, far, sys, t); bounded to cfg.keepHist
---   PC.setVoice(i)                    client: pick voice i of PC.VOICES for the local player (synced,
---                                     saved, previewed) - what a click in the Voice tab does
---   PC.view() / PC.setView(v)         client: the window tab, "p" / "g" / "v"
+--   PC.say(text, mode)                client: say something as the local player (mode "p" / "w" / "g")
+--   PC.mode() / PC.setMode(m)         client: the input line's mode (setMode saves it)
+--   PC.system(text)                   client: a local line in the history (only this player sees it)
+--   PC.history([mode])                client: the history (entries: name, text, p, ch = mode or "sys",
+--                                     shout, far, sys, t); with a mode: only those lines (a copy)
+--   PC.setVoice(i)                    client: pick voice i of PC.VOICES (synced, saved, previewed)
+--   PC.page() / PC.setPage(pg)        client: the window page, "chat" or "settings"
 --   PC.clicked(id, w, h)              client: a press-firing, de-duplicated click on a w x h rect at the
 --                                     cursor (for your own buttons while UiMakeInteractive is on)
 --   Hooks (all optional; define them in PC.hooks):
---   PC.hooks.inLobby()                server: true = everyone hears everything (Global only)
---   PC.hooks.everyoneHears(speaker)   client: true = the local player hears this speaker's proximity
---                                     messages in full wherever they are (spectators, radios...)
+--   PC.hooks.inLobby()                server: true = everyone hears everything ("everyone" only)
+--   PC.hooks.everyoneHears(speaker)   client: true = the local player hears this speaker's NEARBY
+--                                     messages in full wherever they are (spectators, radios...);
+--                                     whispers still need 5 m
 --   PC.hooks.blockKeys()              client: true = Enter (and cfg.windowKey) do nothing
 --   PC.hooks.onMessage(msg, heard)    client: a message arrived; heard = what was heard or nil
 --   PC.hooks.log(line)                server: diagnostics
@@ -70,24 +79,26 @@ PC.hooks = PC.hooks or {}
 
 do
 	local defaults = {
-		chatR = 20,              -- m: who hears you (proximity)
-		shoutR = 45,             -- m: who hears your shouted words
+		chatR = 20,              -- m: who hears you (nearby)
+		shoutR = 45,             -- m: who hears your shouted words (nearby only)
+		whisperR = 5,            -- m: who hears a whisper (nothing beyond)
 		life = 9,                -- s a bubble / a feed line stays
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
 		sharedLife = 12,         -- s a message stays in shared (clients copy it on arrival)
-		keepHist = 50,           -- lines per local history tab
+		keepHist = 50,           -- lines in the local history
 		rate = 0.45,             -- s between two messages of one player
 		sndDir = "MOD/snd/",
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
-		save = "savegame.mod.pc",-- persistent settings: pcvoice, pchidehint, pcmuteglobal
+		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pcmuteglobal
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
-		globalVol = 0.35,        -- Global babble: this much of the voice's volume, at the listener
-		globalMaxSyl = 14,       -- Global babble: at most this many syllables
+		globalVol = 0.35,        -- "everyone" babble: this much of the voice's volume, at the listener
+		globalMaxSyl = 14,       -- "everyone" babble: at most this many syllables
+		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
 		echoFrom = 6,            -- m: farther voices echo
-		winW = 900, winH = 400,  -- the chat window
+		winW = 1000, winH = 400, -- the chat window (and the input line's width)
 		feedLines = 6,
 		hintIntro = 15,          -- s the longer hint shows after loading
 	}
@@ -105,8 +116,19 @@ PC.VOICES = {
 	{"Deep", 0.64, 0.092, "voice", 1.0},
 	{"Robot", 1.0, 0.07, "robot", 0.35},          -- (square waves are loud: 35 %)
 }
-PC.BABBLE_SETS = {voice = 8, shout = 8, robot = 4}
-PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot"}
+PC.BABBLE_SETS = {voice = 8, shout = 8, robot = 4, whisper = 8, rwhisper = 4}
+PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "whisper", rwhisper = "rwhisper"}
+
+-- the modes: id, prompt on the input line, chip label, history tag, colour
+PC.MODES = {
+	{"p", "Say (nearby): ", "Nearby", "[near]", {1, 0.82, 0.3}},
+	{"w", "Whisper (5 m): ", "Whisper", "[whisper]", {0.78, 0.78, 0.9}},
+	{"g", "Say (everyone): ", "Everyone", "[all]", {0.55, 0.8, 1}},
+}
+function PC.modeInfo(m)
+	for _, x in ipairs(PC.MODES) do if x[1] == m then return x end end
+	return PC.MODES[1]
+end
 
 -- ============================================================================ text in any language
 -- Chat text is UTF-8: letters are counted, cased and cut as characters, not bytes (Lua's %a / upper()
@@ -372,6 +394,13 @@ function PC.log(s)
 	if PC.hooks.log then PC.hooks.log(s) end
 end
 
+-- a mode from the network: "p", "w" or "g" ("g" only in the lobby)
+function PC.validMode(m)
+	if PC.inLobby() then return "g" end
+	if m == "g" or m == "w" then return m end
+	return "p"
+end
+
 -- a player says something: sanitized, rate-limited, then published (whole table: one sync)
 function server.pc_say(p, ch, text)
 	local s = PC.S()
@@ -379,7 +408,7 @@ function server.pc_say(p, ch, text)
 	if not p then return end
 	text = PC.clean(text)
 	if text == "" then return end
-	ch = (ch == "g" or PC.inLobby()) and "g" or "p"
+	ch = PC.validMode(ch)
 	if s.time - (s.last[p] or -10) < PC.cfg.rate then return end              -- (no spamming)
 	s.last[p] = s.time
 	s.n = s.n + 1
@@ -401,12 +430,12 @@ function PC.publishTyping()
 	shared.pcTyping = t
 end
 
--- typing state (the server ignores your mod keys meanwhile; the "..." over your head for proximity)
+-- typing state (the server ignores your mod keys meanwhile; the "..." over your head nearby / whisper)
 function server.pc_typing(p, on, ch)
 	local s = PC.S()
 	p = tonumber(p)
 	if not p then return end
-	s.typing[p] = on and (ch == "g" and "g" or "p") or nil
+	s.typing[p] = on and PC.validMode(ch) or nil
 	SetBool(PC.cfg.reg .. ".typing." .. p, on and true or false)
 	PC.publishTyping()
 end
@@ -471,24 +500,25 @@ end
 function PC.clientInit()
 	local cfg = PC.cfg
 	local c = {
-		hist = {g = {}, p = {}}, n = 0, seen = 0, channel = "p", typing = false, text = "", focus = false,
-		pinned = false, unread = {g = 0, p = 0}, bubbles = {}, scroll = 0, t0 = GetTime(),
+		hist = {}, n = 0, seen = 0, typing = false, text = "", focus = false, pinned = false,
+		page = "chat", bubbles = {}, scroll = 0, t0 = GetTime(),
 		hideHint = GetBool(cfg.save .. "hidehint"), muteGlobal = GetBool(cfg.save .. "muteglobal"),
 		voiceTries = 0, voiceT = 0,
 		babble = {clips = {}, queue = {}, echoes = {}},
-		view = "p",                                                 -- the window tab: "p", "g" or "v"
 	}
+	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
+	c.mode = (m == "w" or m == "g") and m or "p"
 	local v = GetInt(cfg.save .. "voice")
-	if PC.VOICES[v] then c.voiceWant = v end                    -- (the Mod Manager option / last /voice)
+	if PC.VOICES[v] then c.voiceWant = v end                    -- (Settings / Options / /voice)
 	for set, n in pairs(PC.BABBLE_SETS) do
 		c.babble.clips[set] = {}
 		for i = 1, n do c.babble.clips[set][i] = LoadSound(cfg.sndDir .. PC.CLIP_FILE[set] .. (i - 1) .. ".ogg") end
 	end
 	PC.c = c
-	-- joining: recent Global lines go into the history; proximity talk from before you came is not heard
-	for _, m in ipairs(shared.pcMsgs or {}) do
-		if m.id > c.seen then c.seen = m.id end
-		if m.ch == "g" then PC.addHist("g", {p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0}, true) end
+	-- joining: recent "everyone" lines go into the history; nearby talk from before you came is not heard
+	for _, msg in ipairs(shared.pcMsgs or {}) do
+		if msg.id > c.seen then c.seen = msg.id end
+		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text, shout = #PC.shoutWords(msg.text) > 0}) end
 	end
 end
 
@@ -499,40 +529,36 @@ end
 
 function PC.lobby() return shared.pcLobby == true end
 
--- the channel the local player types in
-function PC.channel()
+-- the input line's mode: "p" nearby, "w" whisper, "g" everyone (the lobby: always "g")
+function PC.mode()
 	if PC.lobby() then return "g" end
-	return PC.C().channel
+	return PC.C().mode
 end
 
--- the window tab: "p" / "g" (the channel's history) or "v" (the voices). In the lobby "p" shows as "g".
-function PC.view()
-	local v = PC.C().view
-	if v == "v" then return "v" end
-	return PC.channel()
-end
-
-PC.VIEWS = {"p", "g", "v"}
-
-function PC.setView(v)
+function PC.setMode(m)
 	local c = PC.C()
-	if v == "v" then
-		c.view = "v"
-		c.scroll = 0
-	elseif v == "p" or v == "g" then
-		if PC.lobby() and v == "p" then return end
-		c.view = v
-		PC.setChannel(v)
+	if PC.lobby() then return end                                   -- (the lobby is "everyone" only)
+	if m ~= "g" and m ~= "w" then m = "p" end
+	if c.mode == m then return end
+	c.mode = m
+	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
+	if c.typing then ServerCall("server.pc_typing", GetLocalPlayer(), true, m) end
+end
+
+-- Tab: nearby -> whisper -> everyone -> nearby
+function PC.nextMode()
+	local cur = PC.mode()
+	for i, x in ipairs(PC.MODES) do
+		if x[1] == cur then PC.setMode(PC.MODES[i % #PC.MODES + 1][1]); return end
 	end
 end
 
--- Tab: Proximity -> Global -> Voice -> Proximity (the lobby skips Proximity)
-function PC.nextView()
-	local cur = PC.view()
-	local order = PC.lobby() and {"g", "v"} or PC.VIEWS
-	local k = 1
-	for i, v in ipairs(order) do if v == cur then k = i end end
-	PC.setView(order[k % #order + 1])
+function PC.page() return PC.C().page end
+
+function PC.setPage(pg)
+	local c = PC.C()
+	c.page = (pg == "settings") and "settings" or "chat"
+	c.scroll = 0
 end
 
 function PC.windowOpen()
@@ -540,26 +566,31 @@ function PC.windowOpen()
 	return c.typing or c.pinned
 end
 
-function PC.history(ch) return PC.C().hist[ch] end
+-- the history; with a mode, only its lines (a copy)
+function PC.history(mode)
+	local h = PC.C().hist
+	if not mode then return h end
+	local out = {}
+	for _, e in ipairs(h) do if e.ch == mode then out[#out + 1] = e end end
+	return out
+end
 
--- add a line to a local history tab (bounded); quiet = no unread count
-function PC.addHist(ch, e, quiet)
+-- add a line to the local history (bounded)
+function PC.addHist(e)
 	local c = PC.C()
 	c.n = c.n + 1
 	e.n = c.n
-	e.ch = ch
+	e.ch = e.ch or "sys"
 	e.t = e.t or GetTime()
-	local h = c.hist[ch]
+	local h = c.hist
 	h[#h + 1] = e
 	while #h > PC.cfg.keepHist do table.remove(h, 1) end
-	local viewing = PC.windowOpen() and PC.view() == ch
-	if viewing and c.scroll > 0 then c.scroll = math.min(c.scroll + 1, #h - 1) end   -- (the view stays put)
-	if not quiet and not viewing then c.unread[ch] = c.unread[ch] + 1 end
+	if PC.windowOpen() and c.scroll > 0 then c.scroll = math.min(c.scroll + 1, #h - 1) end   -- (the view stays put)
 end
 
 -- a local line only this player sees (command results)
 function PC.system(text)
-	PC.addHist(PC.channel(), {sys = true, text = text}, true)
+	PC.addHist({sys = true, ch = "sys", text = text})
 end
 
 function PC.distTo(p)
@@ -569,15 +600,21 @@ function PC.distTo(p)
 	return VecLength(VecSub(a.pos, b.pos))
 end
 
--- what the local player hears of p's proximity message NOW: all of it (yourself, within chatR), only
--- the shouted words (within shoutR; far = true), or nothing (nil)
-function PC.heard(p, text)
+-- what the local player hears of p's message NOW. Nearby: all of it within chatR, only the shouted
+-- words within shoutR (far = true). Whisper: all of it within whisperR, else nothing. nil = nothing.
+function PC.heard(p, text, mode)
 	if p == GetLocalPlayer() then return text, false end
+	local cfg = PC.cfg
+	if mode == "w" then
+		local d = PC.distTo(p)
+		if d and d <= cfg.whisperR then return text, false end
+		return nil
+	end
 	if PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false end
 	local d = PC.distTo(p)
 	if not d then return nil end
-	if d <= PC.cfg.chatR then return text, false end
-	if d <= PC.cfg.shoutR then
+	if d <= cfg.chatR then return text, false end
+	if d <= cfg.shoutR then
 		local sw = PC.shoutWords(text)
 		if #sw > 0 then return table.concat(sw, " ... "), true end
 	end
@@ -591,15 +628,17 @@ function PC.receive(m)
 	local heard, far
 	if m.ch == "g" then
 		heard = m.text
-		PC.addHist("g", {p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0, me = m.p == me})
-		if m.p == me or not c.muteGlobal then PC.babbleSay(m.p, m.text, nil, true) end
+		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0, me = m.p == me})
+		if m.p == me or not c.muteGlobal then PC.babbleSay(m.p, m.text, nil, "flat") end
 	else
-		heard, far = PC.heard(m.p, m.text)
+		local mode = (m.ch == "w") and "w" or "p"
+		heard, far = PC.heard(m.p, m.text, mode)
 		if heard then
-			local shout = #PC.shoutWords(heard) > 0
-			PC.addHist("p", {p = m.p, name = m.name, text = heard, shout = shout, far = far, me = m.p == me})
-			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout}
-			PC.babbleSay(m.p, heard)
+			local whisper = mode == "w"
+			local shout = not whisper and #PC.shoutWords(heard) > 0          -- (CAPS stay a whisper)
+			PC.addHist({ch = mode, p = m.p, name = m.name, text = heard, shout = shout, far = far, me = m.p == me})
+			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout, whisper = whisper}
+			PC.babbleSay(m.p, heard, nil, whisper and "whisper" or nil)
 		end
 	end
 	if PC.hooks.onMessage then PC.hooks.onMessage(m, heard) end
@@ -688,17 +727,30 @@ function PC.babbleSyllables(text)
 	return out, text:find("!") ~= nil
 end
 
--- start babbling text for player p. flat = at the listener (Global, previews), short and quiet
-function PC.babbleSay(p, text, voice, flat)
+-- start babbling text for player p. how: nil = in the world at the speaker (nearby: shouts, echo),
+-- "whisper" = breathy clips at the speaker, quiet, no echo, no shouting; "flat" = at the listener
+-- (everyone, previews), short and quiet
+function PC.babbleSay(p, text, voice, how)
 	local B = PC.C().babble
 	local cfg = PC.cfg
 	local v = PC.VOICES[voice or PC.voiceOf(p)] or PC.VOICES[3]
 	local syl, loud = PC.babbleSyllables(text)
-	if flat then while #syl > cfg.globalMaxSyl do table.remove(syl) end end
+	local q = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], how = how}
 	local vol = (loud and 1 or cfg.babbleVol) * v[5]
 	local shoutVol = v[5]
-	if flat then vol, shoutVol = vol * cfg.globalVol, shoutVol * cfg.globalVol end
-	B.queue[p] = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], vol = vol, shoutVol = shoutVol, flat = flat}
+	if how == "flat" then
+		while #syl > cfg.globalMaxSyl do table.remove(syl) end
+		vol, shoutVol = vol * cfg.globalVol, shoutVol * cfg.globalVol
+	elseif how == "whisper" then
+		q.set = (v[4] == "robot") and "rwhisper" or "whisper"
+		q.pitch = 1 + (v[2] - 1) * 0.6                            -- (the voice still shifts it a little)
+		q.step = v[3] * 1.1
+		vol = cfg.whisperVol
+		shoutVol = vol
+		for _, s in ipairs(syl) do s[4] = false end               -- (CAPS stay a whisper)
+	end
+	q.vol, q.shoutVol = vol, shoutVol
+	B.queue[p] = q
 end
 
 -- farther voices: quieter (on top of the engine's 3D falloff) and echoing. No reverb API: the echo is
@@ -738,7 +790,7 @@ function PC.babbleTick()
 				B.queue[p] = nil
 			else
 				local pos
-				if q.flat then
+				if q.how == "flat" then
 					pos = GetCameraTransform().pos
 				else
 					local okT, tr = pcall(GetPlayerTransform, p)
@@ -751,8 +803,8 @@ function PC.babbleTick()
 					local jitter = s[4] and (1.04 + 0.16 * math.random()) or (0.94 + 0.12 * math.random())
 					local pitch = q.pitch * s[3] * jitter
 					local base = s[4] and q.shoutVol or q.vol
-					if q.flat then
-						PlaySound(clip, pos, base, false, pitch)
+					if q.how then
+						PlaySound(clip, pos, base, false, pitch)            -- (flat / whisper: no echo)
 					else
 						local vol, echoes = PC.babbleDistance(pos, base)
 						PlaySound(clip, pos, vol, false, pitch)
@@ -768,43 +820,26 @@ function PC.babbleTick()
 	end
 end
 
--- ---- typing, channels, commands
+-- ---- typing, modes, commands
 function PC.setTyping(on)
 	local c = PC.C()
 	c.typing = on and true or false
 	c.text, c.send, c.tab, c.scroll = "", nil, nil, 0
 	c.focus = c.typing
-	if c.typing then
-		c.view = c.channel                                          -- (opens on the tab you type in)
-		c.unread[PC.channel()] = 0
-	end
-	ServerCall("server.pc_typing", GetLocalPlayer(), c.typing, PC.channel())
-end
-
--- the channel you send to (the window shows its tab)
-function PC.setChannel(ch)
-	local c = PC.C()
-	if PC.lobby() then return end                                   -- (the lobby is Global only)
-	if ch ~= "g" then ch = "p" end
-	c.view = ch
-	c.unread[ch] = 0
-	if c.channel == ch then return end
-	c.channel = ch
-	c.scroll = 0
-	if c.typing then ServerCall("server.pc_typing", GetLocalPlayer(), true, ch) end
+	c.page = "chat"                                               -- (opens / closes on the history)
+	ServerCall("server.pc_typing", GetLocalPlayer(), c.typing, PC.mode())
 end
 
 function PC.scrollBy(n)
 	local c = PC.C()
-	local h = c.hist[PC.view()]
-	if not h then return end
-	c.scroll = math.max(0, math.min(math.max(0, #h - 1), c.scroll + n))
+	if c.page ~= "chat" then return end
+	c.scroll = math.max(0, math.min(math.max(0, #c.hist - 1), c.scroll + n))
 end
 
-function PC.say(text, ch)
+function PC.say(text, mode)
 	text = PC.clean(text)
 	if text == "" then return end
-	ServerCall("server.pc_say", GetLocalPlayer(), ch or PC.channel(), text)
+	ServerCall("server.pc_say", GetLocalPlayer(), mode or PC.mode(), text)
 end
 
 function PC.findVoice(s)
@@ -821,7 +856,19 @@ function PC.setVoice(i)
 	if not PC.VOICES[i] then return end
 	c.voiceWant, c.voiceTries, c.voiceT = i, 0, 0
 	SetInt(PC.cfg.save .. "voice", i)
-	PC.babbleSay(GetLocalPlayer(), "Hello there, how are you?", i, true)   -- (a preview, only for you)
+	PC.babbleSay(GetLocalPlayer(), "Hello there, how are you?", i, "flat")   -- (a preview, only for you)
+end
+
+function PC.setMuteGlobal(on)
+	local c = PC.C()
+	c.muteGlobal = on and true or false
+	SetBool(PC.cfg.save .. "muteglobal", c.muteGlobal)
+end
+
+function PC.setHideHint(on)
+	local c = PC.C()
+	c.hideHint = on and true or false
+	SetBool(PC.cfg.save .. "hidehint", c.hideHint)
 end
 
 -- the optional window hotkey (PC.cfg.windowKey, default none), upper case for hints
@@ -831,10 +878,10 @@ end
 
 -- a click on a w x h rect at the cursor (align left top). Fires on the mouse PRESS; UiBlankButton
 -- (which fires on release) is the fallback, and the release of a click whose press already fired for
--- the same id is ignored, so one click is one action.
+-- the same id is ignored, so one click is one action. inside: pass it when you already asked.
 function PC.clicked(id, w, h, inside)
 	local c = PC.C()
-	if inside == nil then inside = UiIsMouseInRect(w, h) end      -- (pass it when you already asked)
+	if inside == nil then inside = UiIsMouseInRect(w, h) end
 	local press = inside and InputPressed("lmb")
 	local release = UiBlankButton and UiBlankButton(w, h) or false
 	if press then
@@ -851,6 +898,17 @@ function PC.clicked(id, w, h, inside)
 	return false
 end
 
+function PC.modeCommand(m, rest)
+	local info = PC.modeInfo(m)
+	if PC.lobby() and m ~= "g" then PC.system("In the lobby everyone hears everything."); return end
+	if rest ~= "" then
+		PC.say(rest, m)
+	else
+		PC.setMode(m)
+		PC.system("Mode: " .. info[2]:gsub(":%s*$", "") .. ". Tab on the input line changes it.")
+	end
+end
+
 function PC.command(text)
 	local c = PC.C()
 	local cmd, rest = text:match("^/(%S*)%s*(.-)%s*$")
@@ -859,7 +917,7 @@ function PC.command(text)
 		if rest == "" then
 			local names = {}
 			for i, v in ipairs(PC.VOICES) do names[i] = i .. " " .. v[1] end
-			PC.system("Voices: " .. table.concat(names, ", ") .. ". Yours: " .. PC.VOICES[PC.voiceOf(GetLocalPlayer())][1] .. ". Type /voice <name> or pick one in the Voice tab (Tab).")
+			PC.system("Voices: " .. table.concat(names, ", ") .. ". Yours: " .. PC.VOICES[PC.voiceOf(GetLocalPlayer())][1] .. ". Type /voice <name> or use Settings.")
 		else
 			local i = PC.findVoice(rest)
 			if not i then
@@ -869,30 +927,31 @@ function PC.command(text)
 				PC.system("Your voice is now " .. PC.VOICES[i][1] .. ".")
 			end
 		end
-	elseif cmd == "g" or cmd == "a" or cmd == "all" or cmd == "global" then
-		if rest ~= "" then PC.say(rest, "g") else PC.setChannel("g"); PC.system("You now talk to everyone (Global).") end
-	elseif cmd == "p" or cmd == "n" or cmd == "l" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" then
-		if PC.lobby() then PC.system("In the lobby everyone hears everything.")
-		elseif rest ~= "" then PC.say(rest, "p")
-		else PC.setChannel("p"); PC.system("You now talk to players near you (Proximity).") end
+	elseif cmd == "g" or cmd == "a" or cmd == "all" or cmd == "global" or cmd == "everyone" then
+		PC.modeCommand("g", rest)
+	elseif cmd == "p" or cmd == "n" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" or cmd == "say" then
+		PC.modeCommand("p", rest)
+	elseif cmd == "w" or cmd == "whisper" then
+		PC.modeCommand("w", rest)
+	elseif cmd == "settings" or cmd == "options" or cmd == "s" then
+		PC.setTyping(true)                                        -- (the window is interactive while typing)
+		PC.setPage("settings")
 	elseif cmd == "mute" then
-		c.muteGlobal = not c.muteGlobal
-		SetBool(PC.cfg.save .. "muteglobal", c.muteGlobal)
-		PC.system(c.muteGlobal and "Global messages are silent now (no babble). /mute again to hear them." or "Global messages babble again.")
+		PC.setMuteGlobal(not c.muteGlobal)
+		PC.system(c.muteGlobal and "Messages to everyone are silent now (no babble). /mute again to hear them." or "Messages to everyone babble again.")
 	elseif cmd == "hint" then
-		c.hideHint = not c.hideHint
-		SetBool(PC.cfg.save .. "hidehint", c.hideHint)
+		PC.setHideHint(not c.hideHint)
 		PC.system(c.hideHint and "Hint hidden. /hint shows it again." or "Hint shown.")
-	elseif cmd == "window" or cmd == "w" then
+	elseif cmd == "window" then
 		c.pinned = not c.pinned
 		PC.system(c.pinned and "The chat window stays open (Enter to use it). /window again to close it." or "The chat window closes when you stop typing.")
 	elseif cmd == "clear" then
-		c.hist[PC.channel()] = {}
+		c.hist = {}
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
-		PC.system("Enter: chat + window. Tab: Proximity / Global / Voice tab. " .. key .. "CAPS or a word ending in !! shouts (heard farther).")
-		PC.system("/voice [name]   /g <text> everyone   /p <text> nearby   /mute   /hint   /window (keep open)   /clear")
+		PC.system("Enter: chat. Tab or the chips on the line: nearby / whisper / everyone. Settings (window header): voice and more. " .. key .. "CAPS or !! shouts farther (not in a whisper).")
+		PC.system("/p /w /g [text]   /voice [name]   /settings   /mute   /hint   /window (keep open)   /clear")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -908,7 +967,7 @@ function PC.submit(text)
 		PC.command(text)
 		return
 	end
-	PC.say(text, PC.channel())
+	PC.say(text, PC.mode())
 end
 
 -- the text field (cursor at the box's top left; font and colour set before). The game's UiTextInput as
@@ -926,13 +985,13 @@ function PC.field(w, h)
 	end
 end
 
--- keys that change what is drawn (before drawing, so this frame already shows it): Tab, scrolling,
--- the optional window hotkey (never while typing: then letters go into the line)
+-- keys that change what is drawn (before drawing, so this frame already shows it): Tab (the mode),
+-- scrolling, the optional window hotkey (never while typing: then letters go into the line)
 function PC.preKeys()
 	local c = PC.C()
 	if c.typing then
 		UiMakeInteractive()
-		if InputPressed("tab") then PC.nextView() end
+		if InputPressed("tab") then PC.nextMode() end
 		local wheel = InputValue and InputValue("mousewheel") or 0
 		if wheel > 0 then PC.scrollBy(1) elseif wheel < 0 then PC.scrollBy(-1) end
 		if InputPressed("pgup") then PC.scrollBy(4) elseif InputPressed("pgdown") then PC.scrollBy(-4) end
@@ -941,17 +1000,17 @@ function PC.preKeys()
 		if wk ~= "" and InputPressed(wk) then
 			c.pinned = not c.pinned
 			c.scroll = 0
-			if c.pinned then c.view = c.channel; c.unread[PC.channel()] = 0 end
+			c.page = "chat"
 		end
 	end
 end
 
--- keys after the field (it may have taken Enter / Tab): Enter opens / says it, Esc cancels
+-- keys after the field (it may have taken Enter / Tab): Enter opens / says it, Esc closes
 function PC.keys()
 	local c = PC.C()
 	if c.typing then
 		UiMakeInteractive()
-		if c.tab and not InputPressed("tab") then PC.nextView() end   -- (once: preKeys took a Tab key press)
+		if c.tab and not InputPressed("tab") then PC.nextMode() end   -- (once: preKeys took a Tab key press)
 		c.tab = nil
 		if InputPressed("return") or c.send then
 			local text = c.text
@@ -969,34 +1028,51 @@ function PC.keys()
 end
 
 -- ---- drawing
-local function pcLinePrefix(e, tag)
-	if e.sys then return "" end
-	return (e.name or "?") .. ((tag and e.ch == "g") and " (all)" or "") .. ": "
-end
-
--- one history line at the cursor (align left top); returns its height. tag: mark Global lines (feed)
-function PC.drawLine(e, w, size, a, tag, measureOnly)
+-- one history line at the cursor (align left top): [tag] Name: text. Returns its height.
+function PC.drawLine(e, w, size, a, measureOnly)
 	UiPush()
 	UiWordWrap(w)
-	local prefix = pcLinePrefix(e, tag)
-	local pw = prefix ~= "" and PC.textWidth(prefix, size) or 0
-	local tw = math.max(120, w - pw)
-	UiFont(PC.chatFont(e.text, true), size)
+	local info = (not e.sys) and PC.modeInfo(e.ch) or nil
+	local whisper = e.ch == "w"
+	local tag = info and (info[4] .. " ") or ""
+	local tagSize = size - 6
+	local tagW = 0
+	if tag ~= "" then
+		UiFont("regular.ttf", tagSize)
+		tagW = UiGetTextSize(tag) or 0
+	end
+	local prefix = e.sys and "" or ((e.name or "?") .. ": ")
+	local pw = prefix ~= "" and PC.textWidth(prefix, size, not whisper) or 0
+	local tw = math.max(120, w - tagW - pw)
+	UiFont(PC.chatFont(e.text, not whisper), size)
 	UiWordWrap(tw)
 	local vis = PC.chatVisual(e.text)
 	local _, th = UiGetTextSize(vis)
 	th = math.max(th or size, size)
 	if not measureOnly then
+		local fa = whisper and 0.6 * a or a
+		if tag ~= "" then
+			local col = info[5]
+			UiColor(col[1], col[2], col[3], 0.85 * fa)
+			UiPush()
+			UiTranslate(0, 4)
+			UiFont("regular.ttf", tagSize)
+			UiText(tag)
+			UiPop()
+			UiTranslate(tagW, 0)
+		end
 		if prefix ~= "" then
-			if e.ch == "g" then UiColor(0.55, 0.8, 1, a) else UiColor(1, 0.82, 0.3, a) end
-			PC.text(prefix, size)
+			local col = info[5]
+			UiColor(col[1], col[2], col[3], fa)
+			PC.text(prefix, size, not whisper)
 			UiTranslate(pw, 0)
 		end
 		if e.sys then UiColor(0.6, 0.95, 0.85, a)
 		elseif e.shout then UiColor(1, 0.45, 0.35, a)
+		elseif whisper then UiColor(0.85, 0.85, 0.92, fa)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
 		else UiColor(1, 1, 1, a) end
-		UiFont(PC.chatFont(e.text, true), size)
+		UiFont(PC.chatFont(e.text, not whisper), size)
 		UiWordWrap(tw)
 		UiText(vis)
 	end
@@ -1004,8 +1080,8 @@ function PC.drawLine(e, w, size, a, tag, measureOnly)
 	return th
 end
 
--- a speech bubble over player p (small: the "..." of someone typing)
-function PC.bubble(p, text, shout, a, small)
+-- a speech bubble over player p. small: the "..." of someone typing; whisper: smaller, faint, grey
+function PC.bubble(p, text, shout, a, small, whisper)
 	local okT, tr = pcall(GetPlayerTransform, p)
 	if not (okT and tr and tr.pos) then return end
 	local x, y, d = UiWorldToPixel(VecAdd(tr.pos, Vec(0, 2.25, 0)))
@@ -1013,8 +1089,8 @@ function PC.bubble(p, text, shout, a, small)
 	UiPush()
 	UiTranslate(x, y)
 	if shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end      -- (shaking with anger)
-	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * (small and 0.8 or 1))
-	UiFont(PC.chatFont(text), 30)
+	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * ((small or whisper) and 0.75 or 1))
+	UiFont(PC.chatFont(text, not whisper), 30)
 	local vis = PC.chatVisual(text)
 	UiWordWrap(640)
 	local tw, th = UiGetTextSize(vis)
@@ -1022,12 +1098,13 @@ function PC.bubble(p, text, shout, a, small)
 	local h = (th or 28) + 22
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
-	UiColor(1, 1, 1, 0.92 * a)
+	UiColor(1, 1, 1, (whisper and 0.45 or 0.92) * a)
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail
 	if shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
-	UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, a)
+	if whisper then UiColor(0.25, 0.25, 0.3, 0.75 * a)
+	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, a) end
 	UiText(vis)
 	UiPop()
 end
@@ -1038,28 +1115,50 @@ function PC.drawBubbles()
 	local me = GetLocalPlayer()
 	local third = GetBool("game.thirdperson")
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then PC.bubble(p, b.text, b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2))) end
+		if p ~= me or third then PC.bubble(p, b.text, b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper) end
 	end
-	for p, ch in pairs(shared.pcTyping or {}) do
-		if ch == "p" and p ~= me and not c.bubbles[p] then
+	for p, mode in pairs(shared.pcTyping or {}) do
+		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
 			local d = PC.distTo(p)
-			if d and d <= cfg.chatR then PC.bubble(p, "...", false, 0.75, true) end
+			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then PC.bubble(p, "...", false, 0.75, true, mode == "w") end
 		end
 	end
 end
 
--- the Voice tab: the voices as buttons, yours highlighted; a click picks one (while typing: the window
--- is interactive then)
-function PC.drawVoices(W, H)
+-- a small two-way switch on the Settings page; returns the new value when clicked, else nil
+function PC.toggle(id, value, yes, no)
+	local c = PC.C()
+	local out = nil
+	for j = 1, 2 do
+		local on = (j == 1) == value
+		UiPush()
+		UiTranslate((j - 1) * 130, 0)
+		local hover = c.typing and UiIsMouseInRect(120, 40)
+		if c.typing and PC.clicked(id .. j, 120, 40, hover) then out = (j == 1) end
+		if on then UiColor(1, 0.82, 0.3, 0.3) elseif hover then UiColor(1, 1, 1, 0.16) else UiColor(1, 1, 1, 0.07) end
+		UiRoundedRect(120, 40, 8)
+		if on then UiColor(1, 0.82, 0.3, 0.95); UiRoundedRectOutline(120, 40, 8, 2) end
+		UiTranslate(60, 20)
+		UiAlign("center middle")
+		UiFont(on and "bold.ttf" or "regular.ttf", 22)
+		UiColor(1, 1, 1, on and 1 or 0.7)
+		UiText(j == 1 and yes or no)
+		UiPop()
+	end
+	return out
+end
+
+-- the Settings page: the voice picker (a click picks + previews) and the switches
+function PC.drawSettings(W, H)
 	local c = PC.C()
 	local cur = PC.voiceOf(GetLocalPlayer())
-	local bw, bh, gap = 280, 64, 12
+	local bw, bh, gap = 300, 52, 12
 	UiPush()
-	UiTranslate(14, 66)
+	UiTranslate(16, 68)
 	UiFont("regular.ttf", 22)
 	UiColor(1, 1, 1, 0.85)
-	UiText("Your voice: " .. PC.VOICES[cur][1] .. " - everyone hears your messages babble in it.")
-	UiTranslate(0, 40)
+	UiText("Your voice: " .. PC.VOICES[cur][1] .. " - click one: everyone hears you in it, you hear a preview.")
+	UiTranslate(0, 34)
 	for i, v in ipairs(PC.VOICES) do
 		UiPush()
 		UiTranslate(((i - 1) % 3) * (bw + gap), math.floor((i - 1) / 3) * (bh + gap))
@@ -1074,83 +1173,56 @@ function PC.drawVoices(W, H)
 		if on then UiColor(1, 0.82, 0.3, 0.95); UiRoundedRectOutline(bw, bh, 8, 3) end
 		UiTranslate(bw / 2, bh / 2)
 		UiAlign("center middle")
-		UiFont("bold.ttf", 28)
+		UiFont("bold.ttf", 26)
 		UiColor(1, 1, 1, on and 1 or 0.75)
 		UiText(v[1])
 		UiPop()
 	end
-	UiTranslate(0, 2 * (bh + gap) + 8)
-	UiFont("regular.ttf", 18)
-	UiColor(1, 1, 1, 0.5)
-	UiText(c.typing and "Click a voice to pick it (you hear a preview; saved as your default). Or type /voice <name>."
-		or "Press Enter, then click a voice. Or type /voice <name>.")
+	UiTranslate(0, 2 * (bh + gap) + 6)
+	local rows = {
+		{"set_g", "Babble for messages to everyone", not c.muteGlobal, "On", "Off", function(v) PC.setMuteGlobal(not v) end},
+		{"set_h", "\"Enter: chat\" hint on screen", not c.hideHint, "Show", "Hide", function(v) PC.setHideHint(not v) end},
+		{"set_w", "Keep the chat window open", c.pinned, "Yes", "No", function(v) c.pinned = v end},
+	}
+	for k, r in ipairs(rows) do
+		UiPush()
+		UiTranslate(0, (k - 1) * 48)
+		UiPush()
+		UiTranslate(0, 20)
+		UiAlign("left middle")
+		UiFont("regular.ttf", 22)
+		UiColor(1, 1, 1, 0.85)
+		UiText(r[2])
+		UiPop()
+		UiTranslate(520, 0)
+		local v = PC.toggle(r[1], r[3], r[4], r[5])
+		if v ~= nil then r[6](v) end
+		UiPop()
+	end
 	UiPop()
 end
 
--- the chat window: tabs Proximity / Global / Voice; the history of the tab's channel, or the voices
-function PC.drawWindow()
+-- the history page: everything this player received, newest at the bottom
+function PC.drawHistory(W, H)
 	local c, cfg = PC.C(), PC.cfg
-	local view = PC.view()
-	local W, H = cfg.winW, cfg.winH
-	UiPush()
-	UiTranslate(24, UiHeight() - 160 - H)
-	UiAlign("left top")
-	UiColor(0, 0, 0, 0.6)
-	UiRoundedRect(W, H, 10)
-	local tabs = {{"p", "Proximity"}, {"g", "Global"}, {"v", "Voice"}}
-	for i, t in ipairs(tabs) do
-		local on = view == t[1]
-		local dim = PC.lobby() and t[1] == "p"
-		UiPush()
-		UiTranslate(12 + (i - 1) * 190, 10)
-		local hover = c.typing and not dim and UiIsMouseInRect(180, 40)
-		if c.typing and not dim and PC.clicked("tab" .. t[1], 180, 40, hover) then PC.setView(t[1]) end
-		if on then UiColor(1, 0.82, 0.3, 0.25) elseif hover then UiColor(1, 1, 1, 0.14) else UiColor(1, 1, 1, 0.07) end
-		UiRoundedRect(180, 40, 8)
-		if on then UiColor(1, 0.82, 0.3, 0.9); UiRoundedRectOutline(180, 40, 8, 2) end
-		UiTranslate(90, 20)
-		UiAlign("center middle")
-		UiFont("bold.ttf", 24)
-		UiColor(1, 1, 1, dim and 0.3 or (on and 1 or 0.6))
-		local label = t[2]
-		if not on and c.unread[t[1]] and c.unread[t[1]] > 0 then label = label .. " (" .. c.unread[t[1]] .. ")" end
-		UiText(label)
-		UiPop()
-	end
-	view = PC.view()                                              -- (a click may have changed it)
-	UiPush()
-	UiTranslate(W - 14, 30)
-	UiAlign("right middle")
-	UiFont("regular.ttf", 18)
-	UiColor(1, 1, 1, 0.45)
-	if c.typing then UiText("Tab: next tab   Wheel: scroll")
-	elseif PC.keyName() ~= "" then UiText(PC.keyName() .. ": close") end
-	UiPop()
-	if view == "v" then
-		PC.drawVoices(W, H)
-		UiPop()
-		return
-	end
-	local ch = view
-	c.unread[ch] = 0
-	local h = c.hist[ch]
-	local top, y, w = 62, H - 12, W - 28
+	local h = c.hist
+	local top, y, w = 66, H - 12, W - 28
 	if #h == 0 then
 		UiPush()
 		UiTranslate(14, top + 6)
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.45)
-		UiText(ch == "p" and ("Nothing heard nearby yet. Players within " .. cfg.chatR .. " m hear you; CAPS carry to " .. cfg.shoutR .. " m.") or "No messages to everyone yet.")
+		UiText("Nothing yet. Nearby: " .. cfg.chatR .. " m (CAPS carry to " .. cfg.shoutR .. " m), whisper: " .. cfg.whisperR .. " m, everyone: all players.")
 		UiPop()
 	end
 	for i = #h - c.scroll, 1, -1 do
 		local e = h[i]
-		local lh = PC.drawLine(e, w, 24, 1, false, true)
+		local lh = PC.drawLine(e, w, 24, 1, true)
 		if y - lh < top then break end
 		y = y - lh
 		UiPush()
 		UiTranslate(14, y)
-		PC.drawLine(e, w, 24, 1, false)
+		PC.drawLine(e, w, 24, 1)
 		UiPop()
 		y = y - 6
 	end
@@ -1163,33 +1235,79 @@ function PC.drawWindow()
 		UiText("(" .. c.scroll .. " newer below: PgDn)")
 		UiPop()
 	end
+end
+
+-- the chat window: a header (title, and right-aligned the Settings / Back button), then the history
+-- or the Settings page
+function PC.drawWindow()
+	local c, cfg = PC.C(), PC.cfg
+	local W, H = cfg.winW, cfg.winH
+	UiPush()
+	UiTranslate(24, UiHeight() - 160 - H)
+	UiAlign("left top")
+	UiColor(0, 0, 0, 0.6)
+	UiRoundedRect(W, H, 10)
+	-- the header button first (a click switches the page this frame)
+	UiPush()
+	UiTranslate(W - 162, 10)
+	local hover = c.typing and UiIsMouseInRect(150, 40)
+	if c.typing and PC.clicked("header", 150, 40, hover) then PC.setPage(c.page == "settings" and "chat" or "settings") end
+	local settings = c.page == "settings"
+	UiColor(1, 1, 1, hover and 0.2 or 0.1)
+	UiRoundedRect(150, 40, 8)
+	UiColor(1, 1, 1, 0.45)
+	UiRoundedRectOutline(150, 40, 8, 1.5)
+	UiTranslate(75, 20)
+	UiAlign("center middle")
+	UiFont("bold.ttf", 22)
+	UiColor(1, 1, 1, c.typing and 0.95 or 0.45)
+	UiText(settings and "< Back" or "Settings")
+	UiPop()
+	UiPush()
+	UiTranslate(16, 30)
+	UiAlign("left middle")
+	UiFont("bold.ttf", 24)
+	UiColor(1, 1, 1, 0.9)
+	UiText(settings and "Settings" or "Chat")
+	UiPop()
+	if not settings then
+		UiPush()
+		UiTranslate(W - 180, 30)
+		UiAlign("right middle")
+		UiFont("regular.ttf", 18)
+		UiColor(1, 1, 1, 0.45)
+		if c.typing then UiText("Wheel / PgUp: scroll")
+		elseif PC.keyName() ~= "" then UiText(PC.keyName() .. ": close")
+		else UiText("Enter: chat") end
+		UiPop()
+	end
+	UiPush()
+	UiTranslate(12, 56)
+	UiColor(1, 1, 1, 0.12)
+	UiRect(W - 24, 2)
+	UiPop()
+	if settings then PC.drawSettings(W, H) else PC.drawHistory(W, H) end
 	UiPop()
 end
 
--- window closed: the newest lines of both tabs fade out in a feed
+-- window closed: the newest lines fade out in a feed
 function PC.drawFeed()
 	local c, cfg = PC.C(), PC.cfg
 	local now = GetTime()
-	local items = {}
-	for _, ch in ipairs({"p", "g"}) do
-		for _, e in ipairs(c.hist[ch]) do
-			if now - e.t < cfg.life then items[#items + 1] = e end
-		end
-	end
-	table.sort(items, function(a, b) return a.n < b.n end)
 	UiPush()
 	UiAlign("left top")
 	UiTextShadow(0, 0, 0, 0.85, 1.5)
 	local y = UiHeight() - 160
 	local shown = 0
-	for i = #items, 1, -1 do
+	for i = #c.hist, 1, -1 do
 		if shown >= cfg.feedLines then break end
-		local e = items[i]
+		local e = c.hist[i]
+		if now - e.t >= cfg.life then break end
 		local a = math.max(0, math.min(1, (cfg.life - (now - e.t)) / 1.5))
-		y = y - PC.drawLine(e, cfg.winW, 28, a, true, true)
+		y = y - PC.drawLine(e, cfg.winW, 28, a, true)
 		UiPush()
 		UiTranslate(30, y)
-		PC.drawLine(e, cfg.winW, 28, a, true)
+		PC.drawLine(e, cfg.winW, 28, a)
 		UiPop()
 		y = y - 8
 		shown = shown + 1
@@ -1197,20 +1315,46 @@ function PC.drawFeed()
 	UiPop()
 end
 
--- the line being typed
+-- the input line: the mode as the prompt, the field, the mode chips at the right end
 function PC.drawTyping()
 	local c, cfg = PC.C(), PC.cfg
-	local ch = PC.channel()
 	local W = cfg.winW
+	local cw, chh, cg = 104, 34, 6
+	local chipsW = 3 * cw + 2 * cg
 	UiPush()
 	UiTranslate(24, UiHeight() - 146)
 	UiAlign("left top")
 	UiColor(0, 0, 0, 0.75)
 	UiRoundedRect(W, 54, 8)
-	if ch == "g" then UiColor(0.55, 0.8, 1, 0.95) else UiColor(1, 0.82, 0.3, 0.95) end
+	-- the chips (first: a click changes the prompt this frame)
+	UiPush()
+	UiTranslate(W - 10 - chipsW, 10)
+	for i, x in ipairs(PC.MODES) do
+		local dim = PC.lobby() and x[1] ~= "g"
+		UiPush()
+		UiTranslate((i - 1) * (cw + cg), 0)
+		local hover = (not dim) and UiIsMouseInRect(cw, chh)
+		if not dim and PC.clicked("mode" .. x[1], cw, chh, hover) then PC.setMode(x[1]) end
+		local on = x[1] == PC.mode()
+		local cc = x[5]
+		if on then UiColor(cc[1], cc[2], cc[3], 0.35) elseif hover then UiColor(1, 1, 1, 0.16) else UiColor(1, 1, 1, 0.07) end
+		UiRoundedRect(cw, chh, 17)
+		if on then UiColor(cc[1], cc[2], cc[3], 0.95); UiRoundedRectOutline(cw, chh, 17, 2) end
+		UiTranslate(cw / 2, chh / 2)
+		UiAlign("center middle")
+		UiFont(on and "bold.ttf" or "regular.ttf", 18)
+		UiColor(1, 1, 1, dim and 0.25 or (on and 1 or 0.65))
+		UiText(x[3])
+		UiPop()
+	end
+	UiPop()
+	local m = PC.mode()
+	local info = PC.modeInfo(m)
+	local col = info[5]
+	UiColor(col[1], col[2], col[3], 0.95)
 	UiRoundedRectOutline(W, 54, 8, 2)
-	UiFont("bold.ttf", 28)
-	local label = ch == "g" and "Say (everyone): " or "Say (nearby): "
+	local label = (m == "w") and ("Whisper (" .. cfg.whisperR .. " m): ") or info[2]
+	UiFont(m == "w" and "regular.ttf" or "bold.ttf", 28)
 	local lw = UiGetTextSize(label) or 160
 	UiPush()
 	UiTranslate(14, 27)
@@ -1218,16 +1362,17 @@ function PC.drawTyping()
 	UiText(label)
 	UiPop()
 	UiTranslate(14 + lw, 0)
-	UiColor(1, 1, 1, 1)
-	UiFont(PC.chatFont(c.text), 28)
-	PC.field(W - 28 - lw, 54)
+	UiColor(1, 1, 1, m == "w" and 0.8 or 1)
+	UiFont(PC.chatFont(c.text, m ~= "w"), 28)
+	PC.field(W - 38 - lw - chipsW, 54)
 	UiPop()
 	UiPush()
 	UiTranslate(30, UiHeight() - 86)
 	UiAlign("left top")
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
-	UiText("Enter: say it   Tab: " .. (PC.lobby() and "Global / Voice" or "Proximity / Global / Voice") .. "   Esc: close   /help: commands")
+	UiText(PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
+		or "Enter: say it   Tab / chips: nearby, whisper, everyone   Esc: close   Settings: your voice and more   /help")
 	UiPop()
 end
 
@@ -1243,7 +1388,7 @@ function PC.drawHint()
 	if intro then
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.8)
-		UiText("Proximity Chat - Enter: talk to players near you (Tab: everyone / your voice)" .. key .. "   /help   (hide: /hint)")
+		UiText("Proximity Chat - Enter: talk to players near you (Tab: whisper / everyone)" .. key .. "   /help   (hide: /hint)")
 	else
 		UiFont("regular.ttf", 18)
 		UiColor(1, 1, 1, 0.35)
