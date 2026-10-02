@@ -27,7 +27,7 @@ function draw()
 	UiTranslate(0, 60)
 	UiFont("regular.ttf", 22)
 	UiColor(1, 1, 1, 0.7)
-	UiText("In game: Enter to chat, Tab: nearby / whisper / everyone, Settings in the chat window, /help")
+	UiText("In game: Enter to chat, Tab: Speak / Whisper / Global, Settings in the chat window, /help")
 	UiColor(1, 1, 1, 1)
 
 	UiFont("regular.ttf", 26)
@@ -60,17 +60,6 @@ function draw()
 	if pcoButton("Show", not hide, 200) then SetBool("savegame.mod.pchidehint", false) end
 	UiTranslate(220, 0)
 	if pcoButton("Hide", hide, 200) then SetBool("savegame.mod.pchidehint", true) end
-	UiPop()
-
-	UiTranslate(0, 80)
-	UiText("Babble for Global (everyone) messages")
-	UiTranslate(0, 50)
-	local mute = GetBool("savegame.mod.pcmuteglobal")
-	UiPush()
-	UiTranslate(-110, 0)
-	if pcoButton("On", not mute, 200) then SetBool("savegame.mod.pcmuteglobal", false) end
-	UiTranslate(220, 0)
-	if pcoButton("Off", mute, 200) then SetBool("savegame.mod.pcmuteglobal", true) end
 	UiPop()
 
 	UiTranslate(0, 110)

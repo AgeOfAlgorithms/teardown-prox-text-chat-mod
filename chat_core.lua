@@ -3,37 +3,36 @@
 -- by #include in other mods. Source of truth: teardown-mods/proxchat/mods/proximity chat/chat_core.lua.
 --
 -- MODES (chosen on the input line; they decide how OTHERS hear your message)
---   "p" Say (nearby), the default: a speech bubble over your head and a babble voice played in 3D at
+--   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
 --     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
 --     ending in "!!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
---   "w" Whisper (5 m): heard only within cfg.whisperR; beyond it nobody gets anything, not even a
+--   "w" Whisper: heard only within cfg.whisperR (5 m); beyond it nobody gets anything, not even a
 --     history line. CAPS stay a whisper (no shout reach). A small faint bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
---   "g" Say (everyone): every player gets the line, no bubble. Its babble is short, quiet and plays at
---     the listener (the speaker can be anywhere; a 3D sound from far away would be silent or
---     misleading); muted in Settings or with /mute.
---   Lobby (PC.hooks.inLobby() true on the server): everything said is "everyone".
+--   "g" Global: every player gets the line in their chat - a plain chat line only: no bubble, no babble
+--     (only Speak and Whisper make bubbles and babble).
+--   Lobby (PC.hooks.inLobby() true on the server): everything said is Global.
 --   Your last mode is kept as your default next time (savegame.mod.pcmode).
 --
--- HISTORY: ONE list per player of everything THEY received: every "everyone" line, plus the nearby /
---   whisper lines they were in range of at the moment each arrived (only the shouted words from
---   20-45 m), so every player's history is different. Lines are tagged [all] / [near] / [whisper]
+-- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
+--   Whisper lines they were in range of at the moment each arrived (only the shouted words from
+--   20-45 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
 --   (whispers faint). Bounded to cfg.keepHist.
 --
 -- THE WINDOW: Enter opens the input line and the chat window (interactive: mouse cursor). The line
---   shows the mode ("Say (nearby):", "Whisper (5 m):", "Say (everyone):") and three mode chips at its
+--   shows the mode ("Speak:", "Whisper:", "Global:") and three mode chips at its
 --   right end; Tab or a click on a chip changes the mode. Enter says it, Esc closes. The window shows
 --   the history (wheel / PgUp / PgDn scroll) and, right-aligned in its header, a "Settings" button:
 --   the Settings page has the voice picker (a click picks: synced so others hear it, saved, a preview
---   only you hear), "everyone" babble on/off, the hint on/off, keep the window open; "Back" returns.
+--   only you hear), the hint on/off, keep the window open; "Back" returns.
 --   With the window closed the newest lines fade out in a feed. No hotkeys besides Enter (a host mod
 --   may set PC.cfg.windowKey to pin the window with a key).
 --   Clicks fire on the mouse PRESS (UiIsMouseInRect + InputPressed("lmb")), with UiBlankButton (fires
 --   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
 --   clicks in Tall Order's lobby).
--- COMMANDS (echoed locally): /p /w /g [text] (set the mode, or say one line in it), /voice [name|n],
---   /settings, /mute, /hint, /window, /clear, /help, //text sends "/text".
+-- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
+--   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /help, //text sends "/text".
 --
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
 -- registry keys proxchat.*; persistent settings savegame.mod.pc*)
@@ -58,7 +57,7 @@
 --   PC.clicked(id, w, h)              client: a press-firing, de-duplicated click on a w x h rect at the
 --                                     cursor (for your own buttons while UiMakeInteractive is on)
 --   Hooks (all optional; define them in PC.hooks):
---   PC.hooks.inLobby()                server: true = everyone hears everything ("everyone" only)
+--   PC.hooks.inLobby()                server: true = everyone hears everything (Global only)
 --   PC.hooks.everyoneHears(speaker)   client: true = the local player hears this speaker's NEARBY
 --                                     messages in full wherever they are (spectators, radios...);
 --                                     whispers still need 5 m
@@ -91,11 +90,11 @@ do
 		sndDir = "MOD/snd/",
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
-		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pcmuteglobal
+		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
-		globalVol = 0.35,        -- "everyone" babble: this much of the voice's volume, at the listener
-		globalMaxSyl = 14,       -- "everyone" babble: at most this many syllables
+		globalVol = 0.35,        -- the voice preview (Settings): this much of the voice's volume, at the listener
+		globalMaxSyl = 14,       -- the voice preview: at most this many syllables
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
 		echoFrom = 6,            -- m: farther voices echo
 		winW = 1000, winH = 400, -- the chat window (and the input line's width)
@@ -121,9 +120,9 @@ PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "w
 
 -- the modes: id, prompt on the input line, chip label, history tag, colour
 PC.MODES = {
-	{"p", "Say (nearby): ", "Nearby", "[near]", {1, 0.82, 0.3}},
-	{"w", "Whisper (5 m): ", "Whisper", "[whisper]", {0.78, 0.78, 0.9}},
-	{"g", "Say (everyone): ", "Everyone", "[all]", {0.55, 0.8, 1}},
+	{"p", "Speak: ", "Speak", "[speak]", {1, 0.82, 0.3}},
+	{"w", "Whisper: ", "Whisper", "[whisper]", {0.78, 0.78, 0.9}},
+	{"g", "Global: ", "Global", "[global]", {0.55, 0.8, 1}},
 }
 function PC.modeInfo(m)
 	for _, x in ipairs(PC.MODES) do if x[1] == m then return x end end
@@ -502,7 +501,7 @@ function PC.clientInit()
 	local c = {
 		hist = {}, n = 0, seen = 0, typing = false, text = "", focus = false, pinned = false,
 		page = "chat", bubbles = {}, scroll = 0, t0 = GetTime(),
-		hideHint = GetBool(cfg.save .. "hidehint"), muteGlobal = GetBool(cfg.save .. "muteglobal"),
+		hideHint = GetBool(cfg.save .. "hidehint"),
 		voiceTries = 0, voiceT = 0,
 		babble = {clips = {}, queue = {}, echoes = {}},
 	}
@@ -515,7 +514,7 @@ function PC.clientInit()
 		for i = 1, n do c.babble.clips[set][i] = LoadSound(cfg.sndDir .. PC.CLIP_FILE[set] .. (i - 1) .. ".ogg") end
 	end
 	PC.c = c
-	-- joining: recent "everyone" lines go into the history; nearby talk from before you came is not heard
+	-- joining: recent Global lines go into the history; Speak / Whisper from before you came is not heard
 	for _, msg in ipairs(shared.pcMsgs or {}) do
 		if msg.id > c.seen then c.seen = msg.id end
 		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text, shout = #PC.shoutWords(msg.text) > 0}) end
@@ -529,7 +528,7 @@ end
 
 function PC.lobby() return shared.pcLobby == true end
 
--- the input line's mode: "p" nearby, "w" whisper, "g" everyone (the lobby: always "g")
+-- the input line's mode: "p" Speak, "w" Whisper, "g" Global (the lobby: always "g")
 function PC.mode()
 	if PC.lobby() then return "g" end
 	return PC.C().mode
@@ -537,7 +536,7 @@ end
 
 function PC.setMode(m)
 	local c = PC.C()
-	if PC.lobby() then return end                                   -- (the lobby is "everyone" only)
+	if PC.lobby() then return end                                   -- (the lobby is Global only)
 	if m ~= "g" and m ~= "w" then m = "p" end
 	if c.mode == m then return end
 	c.mode = m
@@ -545,7 +544,7 @@ function PC.setMode(m)
 	if c.typing then ServerCall("server.pc_typing", GetLocalPlayer(), true, m) end
 end
 
--- Tab: nearby -> whisper -> everyone -> nearby
+-- Tab: Speak -> Whisper -> Global -> Speak
 function PC.nextMode()
 	local cur = PC.mode()
 	for i, x in ipairs(PC.MODES) do
@@ -629,7 +628,7 @@ function PC.receive(m)
 	if m.ch == "g" then
 		heard = m.text
 		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0, me = m.p == me})
-		if m.p == me or not c.muteGlobal then PC.babbleSay(m.p, m.text, nil, "flat") end
+		-- (Global: a chat line only - no bubble, no babble)
 	else
 		local mode = (m.ch == "w") and "w" or "p"
 		heard, far = PC.heard(m.p, m.text, mode)
@@ -729,7 +728,7 @@ end
 
 -- start babbling text for player p. how: nil = in the world at the speaker (nearby: shouts, echo),
 -- "whisper" = breathy clips at the speaker, quiet, no echo, no shouting; "flat" = at the listener
--- (everyone, previews), short and quiet
+-- (the voice preview in Settings), short and quiet
 function PC.babbleSay(p, text, voice, how)
 	local B = PC.C().babble
 	local cfg = PC.cfg
@@ -859,12 +858,6 @@ function PC.setVoice(i)
 	PC.babbleSay(GetLocalPlayer(), "Hello there, how are you?", i, "flat")   -- (a preview, only for you)
 end
 
-function PC.setMuteGlobal(on)
-	local c = PC.C()
-	c.muteGlobal = on and true or false
-	SetBool(PC.cfg.save .. "muteglobal", c.muteGlobal)
-end
-
 function PC.setHideHint(on)
 	local c = PC.C()
 	c.hideHint = on and true or false
@@ -929,16 +922,13 @@ function PC.command(text)
 		end
 	elseif cmd == "g" or cmd == "a" or cmd == "all" or cmd == "global" or cmd == "everyone" then
 		PC.modeCommand("g", rest)
-	elseif cmd == "p" or cmd == "n" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" or cmd == "say" then
+	elseif cmd == "s" or cmd == "speak" or cmd == "p" or cmd == "n" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" or cmd == "say" then
 		PC.modeCommand("p", rest)
 	elseif cmd == "w" or cmd == "whisper" then
 		PC.modeCommand("w", rest)
-	elseif cmd == "settings" or cmd == "options" or cmd == "s" then
+	elseif cmd == "settings" or cmd == "options" then
 		PC.setTyping(true)                                        -- (the window is interactive while typing)
 		PC.setPage("settings")
-	elseif cmd == "mute" then
-		PC.setMuteGlobal(not c.muteGlobal)
-		PC.system(c.muteGlobal and "Messages to everyone are silent now (no babble). /mute again to hear them." or "Messages to everyone babble again.")
 	elseif cmd == "hint" then
 		PC.setHideHint(not c.hideHint)
 		PC.system(c.hideHint and "Hint hidden. /hint shows it again." or "Hint shown.")
@@ -950,8 +940,8 @@ function PC.command(text)
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
-		PC.system("Enter: chat. Tab or the chips on the line: nearby / whisper / everyone. Settings (window header): voice and more. " .. key .. "CAPS or !! shouts farther (not in a whisper).")
-		PC.system("/p /w /g [text]   /voice [name]   /settings   /mute   /hint   /window (keep open)   /clear")
+		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or !! shouts farther (Speak only).")
+		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -1180,7 +1170,6 @@ function PC.drawSettings(W, H)
 	end
 	UiTranslate(0, 2 * (bh + gap) + 6)
 	local rows = {
-		{"set_g", "Babble for messages to everyone", not c.muteGlobal, "On", "Off", function(v) PC.setMuteGlobal(not v) end},
 		{"set_h", "\"Enter: chat\" hint on screen", not c.hideHint, "Show", "Hide", function(v) PC.setHideHint(not v) end},
 		{"set_w", "Keep the chat window open", c.pinned, "Yes", "No", function(v) c.pinned = v end},
 	}
