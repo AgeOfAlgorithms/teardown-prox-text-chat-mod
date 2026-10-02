@@ -1373,10 +1373,17 @@ function PC.soundPos(pos, cam)
 	return VecAdd(cam, VecScale(VecSub(pos, cam), PC.cfg.soundNear / d))
 end
 
+-- where the listener's head is: their character, not the camera (in third person the camera swings
+-- around as you turn, nearer to or farther from a speaker without you moving)
+function PC.listenerHead()
+	local feet = PC.speakerPos(GetLocalPlayer())
+	return feet and VecAdd(feet, Vec(0, 1.7, 0)) or GetCameraTransform().pos
+end
+
 function PC.babbleDistance(pos, vol, shout, reach, inner)
 	local cfg = PC.cfg
 	local cam = GetCameraTransform().pos
-	local d = VecLength(VecSub(pos, cam))
+	local d = VecLength(VecSub(pos, PC.listenerHead()))                -- (loudness by your distance; direction from the camera)
 	reach = reach or (shout and cfg.shoutMumbleR or cfg.mumbleR)
 	inner = inner or (shout and cfg.shoutR or cfg.chatR)
 	local f = math.max(0, math.min(1, (d - cfg.echoFrom) / math.max(1, reach - cfg.echoFrom)))
@@ -1435,7 +1442,7 @@ function PC.babbleTick()
 					if q.how == "flat" then
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
 					elseif q.how == "whisper" then                          -- (no echo; quiet toward its reach)
-						local d = VecLength(VecSub(pos, cam))
+						local d = VecLength(VecSub(pos, PC.listenerHead()))
 						local v = base * PC.loudness(d, PC.cfg.whisperMumbleR + PC.cfg.soundGrace, PC.cfg.whisperR)
 						if v > 0 then PlaySound(clip, PC.soundPos(pos, cam), v, false, pitch) end   -- (walked out of earshot: silent)
 					else
@@ -1853,9 +1860,10 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	if not feet then return nil end
 	local head = VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
-	local dist = VecLength(VecSub(head, GetCameraTransform().pos))
-	-- sized by the real distance to the speaker, the same on screen and docked: UiWorldToPixel's depth
-	-- (along the view) shrinks toward the screen edges, so turning on the spot changed the size
+	local dist = VecLength(VecSub(VecAdd(feet, Vec(0, 1.7, 0)), PC.listenerHead()))   -- (from your character, not the camera)
+	-- sized by the real distance between you and the speaker, the same on screen and docked: UiWorldToPixel's
+	-- depth (along the view) shrinks toward the screen edges, and the camera (third person) swings around
+	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 	elseif small then
