@@ -804,6 +804,20 @@ check(nb and nb.full == "third one" and pb and pb.full == "second one" and #mine
 	"three quick messages: the 2 newest show (the first is gone)")
 check(mine[1].bottom > mine[2].bottom and mine[1].top >= mine[2].bottom, "the newest nearest the head, the one before it stacked above")
 
+-- ================================================================== short messages go sooner
+steps(60 * 10)                                                            -- (earlier bubbles gone)
+waitRate(); say(P2, "/s hi")
+steps(60 * 2)
+local hiUp = P1.PC.c.bubbles[2] ~= nil
+steps(30)
+check(hiUp and not P1.PC.c.bubbles[2], "'hi' (2 characters): up for about 2.2 s, then gone")
+waitRate(); say(P2, "/s this one is a good deal longer than that")             -- (43 characters: 5.4 s)
+steps(60 * 5)
+local longUp = P1.PC.c.bubbles[2] ~= nil
+steps(60)
+check(longUp and not P1.PC.c.bubbles[2], "43 characters: still up at 5 s, gone by 6 s")
+check(math.abs(P1.PC.bubbleLife({full = string.rep("x", 90)}) - 9) < 1e-9, "the longest stay 9 s at most (plus any scrolling)")
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
