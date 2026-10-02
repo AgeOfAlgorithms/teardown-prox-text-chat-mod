@@ -11,7 +11,7 @@
 --     cfg.garbleMax; shouted words readable), on the screen edge in the speaker's direction when off
 --     screen; no history line. Coming within range while the bubble is up shows the words and adds
 --     the line (a far shout's line is completed instead).
---   "w" Whisper: heard within cfg.whisperR (5 m); its buffer to cfg.whisperMumbleR (8 m) is garbled
+--   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (13 m) is garbled
 --     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
@@ -24,7 +24,9 @@
 --   when that file exists and has every letter of the message (Latin incl. Vietnamese, Cyrillic);
 --   anything else (Greek, CJK, Arabic, Thai...) uses the game font for its script (PC.chatFont). The
 --   window stays in the game fonts. Bubbles never cover each other (PC.layoutBubbles): lowest first,
---   an overlapping one is raised above, with a thin line down to its speaker.
+--   an overlapping one is raised above, with a thin line down to its speaker. A bubble shows
+--   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
+--   the bubble stays up that much longer (b.extra).
 --
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
@@ -73,7 +75,7 @@
 --   PC.hooks.inLobby()                server: true = everyone hears everything (Global only)
 --   PC.hooks.everyoneHears(speaker)   client: true = the local player hears this speaker's NEARBY
 --                                     messages in full wherever they are (spectators, radios...);
---                                     whispers still need 5 m
+--                                     whispers still need cfg.whisperR
 --   PC.hooks.blockKeys()              client: true = Enter (and cfg.windowKey) do nothing
 --   PC.hooks.onMessage(msg, heard)    client: a message arrived; heard = what was heard or nil
 --   PC.hooks.log(line)                server: diagnostics
@@ -93,9 +95,13 @@ do
 	local defaults = {
 		chatR = 20,              -- m: who hears you (nearby)
 		shoutR = 45,             -- m: who hears your shouted words (nearby only)
-		whisperR = 5,            -- m: who hears a whisper
+		whisperR = 8,            -- m: who hears a whisper
 		mumbleR = 30,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
-		whisperMumbleR = 8,      -- m: Whisper's buffer beyond whisperR (nothing beyond it)
+		whisperMumbleR = 13,     -- m: Whisper's buffer beyond whisperR (nothing beyond it)
+		bubbleW = 420,           -- px: a bubble's text wraps at this width
+		bubbleLines = 2,         -- lines a bubble shows; longer messages scroll down inside it
+		scrollHold = 1.5,        -- s before a long message starts scrolling
+		scrollLine = 1.8,        -- s per line while it scrolls (the bubble stays up that much longer)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s its bubble stays before it types the next one
@@ -532,8 +538,8 @@ end
 --   proxchat.said.<n % 16>.player   int: who spoke
 --   ... .mode   "speak" / "whisper" / "global"       ... .shout  bool: a shouted word (Speak only)
 --   ... .x .y .z  where the speaker stood (feet)       ... .text   string
---   ... .radius   m: how far anyone hears anything (the babble): whisper 8, speak 30, shout 45, global 0
---   ... .wordsRadius  m: how far the words are heard: whisper 5, speak 20, shout 45 (shouted words only)
+--   ... .radius   m: how far anyone hears anything (the babble): whisper 13, speak 30, shout 45, global 0
+--   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 20, shout 45 (shouted words only)
 --   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
@@ -810,6 +816,7 @@ function PC.revealBubbles(now)
 				b.text, b.level, b.mumble = text, level, false
 				b.shout = not b.whisper and #PC.shoutWords(text) > 0
 				b.t = math.max(b.t, now - cfg.life + 4)                    -- (up at least 4 s more)
+				b.scrollT = now                                             -- (the words scroll from the top)
 				if b.entry then
 					b.entry.text, b.entry.far, b.entry.shout = text, far, b.shout
 				else
@@ -849,7 +856,7 @@ function PC.clientTick(dt)
 		end
 	end
 	for p, b in pairs(c.bubbles) do
-		if now - b.t > PC.cfg.life then c.bubbles[p] = nil end
+		if now - b.t > PC.cfg.life + (b.extra or 0) then c.bubbles[p] = nil end
 	end
 	PC.dummyTick(now)
 	PC.revealBubbles(now)
@@ -925,6 +932,12 @@ function PC.dummyTick(now)
 	local dm = c.dummy
 	if not dm or now < dm.nextT then return end
 	if dm.typingUntil == 0 then                                       -- (all start typing the next line)
+		local wait = 0
+		for _, d in ipairs(dm.list) do
+			local b = c.bubbles[d.p]
+			if b and (b.extra or 0) > 0 then wait = math.max(wait, (b.scrollT or b.t) + cfg.scrollHold + b.extra + 2.5 - now) end
+		end
+		if wait > 0 then dm.nextT = now + wait; return end           -- (a long line is still scrolling)
 		dm.k = dm.k % #PC.DUMMY_LINES + 1
 		if dm.k == 1 then dm.round = dm.round + 1 end
 		for _, d in ipairs(dm.list) do c.bubbles[d.p] = nil end       -- (the "..." shows only with no bubble up)
@@ -1359,7 +1372,7 @@ end
 -- a speech bubble over player p, measured but not drawn yet (nil: not on screen). small: the "..." of
 -- someone typing; whisper: a bit smaller, pale lavender; mumble: a garbled message from the buffer
 -- range - kept on the screen edge in their direction when they are off screen
-function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble)
+function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	local feet = PC.speakerPos(p)
 	if not feet then return nil end
 	local head = VecAdd(feet, Vec(0, 2.25, 0))
@@ -1376,15 +1389,26 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble)
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local font, size = PC.bubbleFont(text)
 	local vis = PC.chatVisual(text)
+	local cfg = PC.cfg
 	UiPush()
 	UiFont(font, size)
-	UiWordWrap(640)
+	UiWordWrap(cfg.bubbleW)
 	local tw, th = UiGetTextSize(vis)
+	local _, lh = UiGetTextSize("Ag")
 	UiPop()
-	local w = math.min(640, tw or 200) + 30
-	local h = (th or 28) + 22
-	return {p = p, x = x, y = y, s = s, w = w, h = h, vis = vis, font = font, size = size, a = a, shout = shout,
-		whisper = whisper, mumble = mumble, lift = 0,
+	th, lh = th or 28, lh or 28
+	-- a long message: cfg.bubbleLines lines visible, scrolling down at reading pace from t0
+	local vh, off, scrollTime = th, 0, 0
+	if th > cfg.bubbleLines * lh + 1 then
+		vh = cfg.bubbleLines * lh
+		local speed = lh / cfg.scrollLine
+		scrollTime = (th - vh) / speed
+		off = t0 and math.max(0, math.min(th - vh, (GetTime() - t0 - cfg.scrollHold) * speed)) or 0
+	end
+	local w = math.min(cfg.bubbleW, tw or 200) + 30
+	local h = vh + 22
+	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime,
+		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 
@@ -1404,7 +1428,7 @@ function PC.bubbleDraw(L)
 	if L.shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end    -- (shaking with anger)
 	UiScale(s)
 	UiFont(L.font, L.size)
-	UiWordWrap(640)
+	UiWordWrap(PC.cfg.bubbleW)
 	local k = 2                                                              -- (the outline)
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
@@ -1416,9 +1440,27 @@ function PC.bubbleDraw(L)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
 	if L.shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
+	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
+		UiPush()
+		UiTranslate(w - 24, 0)
+		UiColor(0, 0, 0, 0.12 * a)
+		UiRect(3, L.vh)
+		UiColor(0, 0, 0, 0.45 * a)
+		UiTranslate(0, L.vh * L.off / L.th)
+		UiRect(3, L.vh * L.vh / L.th)
+		UiPop()
+	end
 	if L.whisper then UiColor(0.2, 0.2, 0.38, L.mumble and 0.85 * a or a)
 	else UiColor(L.shout and 0.6 or 0.08, 0.05, L.shout and 0.03 or 0.1, L.mumble and 0.85 * a or a) end
-	UiText(L.vis)
+	if L.th > L.vh + 1 then
+		UiPush()
+		UiWindow(w - 30, L.vh, true)                                      -- (clipped to the visible lines)
+		UiTranslate(0, -L.off)
+		UiText(L.vis)
+		UiPop()
+	else
+		UiText(L.vis)
+	end
 	UiPop()
 end
 
@@ -1461,7 +1503,11 @@ function PC.drawBubbles()
 	local list = {}
 	local function add(L) if L then list[#list + 1] = L end end
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then add(PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble)) end
+		if p ~= me or third then
+			local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
+			if L then b.extra = math.max(b.extra or 0, L.scrollTime) end
+			add(L)
+		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
 		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
