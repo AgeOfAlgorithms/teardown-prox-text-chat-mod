@@ -120,9 +120,10 @@ do
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s its bubble stays before it types the next one
-		life = 9,                -- s a feed line stays, and the longest a bubble does
-		lifeMin = 2,             -- s a bubble stays: lifeMin + lifePerChar a character, at most life (+ scrolling)
-		lifePerChar = 0.08,
+		life = 9,                -- s a feed line stays
+		lifeMin = 2.5,           -- s a bubble stays: lifeMin + lifePerChar a character, at most lifeMax (+ scrolling)
+		lifePerChar = 0.1,
+		lifeMax = 12,
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
 		sharedLife = 30,         -- s a message stays in shared (clients copy it on arrival; a lagging client still gets it)
@@ -348,7 +349,7 @@ end
 -- how long a bubble stays (before any scrolling time): short messages go sooner
 function PC.bubbleLife(b)
 	local cfg = PC.cfg
-	return math.min(cfg.life, cfg.lifeMin + PC.utf8Len(b.full or b.text or "") * cfg.lifePerChar)
+	return math.min(cfg.lifeMax, cfg.lifeMin + PC.utf8Len(b.full or b.text or "") * cfg.lifePerChar)
 end
 
 -- the share of the letters revealed now (0 at the buffer's outer edge, cfg.garbleMax at its inner one);
