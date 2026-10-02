@@ -26,7 +26,8 @@
 -- BUBBLES are drawn in cfg.bubbleFont (Pangolin, a thick marker-hand font shipped in fonts/, OFL)
 --   when that file exists and has every letter of the message (Latin incl. Vietnamese, Cyrillic);
 --   anything else (Greek, CJK, Arabic, Thai...) uses the game font for its script (PC.chatFont). The
---   window stays in the game fonts. Bubbles never cover each other (PC.layoutBubbles): lowest first,
+--   window stays in the game fonts. At most 2 bubbles a speaker (c.bubbles: the newest, c.prevBubbles: the
+--   one before it, stacked above). Bubbles never cover each other (PC.layoutBubbles): lowest first,
 --   an overlapping one is raised above, with a thin line down to its speaker. A bubble shows
 --   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
 --   the bubble stays up that much longer (b.extra).
@@ -664,7 +665,7 @@ function PC.clientInit()
 	local cfg = PC.cfg
 	local c = {
 		hist = {}, n = 0, seen = 0, typing = false, text = "", focus = false, pinned = false,
-		page = "chat", bubbles = {}, scroll = 0, t0 = GetTime(),
+		page = "chat", bubbles = {}, prevBubbles = {}, scroll = 0, t0 = GetTime(),
 		hideHint = GetBool(cfg.save .. "hidehint"),
 		voiceTries = 0, voiceT = 0,
 		babble = {clips = {}, queue = {}, echoes = {}},
@@ -816,6 +817,8 @@ function PC.receive(m)
 			local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
 				level = "none", hidden = true, bestF = -1}
 			b.scrollT = b.t                                                  -- (the scroll's clock: fixed, a reveal never restarts it)
+			local old = c.bubbles[m.p]                                       -- (2 bubbles a speaker at most: the newest and the one
+			if old and not old.hidden then c.prevBubbles[m.p] = old end      --  before it; a third pushes the oldest out)
 			c.bubbles[m.p] = b
 			PC.updateBubble(m.p, b, b.t, true)
 		end
@@ -864,8 +867,11 @@ function PC.updateBubble(p, b, now, fresh)
 end
 
 function PC.revealBubbles(now)
-	for p, b in pairs(PC.C().bubbles) do
-		if b.level ~= "full" then PC.updateBubble(p, b, now) end
+	local c = PC.C()
+	for _, tbl in ipairs({c.bubbles, c.prevBubbles}) do
+		for p, b in pairs(tbl) do
+			if b.level ~= "full" then PC.updateBubble(p, b, now) end
+		end
 	end
 end
 
@@ -896,8 +902,10 @@ function PC.clientTick(dt)
 			PC.receive(m)
 		end
 	end
-	for p, b in pairs(c.bubbles) do
-		if now - b.t > PC.cfg.life + (b.extra or 0) then c.bubbles[p] = nil end
+	for _, tbl in ipairs({c.bubbles, c.prevBubbles}) do
+		for p, b in pairs(tbl) do
+			if now - b.t > PC.cfg.life + (b.extra or 0) then tbl[p] = nil end
+		end
 	end
 	PC.dummyTick(now)
 	PC.revealBubbles(now)
@@ -948,7 +956,7 @@ end
 function PC.dummyRemove(d)
 	local c = PC.C()
 	for _, e in ipairs(d.ents) do pcall(Delete, e) end
-	c.bubbles[d.p], c.babble.queue[d.p] = nil, nil
+	c.bubbles[d.p], c.prevBubbles[d.p], c.babble.queue[d.p] = nil, nil, nil
 	local dm = c.dummy
 	dm.byP[d.p] = nil
 	for i = #dm.list, 1, -1 do if dm.list[i] == d then table.remove(dm.list, i) end end
@@ -1021,7 +1029,11 @@ function PC.dummyTick(now)
 		if wait > 0 then dm.nextT = now + wait; return end           -- (a long line is still scrolling)
 		dm.k = dm.k % #PC.DUMMY_LINES + 1
 		if dm.k == 1 then dm.round = dm.round + 1 end
-		for _, d in ipairs(dm.list) do c.bubbles[d.p] = nil end       -- (the "..." shows only with no bubble up)
+		for _, d in ipairs(dm.list) do                                -- (the "..." shows only with no bubble up:
+			local cur = c.bubbles[d.p]                                    --  the last line moves up as the older one)
+			if cur and not cur.hidden then c.prevBubbles[d.p] = cur end
+			c.bubbles[d.p] = nil
+		end
 		dm.typingUntil = now + cfg.dummyType
 		dm.nextT = dm.typingUntil
 	else                                                              -- (all say it, each in its own voice)
@@ -1564,7 +1576,8 @@ end
 -- below the others instead (a line up). c.bubbleRects: the result.
 function PC.layoutBubbles(list)
 	table.sort(list, function(u, v)
-		if u.bottom ~= v.bottom then return u.bottom > v.bottom end
+		if u.y ~= v.y then return u.y > v.y end                        -- (lowest speaker first; a speaker's newest
+		if (u.age or 1) ~= (v.age or 1) then return (u.age or 1) < (v.age or 1) end   --  bubble first: nearest the head)
 		return u.p < v.p
 	end)
 	local placed = {}
@@ -1603,11 +1616,16 @@ function PC.drawBubbles()
 	local third = GetBool("game.thirdperson")
 	local list = {}
 	local function add(L) if L then list[#list + 1] = L end end
-	for p, b in pairs(c.bubbles) do
-		if (p ~= me or third) and not b.hidden then
-			local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
-			if L then b.extra = math.max(b.extra or 0, L.scrollTime) end
-			add(L)
+	for age, tbl in ipairs({c.bubbles, c.prevBubbles}) do              -- (the newest, then the one before it)
+		for p, b in pairs(tbl) do
+			if (p ~= me or third) and not b.hidden then
+				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (cfg.life + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
+				if L then
+					b.extra = math.max(b.extra or 0, L.scrollTime)
+					L.age = age
+				end
+				add(L)
+			end
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
