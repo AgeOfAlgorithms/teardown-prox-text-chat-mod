@@ -1,6 +1,7 @@
 -- Proximity Chat options (Mod Manager > Options). A menu script like the game's own speedometer
 -- options.lua: plain draw(), no #version line. Settings are this player's own (savegame.mod.pc*):
--- the default voice (also chat window > Settings or /voice <name> in game), the hint, Global babble.
+-- the default voice (also chat window > Settings or /voice <name> in game), the hint, the speech
+-- bubbles (Off / opacity) and the babble volume (Off / 25-100 %).
 PCO_VOICES = {"Squeaky", "Chirpy", "Plain", "Low", "Deep", "Robot"}
 
 function pcoButton(label, selected, w)
@@ -14,6 +15,19 @@ function pcoButton(label, selected, w)
 	local clicked = UiTextButton(label, w, 40)
 	UiPop()
 	return clicked
+end
+
+-- Off / 25 % / 50 % / 75 % / 100 % for a savegame key (1-5; unset = 100 %)
+function pcoLevels(key)
+	local v = GetInt(key)
+	if v < 1 or v > 5 then v = 5 end
+	UiPush()
+	UiTranslate(-2 * 120, 0)
+	for i, name in ipairs({"Off", "25%", "50%", "75%", "100%"}) do
+		if pcoButton(name, v == i, 110) then SetInt(key, i) end
+		UiTranslate(120, 0)
+	end
+	UiPop()
 end
 
 function draw()
@@ -61,6 +75,16 @@ function draw()
 	UiTranslate(220, 0)
 	if pcoButton("Hide", hide, 200) then SetBool("savegame.mod.pchidehint", true) end
 	UiPop()
+
+	UiTranslate(0, 80)
+	UiText("Speech bubbles (how solid; the text stays readable)")
+	UiTranslate(0, 50)
+	pcoLevels("savegame.mod.pcbubbles")
+
+	UiTranslate(0, 80)
+	UiText("Babble volume")
+	UiTranslate(0, 50)
+	pcoLevels("savegame.mod.pcbabblevol")
 
 	UiTranslate(0, 110)
 	if UiTextButton("Close", 200, 40) then Menu() end

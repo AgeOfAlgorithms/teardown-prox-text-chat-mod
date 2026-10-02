@@ -43,7 +43,8 @@
 --   right end; Tab or a click on a chip changes the mode. Enter says it, Esc closes. The window shows
 --   the history (wheel / PgUp / PgDn scroll) and, right-aligned in its header, a "Settings" button:
 --   the Settings page has the voice picker (a click picks: synced so others hear it, saved, a preview
---   only you hear), the hint on/off, keep the window open; "Back" returns.
+--   only you hear), the hint on/off, keep the window open, speech bubbles (Off / 25-100 % solid; the text
+--   stays readable) and babble volume (Off / 25-100 %); "Back" returns.
 --   With the window closed the newest lines fade out in a feed. No hotkeys besides Enter (a host mod
 --   may set PC.cfg.windowKey to pin the window with a key).
 --   Clicks fire on the mouse PRESS (UiIsMouseInRect + InputPressed("lmb")), with UiBlankButton (fires
@@ -139,7 +140,7 @@ do
 		bubbleSize = 32,         -- its size (Pangolin is a bit small for its size; the game fonts use 30)
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
-		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint
+		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pcbubbles, pcbabblevol
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
 		shoutVol = 0.8,          -- shouted words (shout clips, already a little louder than babble)
@@ -167,6 +168,9 @@ PC.VOICES = {
 	{"Deep", 0.64, 0.092, "voice", 1.0},
 	{"Robot", 1.0, 0.07, "robot", 0.35},          -- (square waves are loud: 35 %)
 }
+-- the Settings levels for speech bubbles (opacity) and babble (volume): Off, 25 %, 50 %, 75 %, 100 %
+PC.LEVELS = {0, 0.25, 0.5, 0.75, 1}
+PC.LEVEL_NAMES = {"Off", "25%", "50%", "75%", "100%"}
 PC.BABBLE_SETS = {voice = 8, shout = 8, robot = 4, whisper = 8, rwhisper = 4}
 PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "whisper", rwhisper = "rwhisper"}
 
@@ -780,6 +784,8 @@ function PC.clientInit()
 		hideHint = GetBool(cfg.save .. "hidehint"),
 		voiceTries = 0, voiceT = 0,
 		outbox = {}, seq = 0, muted = {}, names = {},
+		bubbleLevel = PC.LEVELS[GetInt(cfg.save .. "bubbles")] and GetInt(cfg.save .. "bubbles") or #PC.LEVELS,
+		babbleLevel = PC.LEVELS[GetInt(cfg.save .. "babblevol")] and GetInt(cfg.save .. "babblevol") or #PC.LEVELS,
 		babble = {clips = {}, queue = {}, echoes = {}},
 	}
 	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
@@ -1228,8 +1234,11 @@ end
 -- "whisper" = breathy clips at the speaker, quiet, no echo, no shouting; "flat" = at the listener
 -- (the voice preview in Settings), short and quiet
 function PC.babbleSay(p, text, voice, how)
-	local B = PC.C().babble
+	local c = PC.C()
+	local B = c.babble
 	local cfg = PC.cfg
+	local lv = how == "flat" and 1 or PC.LEVELS[c.babbleLevel]            -- (Settings: babble volume; the preview always plays)
+	if lv == 0 then return end
 	local v = PC.VOICES[voice or PC.voiceOf(p)] or PC.VOICES[3]
 	local syl = PC.babbleSyllables(text)
 	local q = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], how = how}
@@ -1246,7 +1255,7 @@ function PC.babbleSay(p, text, voice, how)
 		shoutVol = vol
 		for _, s in ipairs(syl) do s[4] = false end               -- (CAPS stay a whisper)
 	end
-	q.vol, q.shoutVol = vol, shoutVol
+	q.vol, q.shoutVol = vol * lv, shoutVol * lv
 	B.queue[p] = q
 end
 
@@ -1393,6 +1402,22 @@ function PC.setVoice(i)
 	c.voiceWant, c.voiceTries, c.voiceT = i, 0, 0
 	SetInt(PC.cfg.save .. "voice", i)
 	PC.babbleSay(GetLocalPlayer(), "Hello there, how are you?", i, "flat")   -- (a preview, only for you)
+end
+
+-- Settings: speech bubbles' opacity (1 = Off .. 5 = 100 %) and the babble's volume, saved
+function PC.setBubbleLevel(i)
+	local c = PC.C()
+	if not PC.LEVELS[i] then return end
+	c.bubbleLevel = i
+	SetInt(PC.cfg.save .. "bubbles", i)
+end
+
+function PC.setBabbleLevel(i)
+	local c = PC.C()
+	if not PC.LEVELS[i] then return end
+	c.babbleLevel = i
+	SetInt(PC.cfg.save .. "babblevol", i)
+	if PC.LEVELS[i] == 0 then c.babble.queue, c.babble.echoes = {}, {} end
 end
 
 function PC.setHideHint(on)
@@ -1681,7 +1706,7 @@ PC.EDGE_MARGIN = 8
 PC.measured, PC.measuredN = {}, 0
 function PC.measure(text)
 	local cfg = PC.cfg
-	local key = text .. " " .. cfg.bubbleW
+	local key = cfg.bubbleW .. "|" .. text
 	local m = PC.measured[key]
 	if m then return m end
 	local font, size = PC.bubbleFont(text)
@@ -1744,17 +1769,18 @@ end
 -- to the speaker's head
 function PC.bubbleDraw(L)
 	local a, s, w, h = L.a, L.s, L.w, L.h
+	local ab = a * (L.op or 1)                                           -- (the bubble itself: the opacity setting)
 	if L.docked then                                                     -- (on the screen edge: no line)
 	elseif L.lift > 0 then                                               -- (raised: a line down to the speaker)
 		UiPush()
 		UiTranslate(L.x - 1, L.bottom - L.lift)
-		UiColor(0, 0, 0, 0.55 * a)
+		UiColor(0, 0, 0, 0.55 * ab)
 		UiRect(2, L.lift)
 		UiPop()
 	elseif L.lift < 0 and L.top - L.lift > L.bottom then                 -- (put below: a line up to the speaker)
 		UiPush()
 		UiTranslate(L.x - 1, L.bottom)
-		UiColor(0, 0, 0, 0.55 * a)
+		UiColor(0, 0, 0, 0.55 * ab)
 		UiRect(2, L.top - L.lift - L.bottom)
 		UiPop()
 	end
@@ -1767,13 +1793,13 @@ function PC.bubbleDraw(L)
 	local k = 2                                                              -- (the outline)
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
-	UiColor(0, 0, 0, 0.9 * a)
+	UiColor(0, 0, 0, 0.9 * ab)
 	UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop()
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
-	if L.whisper then UiColor(0.86, 0.87, 1, a) else UiColor(1, 1, 1, a) end
+	if L.whisper then UiColor(0.86, 0.87, 1, ab) else UiColor(1, 1, 1, ab) end
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
-	if L.shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
+	if L.shout then UiColor(0.9, 0.1, 0.05, ab); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
 	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
 		UiPush()
@@ -1839,6 +1865,8 @@ end
 
 function PC.drawBubbles()
 	local c, cfg = PC.C(), PC.cfg
+	local op = PC.LEVELS[c.bubbleLevel]                                  -- (Settings: speech bubbles)
+	if op == 0 then c.bubbleRects = {}; return end
 	local now = GetTime()
 	local me = GetLocalPlayer()
 	local third = GetBool("game.thirdperson")
@@ -1869,10 +1897,33 @@ function PC.drawBubbles()
 			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
 		end
 	end
-	for _, L in ipairs(PC.layoutBubbles(list)) do PC.bubbleDraw(L) end
+	for _, L in ipairs(PC.layoutBubbles(list)) do L.op = op; PC.bubbleDraw(L) end
 end
 
 -- a small two-way switch on the Settings page; returns the new value when clicked, else nil
+-- a row of choices on the Settings page (one selected); returns the clicked one's index, else nil
+function PC.choice(id, cur, labels)
+	local c = PC.C()
+	local out = nil
+	for j, label in ipairs(labels) do
+		local on = j == cur
+		UiPush()
+		UiTranslate((j - 1) * 98, 0)
+		local hover = c.typing and UiIsMouseInRect(90, 36)
+		if c.typing and PC.clicked(id .. j, 90, 36, hover) then out = j end
+		if on then UiColor(1, 0.82, 0.3, 0.3) elseif hover then UiColor(1, 1, 1, 0.16) else UiColor(1, 1, 1, 0.07) end
+		UiRoundedRect(90, 36, 8)
+		if on then UiColor(1, 0.82, 0.3, 0.95); UiRoundedRectOutline(90, 36, 8, 2) end
+		UiTranslate(45, 18)
+		UiAlign("center middle")
+		UiFont(on and "bold.ttf" or "regular.ttf", 20)
+		UiColor(1, 1, 1, on and 1 or 0.7)
+		UiText(label)
+		UiPop()
+	end
+	return out
+end
+
 function PC.toggle(id, value, yes, no)
 	local c = PC.C()
 	local out = nil
@@ -1899,7 +1950,7 @@ end
 function PC.drawSettings(W, H)
 	local c = PC.C()
 	local cur = PC.voiceOf(GetLocalPlayer())
-	local bw, bh, gap = 300, 52, 12
+	local bw, bh, gap = 300, 44, 8
 	UiPush()
 	UiTranslate(16, 68)
 	UiFont("regular.ttf", 22)
@@ -1929,10 +1980,12 @@ function PC.drawSettings(W, H)
 	local rows = {
 		{"set_h", "\"Enter: chat\" hint on screen", not c.hideHint, "Show", "Hide", function(v) PC.setHideHint(not v) end},
 		{"set_w", "Keep the chat window open", c.pinned, "Yes", "No", function(v) c.pinned = v end},
+		{"set_b", "Speech bubbles", c.bubbleLevel, PC.setBubbleLevel},
+		{"set_v", "Babble volume", c.babbleLevel, PC.setBabbleLevel},
 	}
 	for k, r in ipairs(rows) do
 		UiPush()
-		UiTranslate(0, (k - 1) * 48)
+		UiTranslate(0, (k - 1) * 44)
 		UiPush()
 		UiTranslate(0, 20)
 		UiAlign("left middle")
@@ -1940,9 +1993,14 @@ function PC.drawSettings(W, H)
 		UiColor(1, 1, 1, 0.85)
 		UiText(r[2])
 		UiPop()
-		UiTranslate(520, 0)
-		local v = PC.toggle(r[1], r[3], r[4], r[5])
-		if v ~= nil then r[6](v) end
+		UiTranslate(400, 0)
+		if type(r[3]) == "number" then                                    -- (a level: Off .. 100 %)
+			local i = PC.choice(r[1], r[3], PC.LEVEL_NAMES)
+			if i then r[4](i) end
+		else
+			local v = PC.toggle(r[1], r[3], r[4], r[5])
+			if v ~= nil then r[6](v) end
+		end
 		UiPop()
 	end
 	UiPop()
