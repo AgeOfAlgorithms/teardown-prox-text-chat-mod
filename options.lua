@@ -77,6 +77,17 @@ function draw()
 	UiPop()
 
 	UiTranslate(0, 80)
+	UiText("Your own speech bubble (third person)")
+	UiTranslate(0, 50)
+	local hideOwn = GetBool("savegame.mod.pchideown")
+	UiPush()
+	UiTranslate(-110, 0)
+	if pcoButton("Show", not hideOwn, 200) then SetBool("savegame.mod.pchideown", false) end
+	UiTranslate(220, 0)
+	if pcoButton("Hide", hideOwn, 200) then SetBool("savegame.mod.pchideown", true) end
+	UiPop()
+
+	UiTranslate(0, 80)
 	UiText("Speech bubbles (how solid; the text stays readable)")
 	UiTranslate(0, 50)
 	pcoLevels("savegame.mod.pcbubbles")
