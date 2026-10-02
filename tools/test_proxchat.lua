@@ -1010,9 +1010,11 @@ P2.PC.setHideOwn(false); P2.reg["game.thirdperson"] = nil
 
 -- ================================================================== how a voice carries
 local LD = P1.PC.loudness
-check(LD(4, 35) == 1 and math.abs(LD(35, 35) - 0.35) < 1e-9 and math.abs(LD(55, 55) - 0.35) < 1e-9 and LD(20, 35) > LD(30, 35) and LD(20, 35) > 0.6,
-	string.format("loudness: full up close, gently down to 35%% at the edge of the reach (20 m of 35: %.2f, 30 m: %.2f)", LD(20, 35), LD(30, 35)))
-check(LD(45, 55) > LD(30, 35), "a shout 45 m away is louder than speech 30 m away (each by its own reach)")
+check(LD(4, 35, 25) == 1 and math.abs(LD(20, 35, 25) - 0.77) < 0.01 and LD(25, 35, 25) > LD(28, 35, 25) and LD(28, 35, 25) > LD(32, 35, 25)
+	and LD(34, 35, 25) < 0.03 and LD(35, 35, 25) == 0,
+	string.format("loudness: full up close, gently lower (20 m: %.2f), then across the buffer smoothly to nothing (25: %.2f, 28: %.2f, 32: %.2f, 34: %.3f, 35: 0)",
+		LD(20, 35, 25), LD(25, 35, 25), LD(28, 35, 25), LD(32, 35, 25), LD(34, 35, 25)))
+check(LD(45, 55, 40) > LD(30, 35, 25), "a shout 45 m away is louder than speech 30 m away (each by its own reach)")
 
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
