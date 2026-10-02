@@ -119,7 +119,8 @@ do
 		revealHold = 1,          -- s a bubble stays up at least once it is fully revealed (no other reveal extends it)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
-		dummyShow = 4.5,         -- s its bubble stays before it types the next one
+		dummyShow = 4.5,         -- s after the last of them spoke, before the next line
+		dummyGap = 2,            -- s between the dummies' turns (whisperer, speaker, shouter)
 		life = 9,                -- s a feed line stays
 		lifeMin = 2.5,           -- s a bubble stays: lifeMin + lifePerChar a character, at most lifeMax (+ scrolling)
 		lifePerChar = 0.1,
@@ -141,7 +142,7 @@ do
 		bubbleSize = 32,         -- its size (Pangolin is a bit small for its size; the game fonts use 30)
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
-		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pcbubbles, pcbabblevol
+		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pchideown, pcbubbles, pcbabblevol
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
 		shoutVol = 0.8,          -- shouted words (shout clips, already a little louder than babble)
@@ -783,6 +784,7 @@ function PC.clientInit()
 		hist = {}, n = 0, seen = 0, typing = false, text = "", focus = false, pinned = false,
 		page = "chat", bubbles = {}, prevBubbles = {}, scroll = 0, t0 = GetTime(),
 		hideHint = GetBool(cfg.save .. "hidehint"),
+		hideOwn = GetBool(cfg.save .. "hideown"),
 		voiceTries = 0, voiceT = 0,
 		outbox = {}, seq = 0, muted = {}, names = {},
 		bubbleLevel = PC.LEVELS[GetInt(cfg.save .. "bubbles")] and GetInt(cfg.save .. "bubbles") or #PC.LEVELS,
@@ -1046,7 +1048,8 @@ end
 -- and a shouter; /dummy 1 / 2 / 3 one of them (moved if it exists); /dummy clear removes them. Only
 -- for you (client-side, no server, not synced). They say the same line at the same
 -- moment (the shouter in CAPS / with "!"), line after line, the voices rotating, so you can walk back
--- and forth and compare the bubbles and the babble at every distance. Each line: "..." typing for
+-- and forth and compare the bubbles and the babble at every distance. They take turns, cfg.dummyGap s
+-- apart: the whisperer, then the speaker, then the shouter; then the next line. Each line: "..." typing for
 -- cfg.dummyType s, then the message as if a player said it (PC.receive).
 PC.DUMMY = 1000                                                       -- (speaker ids PC.DUMMY + 0..2)
 PC.DUMMY_KINDS = {                                                    -- mode, name, torso colour; left to right
@@ -1097,7 +1100,7 @@ end
 function PC.dummySpawn(i, pos)
 	local c = PC.C()
 	local kind = PC.DUMMY_KINDS[i]
-	c.dummy = c.dummy or {list = {}, byP = {}, k = 0, round = 0, nextT = GetTime() + 0.5, typingUntil = 0}
+	c.dummy = c.dummy or {list = {}, byP = {}, k = 0, round = 0, startT = GetTime() + 0.5, nextT = 0}
 	local dm = c.dummy
 	local old = dm.byP[PC.DUMMY + i - 1]
 	if old then PC.dummyRemove(old); c.dummy = c.dummy or dm end
@@ -1150,33 +1153,43 @@ end
 function PC.dummyTick(now)
 	local c, cfg = PC.C(), PC.cfg
 	local dm = c.dummy
-	if not dm or now < dm.nextT then return end
-	if dm.typingUntil == 0 then                                       -- (all start typing the next line)
+	if not dm then return end
+	-- a new line: each dummy gets its turn, cfg.dummyGap s apart (whisperer, speaker, shouter); it types
+	-- for cfg.dummyType s before its own
+	if not dm.lineT or now >= dm.nextT then
 		local wait = 0
-		for _, d in ipairs(dm.list) do
+		for _, d in ipairs(dm.list) do                                -- (a long line still scrolling: let it finish)
 			local b = c.bubbles[d.p]
 			if b and (b.extra or 0) > 0 then wait = math.max(wait, (b.scrollT or b.t) + cfg.scrollHold + b.extra + 2.5 - now) end
 		end
-		if wait > 0 then dm.nextT = now + wait; return end           -- (a long line is still scrolling)
+		if wait > 0 then dm.nextT = now + wait; return end
+		if now < dm.startT then return end
 		dm.k = dm.k % #PC.DUMMY_LINES + 1
 		if dm.k == 1 then dm.round = dm.round + 1 end
-		for _, d in ipairs(dm.list) do                                -- (the "..." shows only with no bubble up:
-			local cur = c.bubbles[d.p]                                    --  the last line moves up as the older one)
-			if cur and not cur.hidden then c.prevBubbles[d.p] = cur end
-			c.bubbles[d.p] = nil
+		dm.lineT = now
+		for i, d in ipairs(dm.list) do
+			d.sayAt = now + cfg.dummyType + (i - 1) * cfg.dummyGap
+			d.typing, d.said = false, false
 		end
-		dm.typingUntil = now + cfg.dummyType
-		dm.nextT = dm.typingUntil
-	else                                                              -- (all say it, each in its own voice)
-		local line = PC.DUMMY_LINES[dm.k]
-		dm.typingUntil = 0
-		for _, d in ipairs(dm.list) do
-			d.voice = (dm.round + d.idx - 2) % #PC.VOICES + 1            -- (each round shifts the voices)
-			dm.n = (dm.n or 0) + 1
-			PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
-				ch = d.kind == "w" and "w" or "p", text = d.kind == "s" and line[2] or line[1]})
+		dm.nextT = now + cfg.dummyType + (#dm.list - 1) * cfg.dummyGap + cfg.dummyShow
+	end
+	local line = PC.DUMMY_LINES[dm.k]
+	for _, d in ipairs(dm.list) do
+		if d.sayAt and not d.said then
+			if not d.typing and now >= d.sayAt - cfg.dummyType then
+				d.typing = true
+				local cur = c.bubbles[d.p]                                -- (the "..." shows only with no bubble up:
+				if cur and not cur.hidden then c.prevBubbles[d.p] = cur end   --  its last line moves up as the older one)
+				c.bubbles[d.p] = nil
+			end
+			if now >= d.sayAt then
+				d.typing, d.said = false, true
+				d.voice = (dm.round + d.idx - 2) % #PC.VOICES + 1        -- (each round shifts the voices)
+				dm.n = (dm.n or 0) + 1
+				PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
+					ch = d.kind == "w" and "w" or "p", text = d.kind == "s" and line[2] or line[1]})
+			end
 		end
-		dm.nextT = now + cfg.dummyShow
 	end
 end
 
@@ -1419,6 +1432,12 @@ function PC.setBabbleLevel(i)
 	c.babbleLevel = i
 	SetInt(PC.cfg.save .. "babblevol", i)
 	if PC.LEVELS[i] == 0 then c.babble.queue, c.babble.echoes = {}, {} end
+end
+
+function PC.setHideOwn(on)
+	local c = PC.C()
+	c.hideOwn = on and true or false
+	SetBool(PC.cfg.save .. "hideown", c.hideOwn)
 end
 
 function PC.setHideHint(on)
@@ -1875,7 +1894,7 @@ function PC.drawBubbles()
 	local function add(L) if L then list[#list + 1] = L end end
 	for age, tbl in ipairs({c.bubbles, c.prevBubbles}) do              -- (the newest, then the one before it)
 		for p, b in pairs(tbl) do
-			if (p ~= me or third) and not b.hidden and PC.inReach(p, b) then
+			if (p ~= me or (third and not c.hideOwn)) and not b.hidden and PC.inReach(p, b) then
 				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
@@ -1892,8 +1911,8 @@ function PC.drawBubbles()
 		end
 	end
 	local dm = c.dummy
-	if dm and now < dm.typingUntil then
-		for _, du in ipairs(dm.list) do
+	for _, du in ipairs(dm and dm.list or {}) do                       -- (a dummy typing before its turn)
+		if du.typing then
 			local d = not (c.bubbles[du.p] and not c.bubbles[du.p].hidden) and PC.distTo(du.p)
 			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
 		end
@@ -1961,7 +1980,7 @@ end
 function PC.drawSettings(W, H)
 	local c = PC.C()
 	local cur = PC.voiceOf(GetLocalPlayer())
-	local bw, bh, gap = 300, 44, 8
+	local bw, bh, gap = 300, 38, 6
 	UiPush()
 	UiTranslate(16, 68)
 	UiFont("regular.ttf", 22)
@@ -1991,12 +2010,13 @@ function PC.drawSettings(W, H)
 	local rows = {
 		{"set_h", "\"Enter: chat\" hint on screen", not c.hideHint, "Show", "Hide", function(v) PC.setHideHint(not v) end},
 		{"set_w", "Keep the chat window open", c.pinned, "Yes", "No", function(v) c.pinned = v end},
+		{"set_o", "Your own bubble (third person)", not c.hideOwn, "Show", "Hide", function(v) PC.setHideOwn(not v) end},
 		{"set_b", "Speech bubbles", c.bubbleLevel, PC.setBubbleLevel},
 		{"set_v", "Babble volume", c.babbleLevel, PC.setBabbleLevel},
 	}
 	for k, r in ipairs(rows) do
 		UiPush()
-		UiTranslate(0, (k - 1) * 44)
+		UiTranslate(0, (k - 1) * 40)
 		UiPush()
 		UiTranslate(0, 20)
 		UiAlign("left middle")
