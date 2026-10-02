@@ -15,6 +15,11 @@
 --   Lobby (PC.hooks.inLobby() true on the server): everything said is Global.
 --   Your last mode is kept as your default next time (savegame.mod.pcmode).
 --
+-- BUBBLES are drawn in cfg.bubbleFont (Pangolin, a thick marker-hand font shipped in fonts/, OFL)
+--   when that file exists and has every letter of the message (Latin incl. Vietnamese, Cyrillic);
+--   anything else (Greek, CJK, Arabic, Thai...) uses the game font for its script (PC.chatFont). The
+--   window stays in the game fonts.
+--
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
 --   20-45 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
@@ -34,6 +39,7 @@
 -- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
 --   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /help, //text sends "/text".
 --
+-- (copy fonts/ too for the bubble font; without it the bubbles use the game fonts)
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
 -- registry keys proxchat.*; persistent settings savegame.mod.pc*)
 --   #include "chat_core.lua"          in a #version 2 script; copy snd/ (babble0-7, shout0-7, robot0-3,
@@ -88,6 +94,8 @@ do
 		keepHist = 50,           -- lines in the local history
 		rate = 0.45,             -- s between two messages of one player
 		sndDir = "MOD/snd/",
+		bubbleFont = "MOD/fonts/pangolin.ttf", -- the speech bubbles' font ("" = the game fonts)
+		bubbleSize = 32,         -- its size (Pangolin is a bit small for its size; the game fonts use 30)
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint
@@ -261,6 +269,40 @@ function PC.chatFont(text, bold)
 	if kana then return bold == false and "regular_jp.ttf" or "bold_jp.ttf" end
 	if cjk then return bold == false and "regular_sc.ttf" or "bold_sc.ttf" end
 	return bold == false and "regular.ttf" or "bold.ttf"
+end
+
+-- the characters cfg.bubbleFont (Pangolin) has, as code point ranges (a font with other letters: list them)
+PC.BUBBLE_CHARS = {
+	{0x20, 0x7E}, {0xA0, 0x131}, {0x134, 0x148}, {0x14A, 0x17E}, {0x1A0, 0x1A1}, {0x1AF, 0x1B0},   -- Latin
+	{0x1FA, 0x21B}, {0x259, 0x259}, {0x1E9E, 0x1E9E}, {0x1EA0, 0x1EF9},                         -- (+ Vietnamese)
+	{0x400, 0x45F}, {0x490, 0x49D}, {0x4A0, 0x4A5}, {0x4AA, 0x4AB}, {0x4AE, 0x4B1}, {0x4B6, 0x4BB}, -- Cyrillic
+	{0x4C0, 0x4C2}, {0x4CF, 0x4D9}, {0x4E2, 0x4E9}, {0x4EE, 0x4F9},
+	{0x2010, 0x2010}, {0x2012, 0x2015}, {0x2018, 0x201A}, {0x201C, 0x201E}, {0x2020, 0x2022},     -- punctuation
+	{0x2026, 0x2026}, {0x2030, 0x2030}, {0x2039, 0x203A}, {0x20AB, 0x20AE}, {0x20B4, 0x20B4},
+	{0x20BD, 0x20BD}, {0x2116, 0x2116}, {0x2122, 0x2122},
+}
+
+-- the font and size of a speech bubble with this text
+function PC.bubbleFont(text, bold)
+	local f = PC.cfg.bubbleFont
+	if f and f ~= "" then
+		if PC.bubbleFontOk == nil then
+			local ok, has = pcall(HasFile, f)
+			PC.bubbleFontOk = ok and has == true
+		end
+		if PC.bubbleFontOk then
+			local all = true
+			for ch in (text or ""):gmatch(PC.UTF8_CHAR) do
+				local c, found = PC.utf8Code(ch), false
+				for _, r in ipairs(PC.BUBBLE_CHARS) do
+					if c >= r[1] and c <= r[2] then found = true; break end
+				end
+				if not found then all = false; break end
+			end
+			if all then return f, PC.cfg.bubbleSize end
+		end
+	end
+	return PC.chatFont(text, bold), 30
 end
 
 -- ---- display: Arabic joining and right-to-left order
@@ -1080,7 +1122,7 @@ function PC.bubble(p, text, shout, a, small, whisper)
 	UiTranslate(x, y)
 	if shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end      -- (shaking with anger)
 	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * ((small or whisper) and 0.75 or 1))
-	UiFont(PC.chatFont(text, not whisper), 30)
+	UiFont(PC.bubbleFont(text, not whisper))
 	local vis = PC.chatVisual(text)
 	UiWordWrap(640)
 	local tw, th = UiGetTextSize(vis)
