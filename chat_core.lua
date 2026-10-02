@@ -107,6 +107,7 @@ do
 		bubbleLines = 3,         -- lines a bubble shows; longer messages scroll down inside it
 		scrollHold = 1.5,        -- s before a long message starts scrolling
 		scrollLine = 1.8,        -- s per line while it scrolls (the bubble stays up that much longer)
+		revealHold = 1,          -- s a bubble stays up at least once it is fully revealed (no other reveal extends it)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s its bubble stays before it types the next one
@@ -854,8 +855,8 @@ function PC.updateBubble(p, b, now, fresh)
 		b.mumble = level == "mumble" or level == "shoutmumble"
 		b.shout = not b.whisper and (level == "shoutmumble" or (level ~= "mumble" and #PC.shoutWords(text) > 0))   -- (CAPS stay a whisper)
 		b.bestF = -1                                                         -- (a new level: its own best share)
-		if not fresh then
-			b.t = math.max(b.t, now - PC.bubbleLife(b) + 4)                  -- (up at least 4 s more)
+		if not fresh and level == "full" then
+			b.t = math.max(b.t, now - PC.bubbleLife(b) + PC.cfg.revealHold)   -- (fully revealed: up at least 1 s more)
 		end
 		changed = true
 	end
