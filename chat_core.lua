@@ -815,6 +815,7 @@ function PC.receive(m)
 		if heard or not whisper then
 			local b = {t = GetTime(), full = m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
 				level = "none", hidden = true, bestF = -1}
+			b.scrollT = b.t                                                  -- (the scroll's clock: fixed, a reveal never restarts it)
 			c.bubbles[m.p] = b
 			PC.updateBubble(m.p, b, b.t, true)
 		end
@@ -844,7 +845,6 @@ function PC.updateBubble(p, b, now, fresh)
 		b.bestF = -1                                                         -- (a new level: its own best share)
 		if not fresh then
 			b.t = math.max(b.t, now - cfg.life + 4)                          -- (up at least 4 s more)
-			if level == "full" then b.scrollT = now end                      -- (the words scroll from the top)
 		end
 		changed = true
 	end
