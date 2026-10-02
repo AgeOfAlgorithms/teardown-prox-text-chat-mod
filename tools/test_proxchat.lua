@@ -1001,6 +1001,11 @@ local Lc2 = P1.PC.bubbleLayout(2, "hello there, top right", false, 1, false, fal
 P1.pixel = nil
 check(inside(Lc) and inside(Lc2), "a speaker at a corner of the screen: the whole bubble stays on screen")
 local Lmid = P1.PC.bubbleLayout(2, "hello there", false, 1, false, false, false, W.time)
+local Lon = P1.PC.bubbleLayout(3, "same size", false, 1, false, false, false, W.time)       -- (on screen; the mock's depth is 10 m)
+P1.offscreen = true
+local Loff = P1.PC.bubbleLayout(3, "same size", false, 1, false, false, false, W.time)      -- (docked)
+P1.offscreen = nil
+check(Lon and Loff and math.abs(Lon.s - Loff.s) < 1e-9, string.format("a bubble is the same size on screen and docked (by the real distance, not the view depth: %.2f / %.2f)", Lon.s, Loff.s))
 check(Lsh.docked and Lc.docked and Lc2.docked and Lmid and not Lmid.docked, "docked bubbles (on the edge, or pushed on screen) are marked: no line to the speaker; one over its speaker is not")
 
 -- ================================================================== the test dummies (/dummy)
