@@ -7,7 +7,7 @@ where you stand. Three ways to speak:
 | mode | who gets it |
 |---|---|
 | **Speak** | players within 25 m: a speech bubble, plus babble from your position. From 25 to 35 m they hear the babble and see the message as ⬚ boxes, with more real letters the closer they are. Their chat history keeps the most they made out, and the whole line appears if they come within 25 m while it's up. Walking toward someone who is mid-sentence shows their bubble too. WRITE IN CAPS (or end a word with `!`) to shout: shouted words carry to 40 m, and only those words get through; from 40 to 55 m even they are ⬚ boxes, with more real letters the closer you are. |
-| **Whisper** | private (only sent to the players near enough) - players within 8 m: a pale lavender bubble and a breathy babble (⬚ boxes from 8 to 13 m). Private: walking up to someone mid-whisper shows nothing. |
+| **Whisper** | private (only sent to the players near enough) - players within 8 m: a pale lavender bubble and a breathy babble (⬚ boxes from 8 to 12 m). Private: walking up to someone mid-whisper shows nothing. |
 | **Global** | every player: a plain chat line, with no bubble and no babble |
 
 The chat window keeps **your own history**: every Global line, plus the Speak lines and whispers you
@@ -50,10 +50,14 @@ copies.
 
 A bubble shows three lines; a longer message scrolls down inside it at reading pace (a thin bar shows
 where it is) and the bubble stays up until it has finished. When a speaker is off screen, their bubble sits on the screen edge on their side, and a bubble always
-stays wholly on screen. A bubble is only shown while you are within its reach (35 m, a shout 55 m, a whisper 13 m): walk
+stays wholly on screen. A bubble is only shown while you are within its reach (35 m, a shout 55 m, a whisper 12 m): walk
 away and it goes, walk back while it is up and it is there again. A player shows at most two bubbles: their newest message, with the one before it above it.
 Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
 a thin line connects it to its speaker.
+
+**Distances.** The host can change how far each mode carries: Settings has a bar with a knob each for
+whisper, speak and shout (defaults 8, 25 and 40 m). The garbled zones follow at the same share (+50 %,
++40 %, +37.5 %). Reset brings the defaults back, and the host's choice is remembered.
 
 ## For game-mode makers
 
@@ -63,6 +67,7 @@ Mods can't call each other's functions, but the registry is shared. Your mod can
 SetBool("proxchat.lobby", true)          -- server: your lobby is up, everyone hears everything (false after)
 SetBool("proxchat.block", true)          -- client: Enter must not open the chat (your own text input is up)
 GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
+SetString("proxchat.ranges", "8,25,40")  -- server: your map's distances (whisper, speak, shout in m)
 ```
 
 **Chat events (server / host).** Every message is also published to the host's registry, so your
@@ -75,7 +80,7 @@ are kept in a ring of the last 16:
 | `mode` | `"speak"`, `"whisper"` or `"global"` |
 | `shout` | bool: the message has a shouted word (Speak only) |
 | `x`, `y`, `z` | where the speaker stood (feet) |
-| `radius` | m: how far anyone hears anything (the babble): whisper 13, speak 35, shout 55, global 0 |
+| `radius` | m: how far anyone hears anything (the babble): whisper 12, speak 35, shout 55, global 0 (all at the default distances) |
 | `wordsRadius` | m: how far the words are heard: whisper 8, speak 25, shout 40 |
 | `text` | the message |
 | `lobby` | bool: said while your lobby was up |

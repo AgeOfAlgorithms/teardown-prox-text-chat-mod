@@ -84,6 +84,9 @@ local function machine(me, isHost, presetReg, prePC)
 		return function() i = i + 1; return list[i] end
 	end
 	api.InputPressed = function(k) return env.keys[k] == true end
+	api.InputDown = function(k) return (env.held and env.held[k]) == true end
+	api.UiGetMousePos = function() return env.mouseX or 0, env.mouseY or 0 end
+	api.IsPlayerHost = function(p) if p == nil or p == 0 then return isHost == true end return p == 1 end
 	api.InputValue = function(k) return env.values[k] or 0 end
 	api.UiTextInput = function(str, w, h, focus)
 		env.fieldCalled = true
@@ -1029,6 +1032,38 @@ P3.sounds = {}
 waitRate(); say(P2, "/s and now nothing")
 steps(90)
 check(#P3.sounds == 0, "38 m: nothing at all")
+W.pos[3] = Vec(30, 0, 0)
+
+-- ================================================================== the host's distances
+local C2 = P2.PC.cfg
+check(C2.whisperR == 8 and C2.whisperMumbleR == 12 and C2.chatR == 25 and C2.mumbleR == 35 and C2.shoutR == 40 and C2.shoutMumbleR == 55,
+	"the default distances: whisper 8 (garbled to 12), speak 25 (35), shout 40 (55)")
+if P2.PC.c.typing then press(P2, "esc"); step() end
+say(P2, "/settings"); step()
+check(P2.PC.page() == "settings" and not drawn(P2, "^Distances %(host"), "a player who is not the host has no distance bar")
+press(P2, "esc"); step()
+HOST.server.pc_ranges(2, 5, 10, 20); step()
+check(C2.chatR == 25, "... and cannot change them (the server ignores a non-host)")
+if P1.PC.c.typing then press(P1, "esc"); step() end
+say(P1, "/settings"); step()
+check(drawn(P1, "^Distances %(host") and drawn(P1, "Speak 25 m %(to 35%)"), "the host's Settings: the distance bar, with what each one is")
+local BW = P1.PC.cfg.winW - 64
+P1.hover = {16, 32, 2}; P1.keys.lmb = true; P1.held = {lmb = true}; step()  -- (press the Speak knob)
+P1.hover = nil
+P1.mouseX = BW * 30 / 80; step(); step()                                     -- (drag it to 30 m)
+check(P1.PC.c.drag == 2 and P1.PC.c.dragVals[2] == 30 and drawn(P1, "Speak 30 m %(to 42%)"), "dragging the Speak knob: 30 m (garbled to 42)")
+P1.held = nil; step(); step(); step()                                        -- (let go: sent, applied everywhere)
+check(not P1.PC.c.drag and C2.chatR == 30 and C2.mumbleR == 42 and P1.reg["savegame.mod.pcranges"] == "8,30,40",
+	"let go: every player now uses 30 m (and the host's choice is saved)")
+W.pos[3] = Vec(32, 0, 0)                                                     -- (28 m from P2: was garbled, now in range)
+if P3.PC.c.typing then press(P3, "esc"); step() end
+waitRate(); say(P2, "/s heard further now")
+check(lastLine(P3, "p").text == "heard further now", "28 m away now hears the words")
+HOST.reg["proxchat.ranges"] = "6,20,30"; step(); step()
+check(C2.whisperR == 6 and C2.chatR == 20 and C2.shoutR == 30 and math.abs(C2.mumbleR - 28) < 1e-9, "a map can set its own: SetString(\"proxchat.ranges\", \"6,20,30\")")
+P1.hover = {110, 30, 1}; P1.keys.lmb = true; step(); P1.hover = nil; step(); step()   -- (Reset)
+check(C2.whisperR == 8 and C2.chatR == 25 and C2.shoutR == 40 and C2.whisperMumbleR == 12, "Reset: back to the defaults")
+press(P1, "esc"); step()
 W.pos[3] = Vec(30, 0, 0)
 
 -- ================================================================== off screen and at the edges
