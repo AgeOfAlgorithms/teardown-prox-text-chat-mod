@@ -6,8 +6,11 @@
 --   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
 --     you (quieter and echoing with distance), heard within cfg.chatR (20 m). ALL-CAPS words or a word
 --     ending in "!" are shouted and reach cfg.shoutR (45 m), where only the shouted words get through.
---   "w" Whisper: heard only within cfg.whisperR (5 m); beyond it nobody gets anything, not even a
---     history line. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
+--     The BUFFER chatR-cfg.mumbleR (20-30 m): the babble and a "..." bubble (on the screen edge in the
+--     speaker's direction when off screen), no words, no history line. Coming within range while the
+--     bubble is up shows the words and adds the line (a far shout's line is completed instead).
+--   "w" Whisper: heard within cfg.whisperR (5 m); its buffer to cfg.whisperMumbleR (8 m) gets "..."
+--     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
 --   "g" Global: every player gets the line in their chat - a plain chat line only: no bubble, no babble
@@ -86,7 +89,9 @@ do
 	local defaults = {
 		chatR = 20,              -- m: who hears you (nearby)
 		shoutR = 45,             -- m: who hears your shouted words (nearby only)
-		whisperR = 5,            -- m: who hears a whisper (nothing beyond)
+		whisperR = 5,            -- m: who hears a whisper
+		mumbleR = 30,            -- m: Speak's buffer beyond chatR: the babble and a "..." bubble, no words
+		whisperMumbleR = 8,      -- m: Whisper's buffer beyond whisperR (nothing beyond it)
 		life = 9,                -- s a bubble / a feed line stays
 		maxLen = 90,             -- characters per message
 		keepShared = 30,         -- messages in shared.pcMsgs
@@ -642,24 +647,29 @@ function PC.distTo(p)
 	return VecLength(VecSub(a.pos, b.pos))
 end
 
--- what the local player hears of p's message NOW. Nearby: all of it within chatR, only the shouted
--- words within shoutR (far = true). Whisper: all of it within whisperR, else nothing. nil = nothing.
+-- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (Speak
+-- within chatR, Whisper within whisperR), "shout" (only the shouted words, within shoutR: far = true),
+-- "mumble" (the buffer just beyond: chatR-mumbleR / whisperR-whisperMumbleR: the babble and a "..."
+-- bubble, no words, no history line). nil = nothing.
+PC.LEVEL = {mumble = 1, shout = 2, full = 3}
 function PC.heard(p, text, mode)
-	if p == GetLocalPlayer() then return text, false end
+	if p == GetLocalPlayer() then return text, false, "full", 0 end
 	local cfg = PC.cfg
 	if mode == "w" then
 		local d = PC.distTo(p)
-		if d and d <= cfg.whisperR then return text, false end
+		if d and d <= cfg.whisperR then return text, false, "full", d end
+		if d and d <= cfg.whisperMumbleR then return "...", true, "mumble", d end
 		return nil
 	end
-	if PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false end
+	if PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false, "full", 0 end
 	local d = PC.distTo(p)
 	if not d then return nil end
-	if d <= cfg.chatR then return text, false end
+	if d <= cfg.chatR then return text, false, "full", d end
 	if d <= cfg.shoutR then
 		local sw = PC.shoutWords(text)
-		if #sw > 0 then return table.concat(sw, " ... "), true end
+		if #sw > 0 then return table.concat(sw, " ... "), true, "shout", d end
 	end
+	if d <= cfg.mumbleR then return "...", true, "mumble", d end
 	return nil
 end
 
@@ -674,16 +684,48 @@ function PC.receive(m)
 		-- (Global: a chat line only - no bubble, no babble)
 	else
 		local mode = (m.ch == "w") and "w" or "p"
-		heard, far = PC.heard(m.p, m.text, mode)
+		local level, d
+		heard, far, level, d = PC.heard(m.p, m.text, mode)
 		if heard then
 			local whisper = mode == "w"
-			local shout = not whisper and #PC.shoutWords(heard) > 0          -- (CAPS stay a whisper)
-			PC.addHist({ch = mode, p = m.p, name = m.name, text = heard, shout = shout, far = far, me = m.p == me})
-			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout, whisper = whisper}
-			PC.babbleSay(m.p, heard, nil, whisper and "whisper" or nil)
+			local mumble = level == "mumble"
+			local shout = not whisper and not mumble and #PC.shoutWords(heard) > 0   -- (CAPS stay a whisper)
+			local entry
+			if not mumble then
+				entry = {ch = mode, p = m.p, name = m.name, text = heard, shout = shout, far = far, me = m.p == me}
+				PC.addHist(entry)
+			end
+			c.bubbles[m.p] = {text = heard, t = GetTime(), shout = shout, whisper = whisper, mumble = mumble,
+				full = m.text, mode = mode, level = level, name = m.name, entry = entry}
+			-- the babble: all of it, except beyond the buffer where only the shouted words carry
+			local inBuffer = d <= (whisper and PC.cfg.whisperMumbleR or PC.cfg.mumbleR)
+			PC.babbleSay(m.p, (level == "shout" and not inBuffer) and heard or m.text, nil, whisper and "whisper" or nil)
+			if mumble then heard, far = nil, nil end                           -- (the hook: no words heard)
 		end
 	end
 	if PC.hooks.onMessage then PC.hooks.onMessage(m, heard) end
+end
+
+-- a bubble heard only in part ("..." in the buffer, or only the shouted words) shows the words once
+-- the listener comes within range while it is still up; the history gets the line then
+function PC.revealBubbles(now)
+	local c, cfg = PC.C(), PC.cfg
+	for p, b in pairs(c.bubbles) do
+		if b.level and b.level ~= "full" then
+			local text, far, level = PC.heard(p, b.full, b.mode)
+			if text and PC.LEVEL[level] > PC.LEVEL[b.level] then
+				b.text, b.level, b.mumble = text, level, false
+				b.shout = not b.whisper and #PC.shoutWords(text) > 0
+				b.t = math.max(b.t, now - cfg.life + 4)                    -- (up at least 4 s more)
+				if b.entry then
+					b.entry.text, b.entry.far, b.entry.shout = text, far, b.shout
+				else
+					b.entry = {ch = b.mode, p = p, name = b.name, text = text, shout = b.shout, far = far}
+					PC.addHist(b.entry)
+				end
+			end
+		end
+	end
 end
 
 function PC.clientTick(dt)
@@ -716,6 +758,7 @@ function PC.clientTick(dt)
 	for p, b in pairs(c.bubbles) do
 		if now - b.t > PC.cfg.life then c.bubbles[p] = nil end
 	end
+	PC.revealBubbles(now)
 	PC.babbleTick()
 end
 
@@ -1114,31 +1157,61 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	return th
 end
 
--- a speech bubble over player p. small: the "..." of someone typing; whisper: a bit smaller, pale lavender
-function PC.bubble(p, text, shout, a, small, whisper)
+-- where a bubble goes for a speaker off screen: on the screen edge, in the speaker's direction
+function PC.edgePoint(pos)
+	local lp = TransformToLocalPoint(GetCameraTransform(), pos)          -- (camera: x right, y up, -z ahead)
+	local dx, dy = lp[1], -lp[2]
+	local l = math.sqrt(dx * dx + dy * dy)
+	if l < 1e-3 then dx, dy, l = 0, 1, 1 end                              -- (right behind: the bottom)
+	dx, dy = dx / l, dy / l
+	local W, H = UiWidth(), UiHeight()
+	local cx, cy = W / 2, H / 2
+	local kx = math.abs(dx) > 1e-3 and ((dx > 0 and (W - 110 - cx) or (cx - 110)) / math.abs(dx)) or 1e9
+	local ky = math.abs(dy) > 1e-3 and ((dy > 0 and (H - 60 - cy) or (cy - 130)) / math.abs(dy)) or 1e9
+	local k = math.min(kx, ky)
+	return cx + dx * k, cy + dy * k
+end
+
+-- a speech bubble over player p, with a thin black outline. small: the "..." of someone typing;
+-- whisper: a bit smaller, pale lavender; mumble: the "..." of a speaker in the buffer range - kept on
+-- the screen edge in their direction when they are off screen
+function PC.bubble(p, text, shout, a, small, whisper, mumble)
 	local okT, tr = pcall(GetPlayerTransform, p)
 	if not (okT and tr and tr.pos) then return end
-	local x, y, d = UiWorldToPixel(VecAdd(tr.pos, Vec(0, 2.25, 0)))
-	if not (d and d > 0) then return end
+	local head = VecAdd(tr.pos, Vec(0, 2.25, 0))
+	local x, y, d = UiWorldToPixel(head)
+	local scale
+	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
+		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, d)))
+	elseif mumble then
+		x, y = PC.edgePoint(head)
+		scale = 0.8
+	else
+		return
+	end
 	UiPush()
 	UiTranslate(x, y)
 	if shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end      -- (shaking with anger)
-	UiScale(math.max(0.55, math.min(1.1, 9 / math.max(1, d))) * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1)))
+	UiScale(scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1)))
 	UiFont(PC.bubbleFont(text))
 	local vis = PC.chatVisual(text)
 	UiWordWrap(640)
 	local tw, th = UiGetTextSize(vis)
 	local w = math.min(640, tw or 200) + 30
 	local h = (th or 28) + 22
+	local k = 2                                                              -- (the outline)
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
-	if whisper then UiColor(0.86, 0.87, 1, 0.88 * a) else UiColor(1, 1, 1, 0.92 * a) end
+	UiColor(0, 0, 0, 0.9 * a)
+	UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop()
+	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
+	if whisper then UiColor(0.86, 0.87, 1, a) else UiColor(1, 1, 1, a) end
 	UiRoundedRect(w, h, 10)
-	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail
+	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
 	if shout then UiColor(0.9, 0.1, 0.05, a); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
-	if whisper then UiColor(0.2, 0.2, 0.38, a)
-	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, a) end
+	if whisper then UiColor(0.2, 0.2, 0.38, mumble and 0.6 * a or a)
+	else UiColor(shout and 0.6 or 0.08, 0.05, shout and 0.03 or 0.1, mumble and 0.6 * a or a) end
 	UiText(vis)
 	UiPop()
 end
@@ -1149,7 +1222,7 @@ function PC.drawBubbles()
 	local me = GetLocalPlayer()
 	local third = GetBool("game.thirdperson")
 	for p, b in pairs(c.bubbles) do
-		if p ~= me or third then PC.bubble(p, b.text, b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper) end
+		if p ~= me or third then PC.bubble(p, b.text, b.shout, math.max(0, math.min(1, (cfg.life - (now - b.t)) / 1.2)), false, b.whisper, b.mumble) end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
 		if (mode == "p" or mode == "w") and p ~= me and not c.bubbles[p] then
