@@ -69,6 +69,8 @@ local function machine(me, isHost, presetReg, prePC)
 	api.SetInt = function(k, v) env.reg[k] = math.floor(v) end
 	api.GetInt = function(k) return tonumber(env.reg[k]) or 0 end
 	api.SetString = function(k, v) env.reg[k] = tostring(v) end
+	api.SetFloat = function(k, v) env.reg[k] = tonumber(v) end
+	api.GetFloat = function(k) return tonumber(env.reg[k]) or 0 end
 	api.GetString = function(k) local v = env.reg[k]; if v == nil then return "" end return tostring(v) end
 	api.ClearKey = function(k) for key in pairs(env.reg) do if key == k or key:sub(1, #k + 1) == k .. "." then env.reg[key] = nil end end end
 	api.GetTime = function() return W.time end
@@ -102,6 +104,11 @@ local function machine(me, isHost, presetReg, prePC)
 	api.UiWidth = function() return 1920 end
 	api.UiWorldToPixel = function() if env.offscreen then return -400, 300, -10 end return 500, 300, 10 end
 	api.TransformToLocalPoint = function(t, p) return api.VecSub(p, t.pos) end
+	api.TransformToParentVec = function(t, v) return v end
+	api.QueryRaycast = function() return false, 0 end
+	env.spawned, env.deleted = {}, {}
+	api.Spawn = function(xml, t, static) env.spawned[#env.spawned + 1] = {xml = xml, t = t, static = static}; return {900 + #env.spawned} end
+	api.Delete = function(h) env.deleted[h] = true end
 	-- the mouse: env.hover = {w, h, n} is over the n-th rect of that size drawn this frame;
 	-- UiBlankButton fires (on release) there when env.release is set
 	local function over(counts, w, h)
@@ -287,6 +294,16 @@ local nShout, vShout = soundsFrom(P1, 4, "shout")
 check(nPlain >= 2 and nShout >= 1 and vPlain <= 0.751 and vShout <= 0.801,
 	string.format("shout volume: the shouted word at %.2f (cfg 0.8), the rest of the message stays at %.2f (a ! no longer raises it)", vShout, vPlain))
 W.pos[4] = Vec(8, 0, 0); steps(5)
+-- the event API: the host's registry gets every message (proxchat.said.*) for other mods (titans...)
+local said = P1.reg["proxchat.said.last"]
+local sk = "proxchat.said." .. (said % 16) .. "."
+check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "speak" and P1.reg[sk .. "shout"] == true
+	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 45 and P1.reg[sk .. "wordsRadius"] == 45
+	and math.abs(P1.reg[sk .. "x"] - 4) < 0.01 and P1.reg[sk .. "lobby"] == false,
+	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, heard to 45 m)")
+local pk = "proxchat.said." .. ((said - 1) % 16) .. "."
+check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "radius"] == 45, "API: the one before it is kept too (a ring of 16)")
+check(P2.reg["proxchat.said.last"] == nil, "API: host only (clients do not run the server)")
 check(#hist(P4) == 0, "P4 walked over later: still has not heard the old messages")
 waitRate()
 say(P2, "now you are close")
@@ -658,6 +675,64 @@ local P8 = addMachine(8, false, O.reg)
 W.pos[8] = Vec(0, 0, -3)
 steps(30)
 check(P1.shared.pcVoice[8] == 6 and P8.PC.c.hideHint and not drawn(P8, "Enter: chat", true), "the Options settings are used in game (voice synced, hint hidden)")
+
+-- ================================================================== the test dummies (/dummy)
+waitRate()
+say(P1, "/dummy")
+local DM = P1.PC.c.dummy
+local DW, DS, DH = P1.PC.DUMMY, P1.PC.DUMMY + 1, P1.PC.DUMMY + 2         -- (whisperer, speaker, shouter)
+check(DM and #DM.list == 3 and #P1.spawned == 3 and math.abs(DM.list[1].pos[3] + 3) < 0.01
+	and math.abs(DM.list[1].pos[1] - DM.list[3].pos[1]) > 4.9, "/dummy: three figures in a row 3 m in front of you, 2.5 m apart")
+steps(60)
+check(drawn(P1, "^%.%.%.$") ~= nil and not P1.PC.c.bubbles[DS], "they show '...' while they type")
+steps(70)
+local L1 = P1.PC.DUMMY_LINES[1]
+local bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
+check(bw and bw.whisper and bw.text == L1[1] and bs and not bs.whisper and not bs.shout and bs.text == L1[1] and bh and bh.shout and bh.text == L1[2],
+	"all three say the first line at once: whispered, spoken, shouted (3-5 m away: all full)")
+step()
+local R = P1.PC.c.bubbleRects or {}
+local apart, raised = #R >= 3, 0
+for i = 1, #R do
+	for j = i + 1, #R do
+		local u, v = R[i], R[j]
+		if u.left < v.right and u.right > v.left and u.top < v.bottom and u.bottom > v.top then apart = false end
+	end
+end
+for _, r in ipairs(R) do if r.bottom < R[1].bottom then raised = raised + 1 end end
+check(apart and raised == #R - 1, "bubbles on the same spot (the mock draws every head at one pixel): " .. #R .. " stacked, none covers another")
+local names = {}
+for _, e in ipairs(hist(P1)) do if P1.PC.isDummy(e.p) then names[#names + 1] = e.name end end
+check(#names == 3 and names[1]:find("^Whisperer %(") and names[2]:find("^Speaker %(") and names[3]:find("^Shouter %(") and names[1] ~= names[2]:gsub("Speaker", "Whisperer"),
+	"history: Whisperer / Speaker / Shouter, each in another voice: " .. table.concat(names, ", "))
+P1.sounds = {}
+steps(60)
+local wsnd, ssnd = 0, 0
+for _, x in ipairs(P1.sounds) do
+	if math.abs(x.pos[3] + 3) < 0.01 then
+		local clip = clipOf(P1, x)
+		if clip:find("whisper") then wsnd = wsnd + 1 elseif clip:find("shout") then ssnd = ssnd + 1 end
+	end
+end
+check(wsnd >= 2 and ssnd >= 2, string.format("you hear them: whisper clips (%d) and shout clips (%d) from where they stand", wsnd, ssnd))
+W.pos[1] = Vec(0, 0, 21)                                                    -- (walk back: 24 m)
+steps(60 * 6)
+bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
+local L2 = P1.PC.DUMMY_LINES[2]
+check(not bw and bs and bs.mumble and bh and bh.level == "shout" and P1.PC.bubbleText(DH, bh, 0) == L2[2],
+	"from 24 m: no whisper, the speaker garbled, the shouter readable (all shouted)")
+W.pos[1] = Vec(0, 0, 0)
+steps(60 * 6 * 8)
+local seen = {}
+for _, e in ipairs(hist(P1)) do if e.p == DS then seen[e.text] = true end end
+local all = true
+for _, l in ipairs(P1.PC.DUMMY_LINES) do if not seen[l[1]] then all = false end end
+check(all, "they go through every line")
+local others = 0
+for _, e in ipairs(hist(P2)) do if P1.PC.isDummy(e.p) then others = others + 1 end end
+check(others == 0, "only you have the dummies: nobody else hears them")
+say(P1, "/dummy")
+check(not P1.PC.c.dummy and P1.deleted[901] and P1.deleted[903] and not P1.PC.c.bubbles[DS], "/dummy again removes them")
 
 print(string.format("\n%d checks, %d failed", NCHECK, FAILED))
 if FAILED > 0 then os.exit(1) end

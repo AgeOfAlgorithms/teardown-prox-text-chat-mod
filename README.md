@@ -38,6 +38,12 @@ copies.
   - `/s`, `/w` and `/g` choose the mode (Speak, Whisper, Global), or say one line in it: `/w psst`.
   - `/voice` lists the voices; `/voice robot` picks one.
   - `/hint`, `/window`, `/clear`, `/help`.
+  - `/dummy`: three test figures in front of you (a whisperer, a speaker and a shouter) say the same
+    lines at the same time, in every voice and several languages. Walk back and forth to see and hear
+    every range. Only you see them. `/dummy` again removes them.
+
+Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
+a thin line connects it to its speaker.
 
 ## For game-mode makers
 
@@ -47,6 +53,40 @@ Mods can't call each other's functions, but the registry is shared. Your mod can
 SetBool("proxchat.lobby", true)          -- server: your lobby is up, everyone hears everything (false after)
 SetBool("proxchat.block", true)          -- client: Enter must not open the chat (your own text input is up)
 GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
+```
+
+**Chat events (server / host).** Every message is also published to the host's registry, so your
+game can react to it: monsters that hear shouting, guards that notice whispers, and so on. Events
+are kept in a ring of the last 16:
+
+| key `proxchat.said.<n % 16>.` + | value |
+|---|---|
+| `player` | int: who spoke |
+| `mode` | `"speak"`, `"whisper"` or `"global"` |
+| `shout` | bool: the message has a shouted word (Speak only) |
+| `x`, `y`, `z` | where the speaker stood (feet) |
+| `radius` | m: how far anyone hears anything (the babble): whisper 8, speak 30, shout 45, global 0 |
+| `wordsRadius` | m: how far the words are heard: whisper 5, speak 20, shout 45 |
+| `text` | the message |
+| `lobby` | bool: said while your lobby was up |
+
+`proxchat.said.last` is the newest event number. It counts up and never goes back. Read new events
+in your server script:
+
+```lua
+local saidSeen = 0
+function server.init() saidSeen = GetInt("proxchat.said.last") end
+function server.tick(dt)
+	local last = GetInt("proxchat.said.last")
+	for n = math.max(saidSeen + 1, last - 15), last do
+		local k = "proxchat.said." .. (n % 16) .. "."
+		if GetString(k .. "mode") ~= "global" then
+			local pos = Vec(GetFloat(k .. "x"), GetFloat(k .. "y"), GetFloat(k .. "z"))
+			onPlayerSpoke(GetInt(k .. "player"), pos, GetFloat(k .. "radius"), GetBool(k .. "shout"))
+		end
+	end
+	saidSeen = last
+end
 ```
 
 You can also `#include "chat_core.lua"` in your own script. Its API is documented at the top of that
