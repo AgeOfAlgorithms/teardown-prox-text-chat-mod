@@ -767,6 +767,20 @@ steps(3)
 P1.PC.cfg.bubbleW = 320
 local bl = P1.PC.c.bubbles[2]
 check(bl and math.abs((bl.extra or 0) - 3.6) < 1e-6, "its bubble stays up longer by the scrolling time")
+-- a reveal does not restart the scroll
+W.pos[3] = Vec(30, 0, 0)                                                  -- (26 m: P2's buffer)
+P3.PC.cfg.bubbleW = 200
+waitRate()
+say(P2, "/s " .. string.rep("abcdefghi ", 9))
+steps(60 * 3)                                                             -- (1.5 s hold + 1.5 s scrolling)
+local br = P3.PC.c.bubbles[2]
+local before = P3.PC.bubbleLayout(2, P3.PC.bubbleText(2, br, W.time), false, 1, false, false, br.mumble, br.scrollT or br.t)
+W.pos[3] = Vec(20, 0, 0); step()                                          -- (16 m: all revealed)
+local after = P3.PC.bubbleLayout(2, br.text, false, 1, false, false, false, br.scrollT or br.t)
+P3.PC.cfg.bubbleW = 320
+W.pos[3] = Vec(30, 0, 0)
+check(br.level == "full" and before.off > 10 and after.off >= before.off,
+	string.format("revealed mid-scroll: the scroll goes on (%.1f px before, %.1f after), not back to the top", before.off, after.off))
 
 -- ================================================================== the character limit on the input line
 press(P2, "return"); step()
