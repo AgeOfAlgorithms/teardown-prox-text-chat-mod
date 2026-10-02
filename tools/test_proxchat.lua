@@ -102,7 +102,11 @@ local function machine(me, isHost, presetReg, prePC)
 	end
 	api.UiHeight = function() return 1080 end
 	api.UiWidth = function() return 1920 end
-	api.UiWorldToPixel = function() if env.offscreen then return -400, 300, -10 end return 500, 300, 10 end
+	api.UiWorldToPixel = function()
+		if env.offscreen then return -400, 300, -10 end
+		if env.pixel then return env.pixel[1], env.pixel[2], 10 end
+		return 500, 300, 10
+	end
 	api.TransformToLocalPoint = function(t, p) return api.VecSub(p, t.pos) end
 	api.TransformToParentVec = function(t, v) return v end
 	api.QueryRaycast = function() return false, 0 end
@@ -745,6 +749,21 @@ P1.PC.cfg.bubbleW = 320
 local bl = P1.PC.c.bubbles[2]
 check(bl and math.abs((bl.extra or 0) - 3.6) < 1e-6, "its bubble stays up longer by the scrolling time")
 
+-- ================================================================== off screen and at the edges
+local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
+P1.offscreen = true
+local Lsh = P1.PC.bubbleLayout(2, "GRAB THE CHAIN NOW", true, 1, false, false, false, W.time)
+local Lwh = P1.PC.bubbleLayout(2, "psst over here", false, 1, false, true, false, W.time)
+local Ltd = P1.PC.bubbleLayout(2, "...", false, 1, true, false)
+P1.offscreen = nil
+check(inside(Lsh) and inside(Lwh) and not Ltd and Lsh.x > 960, "speaker off screen: shout and whisper bubbles too, on the edge on the speaker's side (not the typing dots)")
+P1.pixel = {3, 1076}
+local Lc = P1.PC.bubbleLayout(2, string.rep("abcdefghi ", 9), false, 1, false, false, false, W.time)
+P1.pixel = {1918, 2}
+local Lc2 = P1.PC.bubbleLayout(2, "hello there, top right", false, 1, false, false, false, W.time)
+P1.pixel = nil
+check(inside(Lc) and inside(Lc2), "a speaker at a corner of the screen: the whole bubble stays on screen")
+
 -- ================================================================== the test dummies (/dummy)
 waitRate()
 say(P1, "/dummy")
@@ -769,7 +788,7 @@ for i = 1, #R do
 	end
 end
 for _, r in ipairs(R) do if r.bottom < R[1].bottom then raised = raised + 1 end end
-check(apart and raised == #R - 1, "bubbles on the same spot (the mock draws every head at one pixel): " .. #R .. " stacked, none covers another")
+check(apart and raised >= 1, "bubbles on the same spot (the mock draws every head at one pixel): " .. #R .. " stacked (above, or below with no room left), none covers another")
 local names = {}
 for _, e in ipairs(hist(P1)) do if P1.PC.isDummy(e.p) then names[#names + 1] = e.name end end
 check(#names == 3 and names[1]:find("^Whisperer %(") and names[2]:find("^Speaker %(") and names[3]:find("^Shouter %(") and names[1] ~= names[2]:gsub("Speaker", "Whisperer"),

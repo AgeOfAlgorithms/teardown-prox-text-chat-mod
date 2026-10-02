@@ -43,7 +43,8 @@ copies.
     every range. Only you see them. `/dummy` again removes them.
 
 A bubble shows three lines; a longer message scrolls down inside it at reading pace (a thin bar shows
-where it is) and the bubble stays up until it has finished. Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
+where it is) and the bubble stays up until it has finished. When a speaker is off screen, their bubble sits on the screen edge on their side, and a bubble always
+stays wholly on screen. Bubbles never cover each other: when two would overlap, the higher one is raised above the other and
 a thin line connects it to its speaker.
 
 ## For game-mode makers
