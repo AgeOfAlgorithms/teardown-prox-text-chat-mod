@@ -214,7 +214,7 @@ for _, p in ipairs(P2.loads) do
 end
 check(clipsOk and nWhisper == 12, "all 32 clips load from snd/ and exist (12 whisper / Robot-whisper)")
 check(P2.shared.pcMsgs ~= P2.shared.pcMsgs and type(P2.shared.pcMsgs) == "table", "mock: every client read of shared is a fresh copy")
-check(drawn(P2, "^Proximity Chat %- Enter: talk to players near you %(Tab: whisper / everyone%)") ~= nil, "intro hint on screen")
+check(drawn(P2, "^Proximity Chat %- Enter: talk to players near you %(Tab: Whisper / Global%)") ~= nil, "intro hint on screen")
 
 -- ================================================================== the input line: modes, chips, Tab
 press(P2, "return")
@@ -275,8 +275,14 @@ waitRate()
 say(P2, "everyone come HERE!!")
 check(lastLine(P3, "p").text == "HERE!!", "a word ending in !! is shouted too")
 waitRate()
+P1.sounds = {}
 say(P2, "come here now!")
 check(lastLine(P3, "p").text == "now!", "a single ! is enough: that word is shouted")
+steps(60)
+local nPlain, vPlain = soundsFrom(P1, 4, "babble")
+local nShout, vShout = soundsFrom(P1, 4, "shout")
+check(nPlain >= 2 and nShout >= 1 and vPlain <= 0.751 and vShout <= 0.801,
+	string.format("shout volume: the shouted word at %.2f (cfg 0.8), the rest of the message stays at %.2f (a ! no longer raises it)", vShout, vPlain))
 W.pos[4] = Vec(8, 0, 0); steps(5)
 check(#hist(P4) == 0, "P4 walked over later: still has not heard the old messages")
 waitRate()

@@ -1,6 +1,6 @@
 """Babble-voice clips for Proximity Chat (chat_core.lua):
     babble0-7  syllables (nearby / everyone)
-    shout0-7   ALL-CAPS words, harsh
+    shout0-7   shouted words (CAPS or ending in "!"), strained, ~1.25x the babble
     robot0-3   the Robot voice
     whisper0-7 whispers: breathy, unvoiced (noise through the same vowel formants, no pitch pulse)
     rwhisper0-3 the Robot voice's whisper: a quiet filtered, bit-crushed hiss
@@ -52,15 +52,20 @@ def babble(vowel='a', f0=210.0, dur=0.095, onset=None, seed=0):
 
 
 def shout(vowel='a', f0=260.0, dur=0.1, onset=None, seed=0):
-    """An angry syllable (ALL-CAPS words): the babble pushed harder - a steeper pitch fall, rasp (noise
-    on the pulses) and soft-clipped, so it sounds strained and loud."""
+    """A raised-voice syllable (ALL-CAPS words / a word ending in "!"): the babble pushed a little - a
+    touch of rasp and a gentle soft clip, so it sounds strained. Its loudness is matched to SHOUT_RMS x
+    the plain syllable's (the first version, tanh(4y) + heavy rasp, was ~2.2x and too aggressive)."""
     rng = np.random.default_rng(100 + seed)
-    y = babble(vowel, f0, dur, onset, seed).astype(float) / 32767
-    t = np.arange(len(y)) / SR
-    y = y * (1 + 0.5 * rng.normal(0, 1, len(y)) * np.exp(-t * 20))     # rasp at the start
-    y = np.tanh(y * 4.0)                                               # pushed into distortion
-    y = y / np.abs(y).max()
-    return (y * 0.9 * 32767).astype(np.int16)
+    base = babble(vowel, f0, dur, onset, seed).astype(float) / 32767
+    t = np.arange(len(base)) / SR
+    y = base * (1 + 0.2 * rng.normal(0, 1, len(base)) * np.exp(-t * 30))   # a little rasp at the start
+    y = np.tanh(y * 1.8)                                                     # a gentle soft clip
+    y = y * SHOUT_RMS * np.sqrt((base ** 2).mean() / (y ** 2).mean())
+    y = y * min(1.0, 0.95 / np.abs(y).max())
+    return (y * 32767).astype(np.int16)
+
+
+SHOUT_RMS = 1.25
 
 
 def robot(f=520.0, dur=0.08, seed=0):
