@@ -1404,8 +1404,8 @@ function PC.edgePoint(pos)
 	dx, dy = dx / l, dy / l
 	local W, H = UiWidth(), UiHeight()
 	local cx, cy = W / 2, H / 2
-	local kx = math.abs(dx) > 1e-3 and ((dx > 0 and (W - 110 - cx) or (cx - 110)) / math.abs(dx)) or 1e9
-	local ky = math.abs(dy) > 1e-3 and ((dy > 0 and (H - 60 - cy) or (cy - 130)) / math.abs(dy)) or 1e9
+	local kx = math.abs(dx) > 1e-3 and (cx / math.abs(dx)) or 1e9      -- (to the very edge: the layout then keeps
+	local ky = math.abs(dy) > 1e-3 and (cy / math.abs(dy)) or 1e9      --  the whole bubble on screen)
 	local k = math.min(kx, ky)
 	return cx + dx * k, cy + dy * k
 end
@@ -1427,7 +1427,8 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
 		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
-		scale = 0.8
+		local dist = VecLength(VecSub(head, GetCameraTransform().pos))    -- (sized by distance like any bubble)
+		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, dist)))
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local font, size = PC.bubbleFont(text)
