@@ -447,6 +447,22 @@ W.pos[3] = Vec(34, 0, 0); step(); step()                            -- (30 m: in
 check(not bh.hidden and bh.mumble and #hist(P3) == nh2 + 1 and garbled(lastLine(P3, "p").text), "walking into the buffer while it is up: the bubble shows, garbled, and a history line starts")
 W.pos[3] = Vec(24, 0, 0); step(); step()                            -- (20 m: in range)
 check(bh.text == "quietly now nobody hears this" and lastLine(P3, "p").text == "quietly now nobody hears this" and #hist(P3) == nh2 + 1, "... and in range the words show; the same history line")
+-- a whisper is private: only who was within its reach (buffer included) when it was said gets it
+W.pos[3] = Vec(34, 0, 0)                                            -- (30 m: beyond the whisper's 13 m)
+waitRate()
+say(P2, "/w only for the ones near me")
+W.pos[3] = Vec(7, 0, 0); step(); step()                             -- (3 m: walks right up while it is up)
+local bq = P3.PC.c.bubbles[2]
+check(not (bq and bq.whisper) and not hasLine(P3, "w", "only for the ones near me") and not garbled((lastLine(P3, "w") or {}).text),
+	"a whisper said out of reach: walking up while its bubble is up shows nothing (private)")
+W.pos[3] = Vec(30, 0, 0)
+W.pos[5] = Vec(14, 0, 0)                                            -- (10 m: the whisper buffer)
+waitRate()
+say(P2, "/w step closer to hear")
+check(P5.PC.c.bubbles[2] and P5.PC.c.bubbles[2].mumble and lastLine(P5, "w").text ~= "step closer to hear", "P5 in the whisper buffer when it was said: garbled")
+W.pos[5] = Vec(8, 0, 0); step(); step()                             -- (4 m)
+check(lastLine(P5, "w").text == "step closer to hear" and not P5.PC.c.bubbles[2].mumble, "... and stepping closer reveals it (it was within reach)")
+W.pos[5] = Vec(14, 0, 0)
 W.pos[3] = Vec(30, 0, 0)
 W.pos[5] = Vec(15, 0, 0)                                            -- (11 m from P2)
 waitRate()
