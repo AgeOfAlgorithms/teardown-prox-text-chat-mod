@@ -253,8 +253,9 @@ end
 -- revealed: a fixed share of the letters (frac, 0-1) chosen per message (seed), so walking closer
 -- uncovers more of the same message. Spaces and punctuation stay (the shape of the sentence shows);
 -- keepShouts leaves shouted words readable. With several PC.GARBLE glyphs they shimmer with tick.
--- The glyph: ⬚ (U+2B1A). Only the game's CJK fonts have it, so a garbled bubble is drawn in bold_sc.ttf
--- (PC.scriptOf counts it as "cjk"; that font has Latin and Cyrillic too).
+-- The glyph: ⬚ (U+2B1A). Our Pangolin has it (added by tools/add_box_glyph.py); of the game's fonts
+-- only the CJK ones do, so without Pangolin a garbled bubble falls back to bold_sc.ttf (PC.scriptOf
+-- counts ⬚ as "cjk"; that font has Latin and Cyrillic too).
 PC.GARBLE = {"\226\172\154"}
 local function hash01(a, b, c)
 	return ((a * 73856093 + b * 19349663 + c * 83492791) % 1000003) / 1000003
@@ -334,6 +335,7 @@ PC.BUBBLE_CHARS = {
 	{0x2010, 0x2010}, {0x2012, 0x2015}, {0x2018, 0x201A}, {0x201C, 0x201E}, {0x2020, 0x2022},     -- punctuation
 	{0x2026, 0x2026}, {0x2030, 0x2030}, {0x2039, 0x203A}, {0x20AB, 0x20AE}, {0x20B4, 0x20B4},
 	{0x20BD, 0x20BD}, {0x2116, 0x2116}, {0x2122, 0x2122},
+	{0x2B1A, 0x2B1A},                                                                         -- (⬚: added, PC.GARBLE)
 }
 
 -- the font and size of a speech bubble with this text
