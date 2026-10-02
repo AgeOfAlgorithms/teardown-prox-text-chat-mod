@@ -14,7 +14,7 @@
 --     within range while the bubble is up shows the words and completes that line. A Speak message
 --     said out of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while
 --     it is up shows it (no babble then). Not a whisper: it is private to who was within its reach.
---   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (13 m) is garbled
+--   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (12 m) is garbled
 --     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
 --     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
 --     your head, no echo; the voice's pitch still shifts it a little.
@@ -32,6 +32,10 @@
 --   an overlapping one is raised above, with a thin line down to its speaker. A bubble shows
 --   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
 --   the bubble stays up that much longer (b.extra).
+--
+-- DISTANCES: the host sets them for everyone on the Settings page (PC.rangeBar: whisper, speak, shout;
+--   each buffer a share of its range: cfg.whisperBuf / speakBuf / shoutBuf), shared.pcRanges; a map may
+--   SetString("proxchat.ranges", "w,s,sh"). PC.applyRanges sets cfg.whisperR .. shoutMumbleR.
 --
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
 --   Whisper lines they were in range of at the moment each arrived (only the shouted words from
@@ -111,12 +115,16 @@ do
 		shoutMumbleR = 55,       -- m: the shouts' buffer beyond shoutR: the shouted words garbled, the rest boxes
 		whisperR = 8,            -- m: who hears a whisper
 		mumbleR = 35,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
-		whisperMumbleR = 13,     -- m: Whisper's buffer beyond whisperR (nothing beyond it)
+		whisperMumbleR = 12,     -- m: Whisper's buffer beyond whisperR (nothing beyond it)
 		bubbleW = 320,           -- px: a bubble's text wraps at this width
 		bubbleLines = 3,         -- lines a bubble shows; longer messages scroll down inside it
 		scrollHold = 1.5,        -- s before a long message starts scrolling
 		scrollLine = 1.8,        -- s per line while it scrolls (the bubble stays up that much longer)
 		revealHold = 1,          -- s a bubble stays up at least once it is fully revealed (no other reveal extends it)
+		whisperBuf = 0.5,        -- each buffer as a share of its range: whisper 8 -> 12 m, speech 25 -> 35 m,
+		speakBuf = 0.4,          --   shout 40 -> 55 m (the host's distance bar keeps these shares)
+		shoutBuf = 0.375,
+		rangeMin = 2, rangeMax = 80,  -- m: the host's distance bar
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s after the last of them spoke, before the next line
@@ -591,6 +599,10 @@ function PC.serverInit()
 	shared.pcLobby = false
 	shared.pcAck = {}
 	shared.pcNow = 0
+	-- the distances: the host's last choice, else the defaults (a map can set proxchat.ranges, see serverTick)
+	PC.defaultRanges = PC.defaultRanges or {PC.cfg.whisperR, PC.cfg.chatR, PC.cfg.shoutR}
+	local w, sp, sh = GetString(PC.cfg.save .. "ranges"):match("^([%d%.]+),([%d%.]+),([%d%.]+)$")
+	if w then PC.setRanges(w, sp, sh, false) else PC.setRanges(PC.defaultRanges[1], PC.defaultRanges[2], PC.defaultRanges[3], false) end
 end
 
 function PC.S()
@@ -611,6 +623,47 @@ function PC.validMode(m)
 	if PC.inLobby() then return "g" end
 	if m == "g" or m == "w" then return m end
 	return "p"
+end
+
+-- the distances (words reach) for whisper, speech and shout; each buffer follows as its share
+function PC.applyRanges(w, sp, sh)
+	local cfg = PC.cfg
+	cfg.whisperR, cfg.chatR, cfg.shoutR = w, sp, sh
+	cfg.whisperMumbleR = w * (1 + cfg.whisperBuf)
+	cfg.mumbleR = sp * (1 + cfg.speakBuf)
+	cfg.shoutMumbleR = sh * (1 + cfg.shoutBuf)
+end
+
+-- whole metres, rangeMin..rangeMax, whisper < speech < shout (1 m apart at least); nil if not numbers
+function PC.cleanRanges(w, sp, sh)
+	local cfg = PC.cfg
+	w, sp, sh = tonumber(w), tonumber(sp), tonumber(sh)
+	if not (w and sp and sh) then return nil end
+	local function r(x, lo, hi) return math.max(lo, math.min(hi, math.floor(x + 0.5))) end
+	w = r(w, cfg.rangeMin, cfg.rangeMax - 2)
+	sp = r(sp, w + 1, cfg.rangeMax - 1)
+	sh = r(sh, sp + 1, cfg.rangeMax)
+	return w, sp, sh
+end
+
+-- server: set the distances for everyone (shared.pcRanges); save: the host's choice for next time
+function PC.setRanges(w, sp, sh, save)
+	local s, cfg = PC.S(), PC.cfg
+	w, sp, sh = PC.cleanRanges(w, sp, sh)
+	if not w then return end
+	PC.applyRanges(w, sp, sh)
+	s.rangeN = (s.rangeN or 0) + 1
+	shared.pcRanges = {w = w, p = sp, s = sh, n = s.rangeN}
+	if save then SetString(cfg.save .. "ranges", w .. "," .. sp .. "," .. sh) end
+	PC.log(string.format("proxchat ranges whisper=%d speak=%d shout=%d", w, sp, sh))
+end
+
+-- the host moved the distance bar (or pressed Reset)
+function server.pc_ranges(p, w, sp, sh)
+	p = tonumber(p)
+	local okH, host = pcall(IsPlayerHost, p)
+	if not (p and okH and host) then return end
+	PC.setRanges(w, sp, sh, true)
 end
 
 -- every player (server)
@@ -677,7 +730,7 @@ end
 --   proxchat.said.<n % 16>.player   int: who spoke
 --   ... .mode   "speak" / "whisper" / "global"       ... .shout  bool: a shouted word (Speak only)
 --   ... .x .y .z  where the speaker stood (feet)       ... .text   string
---   ... .radius   m: how far anyone hears anything (the babble): whisper 13, speak 35, shout 55, global 0
+--   ... .radius   m: how far anyone hears anything (the babble): whisper 12, speak 35, shout 55, global 0 (defaults; the host may change them)
 --   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, shout 40 (shouted words only)
 --   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
@@ -743,6 +796,13 @@ function PC.serverTick(dt)
 	s.time = s.time + dt
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
+	-- a map or game mode may set its distances: SetString("proxchat.ranges", "whisper,speak,shout")
+	local reg = GetString(PC.cfg.reg .. ".ranges")
+	if reg ~= "" and reg ~= s.regRanges then
+		s.regRanges = reg
+		local w, sp, sh = reg:match("^%s*([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)%s*$")
+		if w then PC.setRanges(w, sp, sh, false) end
+	end
 	for _, p in ipairs(PC.removedPlayers()) do
 		s.last[p], s.seq[p] = nil, nil
 		if (shared.pcAck or {})[p] then
@@ -1046,6 +1106,12 @@ function PC.clientTick(dt)
 		for p, b in pairs(tbl) do
 			if now - b.t > PC.bubbleLife(b) + (b.extra or 0) then tbl[p] = nil end
 		end
+	end
+	local rg = shared.pcRanges
+	if rg and rg.n and rg.n ~= c.rangesN then                         -- (the host's distances)
+		c.rangesN = rg.n
+		PC.applyRanges(rg.w, rg.p, rg.s)
+		c.rangesWant = nil
 	end
 	PC.pump(now)
 	PC.dummyTick(now)
@@ -1368,7 +1434,7 @@ function PC.babbleTick()
 					local cam = GetCameraTransform().pos
 					if q.how == "flat" then
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
-					elseif q.how == "whisper" then                          -- (no echo; quiet toward 13 m)
+					elseif q.how == "whisper" then                          -- (no echo; quiet toward its reach)
 						local d = VecLength(VecSub(pos, cam))
 						local v = base * PC.loudness(d, PC.cfg.whisperMumbleR + PC.cfg.soundGrace, PC.cfg.whisperR)
 						if v > 0 then PlaySound(clip, PC.soundPos(pos, cam), v, false, pitch) end   -- (walked out of earshot: silent)
@@ -2073,6 +2139,10 @@ function PC.drawSettings(W, H)
 		end
 		UiPop()
 	end
+	if PC.isHost() then
+		UiTranslate(0, #rows * 40 + 10)
+		PC.rangeBar(W)
+	end
 	UiPop()
 end
 
@@ -2113,9 +2183,94 @@ end
 
 -- the chat window: a header (title, and right-aligned the Settings / Back button), then the history
 -- or the Settings page
+function PC.isHost()
+	local ok, h = pcall(IsPlayerHost, GetLocalPlayer())
+	return ok and h == true
+end
+
+-- the host's distance bar (Settings): 0..rangeMax m, a knob each for whisper, speech and shout (how far
+-- the words carry); each range shaded, its buffer lighter. Dragging a knob and letting go sends it.
+PC.RANGE_KINDS = {{"Whisper", {0.78, 0.78, 0.95}, "whisperBuf"}, {"Speak", {1, 0.82, 0.3}, "speakBuf"}, {"Shout", {1, 0.4, 0.32}, "shoutBuf"}}
+function PC.rangeBar(W)
+	local c, cfg = PC.C(), PC.cfg
+	local bw = W - 64
+	local vals = c.dragVals or c.rangesWant or {cfg.whisperR, cfg.chatR, cfg.shoutR}
+	UiPush()
+	UiAlign("left middle")
+	UiFont("regular.ttf", 22)
+	UiColor(1, 1, 1, 0.85)
+	UiPush(); UiTranslate(0, 14); UiText("Distances (host: for everyone) - drag a knob"); UiPop()
+	UiPush()                                                          -- (Reset: the defaults)
+	UiTranslate(bw - 110, 0)
+	local hoverR = c.typing and UiIsMouseInRect(110, 30)
+	if c.typing and PC.clicked("rangeReset", 110, 30, hoverR) then
+		local d = PC.defaultRanges or {8, 25, 40}
+		c.rangesWant = {d[1], d[2], d[3]}
+		ServerCall("server.pc_ranges", GetLocalPlayer(), d[1], d[2], d[3])
+	end
+	UiColor(1, 1, 1, hoverR and 0.2 or 0.08)
+	UiRoundedRect(110, 30, 8)
+	UiTranslate(55, 15)
+	UiAlign("center middle")
+	UiFont("regular.ttf", 20)
+	UiColor(1, 1, 1, 0.8)
+	UiText("Reset")
+	UiPop()
+	UiTranslate(0, 50)                                                -- (the bar)
+	UiAlign("left top")
+	UiColor(1, 1, 1, 0.08)
+	UiRect(bw, 12)
+	for i = 3, 1, -1 do                                               -- (shout under speech under whisper)
+		local k = PC.RANGE_KINDS[i]
+		local r = vals[i]
+		local col = k[2]
+		UiColor(col[1], col[2], col[3], 0.25)
+		UiRect(math.min(bw, r * (1 + cfg[k[3]]) / cfg.rangeMax * bw), 12)
+		UiColor(col[1], col[2], col[3], 0.6)
+		UiRect(math.min(bw, r / cfg.rangeMax * bw), 12)
+	end
+	for i, k in ipairs(PC.RANGE_KINDS) do                             -- (the knobs)
+		UiPush()
+		UiTranslate(vals[i] / cfg.rangeMax * bw - 8, -10)
+		local hover = c.typing and UiIsMouseInRect(16, 32)
+		if c.typing and not c.drag and PC.clicked("knob" .. i, 16, 32, hover) then
+			c.drag, c.dragVals = i, {vals[1], vals[2], vals[3]}
+		end
+		local col = k[2]
+		UiColor(0, 0, 0, 0.8)
+		UiRoundedRect(16, 32, 5)
+		UiTranslate(2, 2)
+		UiColor(col[1], col[2], col[3], (hover or c.drag == i) and 1 or 0.85)
+		UiRoundedRect(12, 28, 4)
+		UiPop()
+	end
+	if c.drag then
+		if c.typing and InputDown("lmb") then
+			local mx = UiGetMousePos()
+			local v = mx / bw * cfg.rangeMax
+			local lo = c.drag == 1 and cfg.rangeMin or c.dragVals[c.drag - 1] + 1
+			local hi = c.drag == 3 and cfg.rangeMax or c.dragVals[c.drag + 1] - 1
+			c.dragVals[c.drag] = math.max(lo, math.min(hi, math.floor(v + 0.5)))
+		else                                                          -- (let go: send it)
+			local v = c.dragVals
+			c.rangesWant = {v[1], v[2], v[3]}
+			c.drag, c.dragVals = nil, nil
+			ServerCall("server.pc_ranges", GetLocalPlayer(), v[1], v[2], v[3])
+		end
+	end
+	UiTranslate(0, 30)                                                -- (what they are)
+	UiFont("regular.ttf", 20)
+	UiColor(1, 1, 1, 0.75)
+	local function f(x) return string.format("%d", math.floor(x + 0.5)) end
+	UiText(string.format("Whisper %s m (garbled to %s)    Speak %s m (to %s)    Shout %s m (to %s)",
+		f(vals[1]), f(vals[1] * (1 + cfg.whisperBuf)), f(vals[2]), f(vals[2] * (1 + cfg.speakBuf)), f(vals[3]), f(vals[3] * (1 + cfg.shoutBuf))))
+	UiPop()
+end
+
 function PC.drawWindow()
 	local c, cfg = PC.C(), PC.cfg
 	local W, H = cfg.winW, cfg.winH
+	if c.page == "settings" and PC.isHost() then H = H + 110 end      -- (room for the host's distance bar)
 	UiPush()
 	UiTranslate(24, UiHeight() - 160 - H)
 	UiAlign("left top")
