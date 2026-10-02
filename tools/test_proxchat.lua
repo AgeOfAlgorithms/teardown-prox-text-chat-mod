@@ -100,7 +100,8 @@ local function machine(me, isHost, presetReg, prePC)
 	end
 	api.UiHeight = function() return 1080 end
 	api.UiWidth = function() return 1920 end
-	api.UiWorldToPixel = function() return 500, 300, 10 end
+	api.UiWorldToPixel = function() if env.offscreen then return -400, 300, -10 end return 500, 300, 10 end
+	api.TransformToLocalPoint = function(t, p) return api.VecSub(p, t.pos) end
 	-- the mouse: env.hover = {w, h, n} is over the n-th rect of that size drawn this frame;
 	-- UiBlankButton fires (on release) there when env.release is set
 	local function over(counts, w, h)
@@ -257,11 +258,13 @@ check(hasLine(P1, "p", "hello there") and hasLine(P5, "p", "hello there") and ha
 check(#hist(P3) == 0 and #hist(P4) == 0, "P3 (26 m) and P4 (56 m) did not get it, not even in history")
 check(P1.PC.c.bubbles[2] and P1.PC.c.bubbles[2].text == "hello there" and not P1.PC.c.bubbles[2].whisper, "P1 has a normal speech bubble over P2")
 check(drawn(P1, "^%[speak%] $") and drawn(P1, "^P2: $") and drawn(P1, "^hello there$"), "P1's feed: '[speak] P2: hello there'")
-P1.sounds, P4.sounds = {}, {}
+P1.sounds, P4.sounds, P3.sounds = {}, {}, {}
 steps(60)
 local nb = soundsFrom(P1, 4, "babble")
 check(nb >= 4, "P1 hears the babble at P2's head (" .. nb .. " syllables)")
 check(#P4.sounds == 0, "P4 hears no babble")
+check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].mumble and P3.PC.c.bubbles[2].text == "..." and #hist(P3) == 0, "P3 (26 m, the buffer): a '...' bubble, no words, no history line")
+check(soundsFrom(P3, 4, "babble") >= 4, "P3 hears the babble from the buffer")
 waitRate()
 press(P2, "return"); typeText(P2, "second line\n"); step(); step()
 check(lastLine(P1, "p").text == "second line" and not P2.PC.c.typing, "a newline returned by the field sends too")
@@ -356,6 +359,36 @@ check(drawn(P1, "^%[speak%] $") and drawn(P1, "^%[whisper%] $") and drawn(P1, "^
 	"P1's window shows one history with [speak] / [whisper] / [global] tags")
 press(P1, "esc"); step()
 check(not P1.PC.c.typing and not drawn(P1, "^Chat$") and not drawn(P1, "^Say "), "Esc closes the line and the window")
+
+-- ================================================================== the buffer range: "..." until you come closer
+waitRate()
+say(P2, "/s meet me at the tower")
+local n3 = #hist(P3)
+check(P3.PC.c.bubbles[2].mumble and lastLine(P3, "p").text ~= "meet me at the tower", "P3 (26 m): '...' only")
+W.pos[3] = Vec(20, 0, 0); step(); step()                            -- (16 m from P2)
+local b3 = P3.PC.c.bubbles[2]
+check(b3 and not b3.mumble and b3.text == "meet me at the tower" and lastLine(P3, "p").text == "meet me at the tower" and #hist(P3) == n3 + 1,
+	"P3 walks into range while the bubble is up: the words show and join the history")
+steps(5)
+check(#hist(P3) == n3 + 1, "... once")
+W.pos[3] = Vec(30, 0, 0)
+waitRate()
+say(P2, "/s the KEY is here")
+check(lastLine(P3, "p").text == "KEY" and #hist(P3) == n3 + 2, "a shout from 26 m: only the shouted word")
+W.pos[3] = Vec(20, 0, 0); step(); step()
+check(lastLine(P3, "p").text == "the KEY is here" and not lastLine(P3, "p").far and #hist(P3) == n3 + 2, "closer: that history line is completed (not a second one)")
+W.pos[3] = Vec(30, 0, 0)
+W.pos[5] = Vec(11, 0, 0)                                            -- (7 m from P2)
+waitRate()
+say(P2, "/w quiet now")
+local b5 = P5.PC.c.bubbles[2]
+check(b5 and b5.mumble and b5.whisper and b5.text == "..." and lastLine(P5).text ~= "quiet now", "a whisper from 7 m (its buffer): '...'")
+W.pos[5] = Vec(14, 0, 0)
+waitRate()
+say(P2, "/s over here")
+P3.offscreen = true; step()
+check(drawn(P3, "^%.%.%.$"), "P2 off P3's screen: the '...' is still drawn (on the screen edge)")
+P3.offscreen = nil
 
 -- ================================================================== the Settings page
 press(P2, "return")
