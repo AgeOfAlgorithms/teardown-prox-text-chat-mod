@@ -1729,6 +1729,7 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	if not feet then return nil end
 	local head = VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
+	local dist = VecLength(VecSub(head, GetCameraTransform().pos))
 	local scale, docked = nil, false
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, d)))
@@ -1737,7 +1738,6 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	else
 		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
 		docked = true
-		local dist = VecLength(VecSub(head, GetCameraTransform().pos))    -- (sized by distance like any bubble)
 		scale = math.max(0.55, math.min(1.1, 9 / math.max(1, dist)))
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
@@ -1762,7 +1762,7 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0)
 	y = math.max(M + up, math.min(UiHeight() - M, y))
 	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
 	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime,
-		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked,
+		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked, dist = dist,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 
@@ -1898,7 +1898,17 @@ function PC.drawBubbles()
 			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
 		end
 	end
-	for _, L in ipairs(PC.layoutBubbles(list)) do L.op = op; PC.bubbleDraw(L) end
+	-- drawn farthest speaker first (each with its line): a nearer speaker's bubble covers the lines of
+	-- bubbles raised above it from farther away; a speaker's older bubble before its newest
+	local order = {}
+	for i, L in ipairs(PC.layoutBubbles(list)) do order[i] = L end
+	table.sort(order, function(u, v)
+		if math.abs((u.dist or 0) - (v.dist or 0)) > 1e-3 then return (u.dist or 0) > (v.dist or 0) end
+		if (u.age or 1) ~= (v.age or 1) then return (u.age or 1) > (v.age or 1) end
+		return u.p < v.p
+	end)
+	PC.drawOrder = order
+	for _, L in ipairs(order) do L.op = op; PC.bubbleDraw(L) end
 end
 
 -- a small two-way switch on the Settings page; returns the new value when clicked, else nil
