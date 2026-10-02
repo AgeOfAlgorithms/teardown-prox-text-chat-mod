@@ -29,7 +29,8 @@ copies.
 
 ## Use
 
-- **Enter**: open the chat line and the chat window. Enter again sends; **Esc** closes.
+- **Enter**: open the chat line and the chat window. Enter again sends; **Esc** closes. A message can
+  be up to 90 characters; a count shows from 60.
 - **Tab** while typing, or click **Speak / Whisper / Global** at the end of the line, to choose
   how you speak. Your last choice is remembered.
 - **Settings** (button at the top right of the chat window): pick your voice (Squeaky, Chirpy, Plain,

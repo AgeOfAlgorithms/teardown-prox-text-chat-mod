@@ -749,6 +749,16 @@ P1.PC.cfg.bubbleW = 320
 local bl = P1.PC.c.bubbles[2]
 check(bl and math.abs((bl.extra or 0) - 3.6) < 1e-6, "its bubble stays up longer by the scrolling time")
 
+-- ================================================================== the character limit on the input line
+press(P2, "return"); step()
+typeText(P2, string.rep("a", 50)); step()
+check(P2.PC.c.typing and not drawn(P2, "^%d+/90$"), "under 60 characters: no count")
+typeText(P2, string.rep("b", 15)); step()
+check(drawn(P2, "^65/90$") ~= nil, "from 60 characters the line shows the count (65/90)")
+typeText(P2, string.rep("c", 40)); step(); step()
+check(P2.PC.utf8Len(P2.PC.c.text) == 90 and drawn(P2, "^90/90$") ~= nil, "the field stops at 90 characters (90/90, red)")
+press(P2, "esc"); step()
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
