@@ -606,7 +606,7 @@ end
 
 function PC.serverInit()
 	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false, chan = {}, walls = nil,
-		wallsHost = not GetBool(PC.cfg.save .. "wallsoff")}          -- (walls: on unless the host turned them off)
+		wallsHost = GetBool(PC.cfg.save .. "wallson")}               -- (walls: off unless the host turned them on)
 	ClearKey(PC.cfg.reg)
 	shared.pcMsgs = {}
 	shared.pcVoice = {}
@@ -682,7 +682,7 @@ function server.pc_walls(p, on)
 	local okH, host = pcall(IsPlayerHost, p)
 	if not (p and okH and host) then return end
 	PC.S().wallsHost = on and true or false
-	SetBool(PC.cfg.save .. "wallsoff", not on)
+	SetBool(PC.cfg.save .. "wallson", on and true or false)
 end
 
 -- the host moved the distance bar (or pressed Reset)
@@ -843,7 +843,7 @@ function PC.serverTick(dt)
 	PC.heartbeat()
 	-- a game's switches (set every tick by it): walls, and who talks only to the dead
 	-- walls: the game's word for its map (proxchat.walls true / false, when it sets it), else the host's
-	-- Settings (on unless turned off)
+	-- Settings (off unless turned on)
 	local by = HasKey(PC.cfg.reg .. ".walls") and "game" or "host"
 	local walls
 	if by == "game" then walls = GetBool(PC.cfg.reg .. ".walls") else walls = s.wallsHost end
@@ -1025,7 +1025,7 @@ function PC.distTo(p)
 	return VecLength(VecSub(a, b))
 end
 
--- WALLS (on by default; the host's Settings can turn them off, and a game that sets proxchat.walls true /
+-- WALLS (off by default; the host's Settings can turn them on, and a game that sets proxchat.walls true /
 -- false decides for its map instead -> shared.pcWalls). How far a voice SOUNDS (PC.hearDist):
 --   1. a beam, every cfg.wallEvery s per speaker: 9 parallel rays from the listener's head toward the
 --      speaker's on a 3 x 3 grid cfg.wallBeam m apart (up / down / sideways of the straight line), against
