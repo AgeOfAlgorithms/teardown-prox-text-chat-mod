@@ -2,4 +2,5 @@ name = Proximity Babble Chat
 author = McPuppetFace
 description = Talk to the players around you. Press Enter and type: a speech bubble pops up over your head and nearby players hear you babble in your own cartoon voice. Tab picks how you are heard: Whisper (8 m, private), Speak (25 m), Shout (40 m) or Global (everyone). Farther away, words come through garbled. Works in any level or game mode, in every language. The host turns it on under Global mods and can change the distances. /help lists the commands.
 tags = Gameplay
+preview = preview_td.jpg
 version = 2
