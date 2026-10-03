@@ -211,11 +211,11 @@ end
 ![Is there a way around?](docs/walls_2_around.png)
 ![Through the wall](docs/walls_3_through.png)
 
-Walls, floors and roofs muffle voices. This is **on by default**; the host can turn it off in the chat's
-Settings ("Walls muffle voices", for everyone).
+Walls, floors and roofs can muffle voices. This is **off by default**; the host can turn it on in the
+chat's Settings ("Walls muffle voices", for everyone).
 
-**Server, bool.** Your map or game mode can decide instead: set `proxchat.walls` to `true` (on, even if
-the host turned it off) or `false` (off) every tick. While you set it, the host's row says "by the
+**Server, bool.** Your map or game mode can decide instead: set `proxchat.walls` to `true` (on, whatever
+the host chose) or `false` (off) every tick. While you set it, the host's row says "by the
 game". Stop setting it and the host's choice applies again.
 
 Each player's game works out how far a speaker **sounds**, and that decides both the words they make

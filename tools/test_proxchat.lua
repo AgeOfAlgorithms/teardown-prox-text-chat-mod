@@ -1275,7 +1275,7 @@ do
 	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(15, 0, 0), Vec(0, 0, 90), Vec(0, 0, -90), Vec(90, 0, 0)
 	local wall = {lo = Vec(7, -5, -40), hi = Vec(7.3, 30, 40)}                  -- (a wall between P1 and P2, 15 m apart)
 	W.boxes, W.pathAround = {wall}, nil
-	check(P1.shared.pcWalls == true and P1.shared.pcWallsBy == "host", "walls are on by default (the host's setting)")
+	check(P1.shared.pcWalls == false and P1.shared.pcWallsBy == "host", "walls are off by default (the host's setting)")
 	-- the host's Settings: a row only the host has, On / Off for everyone
 	if P1.PC.c.typing then press(P1, "esc"); step() end
 	say(P1, "/settings"); step()
@@ -1284,12 +1284,14 @@ do
 	say(P2, "/settings"); step()
 	check(not drawn(P2, "^Walls muffle voices"), "... a guest's Settings: no such row")
 	press(P2, "esc"); step()
-	P1.hover = {120, 40, 8}; P1.keys.lmb = true; step(); P1.hover = nil; step(); step()   -- (Off)
-	check(P1.shared.pcWalls == false and P2.shared.pcWalls == false and HOST.reg["savegame.mod.pcwallsoff"] == true,
-		"the host clicks Off: walls off for everyone (saved)")
+	P1.hover = {120, 40, 7}; P1.keys.lmb = true; step(); P1.hover = nil; step(); step()   -- (On)
+	check(P1.shared.pcWalls == true and P2.shared.pcWalls == true and HOST.reg["savegame.mod.pcwallson"] == true,
+		"the host clicks On: walls on for everyone (saved)")
 	press(P1, "esc"); step()
-	HOST.server.pc_walls(2, true); steps(2)
-	check(P1.shared.pcWalls == false, "... a guest cannot turn them back on")
+	HOST.server.pc_walls(2, false); steps(2)
+	check(P1.shared.pcWalls == true, "... a guest cannot turn them off")
+	HOST.server.pc_walls(1, false); steps(2)
+	check(P1.shared.pcWalls == false and HOST.reg["savegame.mod.pcwallson"] == false, "the host turns them off again")
 	waitRate(); say(P2, "/s through the wall")
 	check(lastLine(P1, "s").text == "through the wall" and P1.PC.hearDist(2) == 15, "walls off: a wall changes nothing")
 	HOST.reg["proxchat.walls"] = true; steps(20)
@@ -1342,10 +1344,8 @@ do
 	W.boxes = nil
 	HOST.reg["proxchat.walls"] = false; steps(2)
 	check(P1.shared.pcWalls == false and math.abs(P1.PC.hearDist(2) - P1.PC.distTo(2)) < 1e-6, "a game sets proxchat.walls = false: off for its map")
-	HOST.reg["proxchat.walls"] = nil
-	HOST.server.pc_walls(1, true); steps(2)
-	check(P1.shared.pcWalls == true and P1.shared.pcWallsBy == "host" and HOST.reg["savegame.mod.pcwallsoff"] == false,
-		"the game leaves it to the host again, who turns walls back on")
+	HOST.reg["proxchat.walls"] = nil; steps(2)
+	check(P1.shared.pcWalls == false and P1.shared.pcWallsBy == "host", "the game leaves it to the host again (off)")
 	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), keep3, keep4, keep5
 	steps(2)
 end

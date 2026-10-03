@@ -64,8 +64,8 @@ whisper, speak and yell (defaults 8, 25 and 40 m). The garbled zones follow at t
 +40 %, +37.5 %). Reset brings the defaults back, and the host's choice is remembered.
 
 **Walls.** Walls, floors and roofs muffle voices: through a wall a voice sounds twice as far away,
-unless there is a way around (an open door, a window, a corridor), which it then takes. On by default;
-the host can turn it off in Settings ("Walls muffle voices"). A map or game mode can decide for itself.
+unless there is a way around (an open door, a window, a corridor), which it then takes. Off by default;
+the host can turn it on in Settings ("Walls muffle voices"). A map or game mode can decide for itself.
 
 ## For mod makers
 
