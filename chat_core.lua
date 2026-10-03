@@ -9,7 +9,7 @@
 -- within range while the bubble is up shows the words and completes that line. A Speak / Yell message
 -- said out of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while
 -- it is up shows it (no babble then). Not a whisper: it is private to who was within its reach.
---   "p" Speak, the default: a speech bubble over your head and a babble voice played at you (quieter
+--   "s" Speak, the default: a speech bubble over your head and a babble voice played at you (quieter
 --     and echoing with distance). Words within cfg.chatR (25 m), garbled to cfg.mumbleR (35 m).
 --   "w" Whisper: words within cfg.whisperR (8 m), garbled to cfg.whisperMumbleR (12 m), nothing beyond.
 --     A pale lavender bubble; a breathy babble (whisper0-7.ogg: noise through vowel formants; Robot:
@@ -71,7 +71,7 @@
 --   PC.isTyping(p)                    server: any player; client: the local player. Skip your own keys
 --                                     while it is true. Other scripts: GetBool("proxchat.typing." .. p)
 --                                     (host: every player; any machine: its own player)
---   PC.say(text, mode)                client: say something as the local player (mode "p" / "w" / "g")
+--   PC.say(text, mode)                client: say something as the local player (mode "w" / "s" / "y" / "g"; "p" = "s", the old id)
 --   PC.mode() / PC.setMode(m)         client: the input line's mode (setMode saves it)
 --   PC.system(text)                   client: a local line in the history (only this player sees it)
 --   PC.history([mode])                client: the history (entries: name, text, p, ch = mode or "sys",
@@ -199,7 +199,7 @@ PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "w
 -- the modes, in Tab / chip order: id, prompt on the input line, chip label, history tag, colour
 PC.MODES = {
 	{"w", "Whisper: ", "Whisper", "[whisper]", {0.78, 0.78, 0.9}},
-	{"p", "Speak: ", "Speak", "[speak]", {1, 0.82, 0.3}},
+	{"s", "Speak: ", "Speak", "[speak]", {1, 0.82, 0.3}},
 	{"y", "Yell: ", "Yell", "[yell]", {1, 0.58, 0.28}},
 	{"g", "Global: ", "Global", "[global]", {0.55, 0.8, 1}},
 }
@@ -634,11 +634,11 @@ function PC.log(s)
 	if PC.hooks.log then PC.hooks.log(s) end
 end
 
--- a mode from the network: "p", "w" or "g" ("g" only in the lobby)
+-- a mode from the network: "s", "w", "y" or "g" ("g" only in the lobby; "p" = "s", the old id)
 function PC.validMode(m)
 	if PC.inLobby() then return "g" end
 	if m == "g" or m == "w" or m == "y" then return m end
-	return "p"
+	return "s"
 end
 
 -- the distances (words reach) for whisper, speech and shout; each buffer follows as its share
@@ -907,7 +907,7 @@ function PC.clientInit()
 		walls = {},                                   -- (per speaker: the beam and the way round, PC.wallState)
 	}
 	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
-	c.mode = (m == "w" or m == "g" or m == "y") and m or "p"
+	c.mode = (m == "w" or m == "g" or m == "y") and m or "s"        -- (an old save's "p": Speak)
 	local v = GetInt(cfg.save .. "voice")
 	if PC.VOICES[v] then c.voiceWant = v end                    -- (Settings / Options / /voice)
 	for set, n in pairs(PC.BABBLE_SETS) do
@@ -929,7 +929,7 @@ end
 
 function PC.lobby() return shared.pcLobby == true end
 
--- the input line's mode: "p" Speak, "w" Whisper, "g" Global (the lobby: always "g")
+-- the input line's mode: "w" Whisper, "s" Speak, "y" Yell, "g" Global (the lobby: always "g")
 function PC.mode()
 	if PC.lobby() then return "g" end
 	return PC.C().mode
@@ -938,7 +938,7 @@ end
 function PC.setMode(m)
 	local c = PC.C()
 	if PC.lobby() then return end                                   -- (the lobby is Global only)
-	if m ~= "g" and m ~= "w" and m ~= "y" then m = "p" end
+	if m ~= "g" and m ~= "w" and m ~= "y" then m = "s" end
 	if c.mode == m then return end
 	c.mode = m
 	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
@@ -1081,7 +1081,7 @@ function PC.speakerReach(p)
 	for _, t in ipairs({c.bubbles, c.prevBubbles}) do if t[p] then add(t[p].mode) end end
 	add((shared.pcTyping or {})[p])
 	local q = c.babble.queue[p]
-	if q then add(q.how == "whisper" and "w" or (q.how == "shout" and "y" or "p")) end
+	if q then add(q.how == "whisper" and "w" or (q.how == "shout" and "y" or "s")) end
 	if best == 0 then add("y") end
 	return best + PC.cfg.soundGrace
 end
@@ -1168,7 +1168,7 @@ function PC.receive(m)
 		PC.addHist({ch = m.ch, chan = m.chan, p = m.p, name = m.name, text = m.text, me = m.p == me})
 		-- (Global, and the dead to the dead: a chat line only - no bubble, no babble)
 	else
-		local mode = (m.ch == "w" or m.ch == "y") and m.ch or "p"
+		local mode = (m.ch == "w" or m.ch == "y") and m.ch or "s"
 		local whisper = mode == "w"
 		local level, d
 		heard, far, level, d = PC.heard(m.p, m.text, mode)
@@ -1300,8 +1300,8 @@ end
 PC.DUMMY = 1000                                                       -- (speaker ids PC.DUMMY + 0..2)
 PC.DUMMY_KINDS = {                                                    -- mode, name, torso colour; left to right
 	{"w", "Whisperer", "0.6 0.6 0.9"},
-	{"p", "Speaker", "0.9 0.65 0.25"},
-	{"s", "Yeller", "0.85 0.15 0.1"},
+	{"s", "Speaker", "0.9 0.65 0.25"},
+	{"y", "Yeller", "0.85 0.15 0.1"},
 }
 PC.DUMMY_LINES = {                                                    -- {said, shouted}
 	{"hello there, we are the test dummies", "HELLO THERE, WE ARE THE TEST DUMMIES"},
@@ -1433,7 +1433,7 @@ function PC.dummyTick(now)
 				d.voice = (dm.round + d.idx - 2) % #PC.VOICES + 1        -- (each round shifts the voices)
 				dm.n = (dm.n or 0) + 1
 				PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
-					ch = d.kind == "w" and "w" or (d.kind == "s" and "y" or "p"), text = d.kind == "s" and line[2] or line[1]})
+					ch = d.kind, text = d.kind == "y" and line[2] or line[1]})
 			end
 		end
 	end
@@ -1654,6 +1654,7 @@ end
 -- say something: into the outbox, sent now and resent until the server confirms it (PC.pump)
 function PC.say(text, mode)
 	local c = PC.C()
+	if mode == "p" then mode = "s" end                            -- (the old id for Speak)
 	text = PC.clean(text)
 	if text == "" then return end
 	if #c.outbox >= PC.cfg.outboxMax then
@@ -1849,7 +1850,7 @@ function PC.command(text)
 	elseif cmd == "g" or cmd == "a" or cmd == "all" or cmd == "global" or cmd == "everyone" then
 		PC.modeCommand("g", rest)
 	elseif cmd == "s" or cmd == "speak" or cmd == "p" or cmd == "n" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" or cmd == "say" then
-		PC.modeCommand("p", rest)
+		PC.modeCommand("s", rest)
 	elseif cmd == "y" or cmd == "yell" or cmd == "shout" or cmd == "sh" then
 		PC.modeCommand("y", rest)
 	elseif cmd == "w" or cmd == "whisper" then
@@ -2208,7 +2209,7 @@ function PC.drawBubbles()
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
-		if (mode == "p" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden)
+		if (mode == "s" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden)
 			and (PC.lobby() or PC.channelOf(p) == "") then                    -- (a channel - the dead: no "..." for anyone)
 			local d = PC.hearDist(p)
 			if d and d <= (PC.rangeOf(mode)) then add(PC.bubbleLayout(p, "...", mode == "y", 0.75, true, mode == "w")) end
@@ -2218,7 +2219,7 @@ function PC.drawBubbles()
 	for _, du in ipairs(dm and dm.list or {}) do                       -- (a dummy typing before its turn)
 		if du.typing then
 			local d = not (c.bubbles[du.p] and not c.bubbles[du.p].hidden) and PC.distTo(du.p)
-			local dmode = du.kind == "w" and "w" or (du.kind == "s" and "y" or "p")
+			local dmode = du.kind
 			if d and d <= (PC.rangeOf(dmode)) then add(PC.bubbleLayout(du.p, "...", dmode == "y", 0.75, true, dmode == "w")) end
 		end
 	end
