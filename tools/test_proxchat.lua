@@ -268,6 +268,7 @@ check(P2.PC.c.typing and P2.interactive, "Enter opens the line (UiMakeInteractiv
 step()
 check(P2.interactive and P2.focused, "while typing: interactive, the field has the keyboard")
 check(P1.PC.isTyping(2) and P1.reg["proxchat.typing.2"] == true, "the server knows P2 types (PC.isTyping, registry proxchat.typing.2)")
+check(P2.reg["proxchat.typing.2"] == true and P3.reg["proxchat.typing.2"] ~= true, "P2's own game has it too (a guest's client script can read it); nobody else's")
 check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Yell$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the four mode chips (Whisper / Speak / Yell / Global)")
 local chipOrder = {}
 for _, t in ipairs(P2.texts) do if t == "Whisper" or t == "Speak" or t == "Yell" or t == "Global" then chipOrder[#chipOrder + 1] = t end end
@@ -321,6 +322,7 @@ check(nfar >= 4 and vfar > 0.75 * 0.4, string.format("P3 hears the babble from t
 waitRate()
 press(P2, "return"); typeText(P2, "second line\n"); step(); step()
 check(lastLine(P1, "p").text == "second line" and not P2.PC.c.typing, "a newline returned by the field sends too")
+check(P2.reg["proxchat.typing.2"] == false, "sent and closed: P2's own game clears its typing flag")
 waitRate()
 say(P2, "/y please help me now")
 local l1 = lastLine(P1, "y")

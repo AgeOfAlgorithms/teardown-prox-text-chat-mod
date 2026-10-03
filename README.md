@@ -63,53 +63,23 @@ a thin line connects it to its speaker.
 whisper, speak and yell (defaults 8, 25 and 40 m). The garbled zones follow at the same share (+50 %,
 +40 %, +37.5 %). Reset brings the defaults back, and the host's choice is remembered.
 
-## For game-mode makers
+## For mod makers
 
-Mods can't call each other's functions, but the registry is shared. Your mod can use these keys:
+Your map or game mode can work with the chat through a few registry keys (mods can't call each
+other's functions): put the chat in lobby mode, keep Enter free for your own UI, ignore keys while a
+player types, set the distances for your map, and react to every message said (monsters that hear
+yelling, guards that notice whispers, answers typed in chat).
 
 ```lua
-SetBool("proxchat.lobby", true)          -- server: your lobby is up, everyone hears everything (false after)
+SetBool("proxchat.lobby", true)          -- server: everyone hears everything while your lobby is up
 SetBool("proxchat.block", true)          -- client: Enter must not open the chat (your own text input is up)
 GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
 SetString("proxchat.ranges", "8,25,40")  -- server: your map's distances (whisper, speak, yell in m)
+GetInt("proxchat.said.last")             -- host: chat events, proxchat.said.<n % 16>.player / mode / text / x y z / radius ...
 ```
 
-**Chat events (server / host).** Every message is also published to the host's registry, so your
-game can react to it: monsters that hear yelling, guards that notice whispers, and so on. Events
-are kept in a ring of the last 16:
-
-| key `proxchat.said.<n % 16>.` + | value |
-|---|---|
-| `player` | int: who spoke |
-| `mode` | `"whisper"`, `"speak"`, `"yell"` or `"global"` |
-| `yell` | bool: the mode is Yell |
-| `x`, `y`, `z` | where the speaker stood (feet) |
-| `radius` | m: how far anyone hears anything (the babble): whisper 12, speak 35, yell 55, global 0 (all at the default distances) |
-| `wordsRadius` | m: how far the words are heard: whisper 8, speak 25, yell 40 |
-| `text` | the message |
-| `lobby` | bool: said while your lobby was up |
-
-`proxchat.said.last` is the newest event number. It counts up and never goes back. Read new events
-in your server script:
-
-```lua
-local saidSeen = 0
-function server.init() saidSeen = GetInt("proxchat.said.last") end
-function server.tick(dt)
-	local last = GetInt("proxchat.said.last")
-	for n = math.max(saidSeen + 1, last - 15), last do
-		local k = "proxchat.said." .. (n % 16) .. "."
-		if GetString(k .. "mode") ~= "global" then
-			local pos = Vec(GetFloat(k .. "x"), GetFloat(k .. "y"), GetFloat(k .. "z"))
-			onPlayerSpoke(GetInt(k .. "player"), pos, GetFloat(k .. "radius"), GetBool(k .. "yell"))
-		end
-	end
-	saidSeen = last
-end
-```
-
-You can also `#include "chat_core.lua"` in your own script. Its API is documented at the top of that
-file.
+**[API.md](API.md)** documents every key, where it can be read and written, and has example code
+for each.
 
 ## Development
 
