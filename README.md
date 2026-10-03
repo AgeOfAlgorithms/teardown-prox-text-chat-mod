@@ -63,6 +63,10 @@ a thin line connects it to its speaker.
 whisper, speak and yell (defaults 8, 25 and 40 m). The garbled zones follow at the same share (+50 %,
 +40 %, +37.5 %). Reset brings the defaults back, and the host's choice is remembered.
 
+**Walls.** Walls, floors and roofs muffle voices: through a wall a voice sounds twice as far away,
+unless there is a way around (an open door, a window, a corridor), which it then takes. On by default;
+the host can turn it off in Settings ("Walls muffle voices"). A map or game mode can decide for itself.
+
 ## For mod makers
 
 Your map or game mode can work with the chat through a few registry keys (mods can't call each
@@ -77,7 +81,7 @@ SetBool("proxchat.block", true)          -- client: Enter must not open the chat
 GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
 SetString("proxchat.ranges", "8,25,40")  -- server: your map's distances (whisper, speak, yell in m)
 SetString("proxchat.channel." .. p, "dead")  -- server: p talks only to that channel (the dead), hears everyone
-SetBool("proxchat.walls", true)          -- server: walls, floors and roofs muffle voices
+SetBool("proxchat.walls", true)          -- server: walls muffle voices on your map (false: they don't), over the host's setting
 GetInt("proxchat.version")               -- any machine: the chat runs here (proxchat.alive: its last tick)
 GetInt("proxchat.said.last")             -- host: chat events, proxchat.said.<n % 16>.player / mode / text / x y z / radius ...
 ```

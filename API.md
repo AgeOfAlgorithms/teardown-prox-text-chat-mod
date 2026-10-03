@@ -13,7 +13,7 @@ whole interface:
 | [`proxchat.typing.<player>`](#proxchattypingplayer) | bool | the chat | host: every player; each machine: its own player | true while that player is typing |
 | [`proxchat.ranges`](#proxchatranges) | string | your **server** script | host | sets the Whisper / Speak / Yell distances |
 | [`proxchat.channel.<player>`](#proxchatchannelplayer) | string | your **server** script | host | `"dead"` (or `"dead red"`...): that player talks only to the same channel, and hears everyone |
-| [`proxchat.walls`](#proxchatwalls) | bool | your **server** script | host | walls, floors and roofs muffle voices |
+| [`proxchat.walls`](#proxchatwalls) | bool | your **server** script | host | walls, floors and roofs muffle voices, or not, on your map |
 | [`proxchat.said.*`](#proxchatsaid-chat-events) | several | the chat | host | an event for every message said |
 
 Everything here is optional. If the chat isn't enabled, nothing reads the keys you set and every key
@@ -211,9 +211,15 @@ end
 ![Is there a way around?](docs/walls_2_around.png)
 ![Through the wall](docs/walls_3_through.png)
 
-**Server, bool.** While true, walls, floors and roofs muffle voices on every player's game, for a
-castle, a house, a bunker. Off by default (open maps don't change). Each player's game works out how
-far a speaker **sounds**, and that decides both the words they make out and the babble's volume:
+Walls, floors and roofs muffle voices. This is **on by default**; the host can turn it off in the chat's
+Settings ("Walls muffle voices", for everyone).
+
+**Server, bool.** Your map or game mode can decide instead: set `proxchat.walls` to `true` (on, even if
+the host turned it off) or `false` (off) every tick. While you set it, the host's row says "by the
+game". Stop setting it and the host's choice applies again.
+
+Each player's game works out how far a speaker **sounds**, and that decides both the words they make
+out and the babble's volume:
 
 1. **Is there a wall?** A beam of 9 parallel rays (3 x 3, 0.4 m apart) from the listener's head to the
    speaker's, against the static world above the debris size. Glass doesn't count. If any ray gets
@@ -229,9 +235,16 @@ and the way round at most once a second per speaker, 2 at a time, never longer t
 (Whisper 12 m, Speak 35 m, Yell 55 m at the defaults). A speaker too far away to hear is not checked.
 
 ```lua
--- server: inside the castle, walls muffle; out in the courtyard they don't matter anyway
+-- server: a horror castle - walls always muffle, whatever the host chose
 function server.tick(dt)
 	SetBool("proxchat.walls", true)
+end
+```
+
+```lua
+-- server: a radio game mode where everyone carries a walkie-talkie - walls never muffle
+function server.tick(dt)
+	SetBool("proxchat.walls", false)
 end
 ```
 
