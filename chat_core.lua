@@ -70,6 +70,7 @@
 --   PC.draw()                         in client.draw (bubbles, window / feed, input line, keys)
 --   PC.isTyping(p)                    server: any player; client: the local player. Skip your own keys
 --                                     while it is true. Other scripts: GetBool("proxchat.typing." .. p)
+--                                     (host: every player; any machine: its own player)
 --   PC.say(text, mode)                client: say something as the local player (mode "p" / "w" / "g")
 --   PC.mode() / PC.setMode(m)         client: the input line's mode (setMode saves it)
 --   PC.system(text)                   client: a local line in the history (only this player sees it)
@@ -1053,6 +1054,12 @@ function PC.clientTick(dt)
 	local c = PC.C()
 	local me = GetLocalPlayer()
 	local now = GetTime()
+	-- your typing state in THIS game's registry too: the server's copy (every player) is only in the
+	-- host's, so a game's client script on a guest's machine reads its own player's here
+	if c.typing ~= c.regTyping then
+		c.regTyping = c.typing
+		SetBool(PC.cfg.reg .. ".typing." .. me, c.typing and true or false)
+	end
 	-- the chosen voice reaches the server (re-sent until shared shows it, 6 s at most)
 	if c.voiceWant then
 		local vs = shared.pcVoice or {}
