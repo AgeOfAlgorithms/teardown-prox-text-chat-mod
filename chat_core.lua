@@ -88,8 +88,8 @@
 --   PC.hooks.blockKeys()              client: true = Enter (and cfg.windowKey) do nothing
 --   PC.hooks.onMessage(msg, heard)    client: a message arrived; heard = what was heard or nil
 --   PC.hooks.log(line)                server: diagnostics
---   Registry switches a game sets on the host, every tick: proxchat.walls (bool: walls muffle voices,
---   PC.walled) and proxchat.channel.<p> (a name, "dead": p talks only to that channel and hears everyone). Every
+--   Registry switches a game sets on the host, every tick: proxchat.walls (bool, when set: walls muffle
+--   voices or not, over the host's setting; PC.hearDist) and proxchat.channel.<p> (a name, "dead": p talks only to that channel and hears everyone). Every
 --   machine, every tick: proxchat.version (PC.API_VERSION) and proxchat.alive (GetTime()).
 --
 -- Engine notes (see the teardown-modding skill, "Multiplayer social features"):
@@ -605,14 +605,16 @@ function PC.heartbeat()
 end
 
 function PC.serverInit()
-	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false, chan = {}, walls = false}
+	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false, chan = {}, walls = nil,
+		wallsHost = not GetBool(PC.cfg.save .. "wallsoff")}          -- (walls: on unless the host turned them off)
 	ClearKey(PC.cfg.reg)
 	shared.pcMsgs = {}
 	shared.pcVoice = {}
 	shared.pcTyping = {}
 	shared.pcLobby = false
 	shared.pcChan = {}
-	shared.pcWalls = false
+	shared.pcWalls = PC.s.wallsHost
+	shared.pcWallsBy = "host"
 	shared.pcAck = {}
 	shared.pcNow = 0
 	-- the distances: the host's last choice, else the defaults (a map can set proxchat.ranges, see serverTick)
@@ -672,6 +674,15 @@ function PC.setRanges(w, sp, sh, save)
 	shared.pcRanges = {w = w, p = sp, s = sh, n = s.rangeN}
 	if save then SetString(cfg.save .. "ranges", w .. "," .. sp .. "," .. sh) end
 	PC.log(string.format("proxchat ranges whisper=%d speak=%d yell=%d", w, sp, sh))
+end
+
+-- the host switched walls on / off in Settings (saved; a game that sets proxchat.walls decides instead)
+function server.pc_walls(p, on)
+	p = tonumber(p)
+	local okH, host = pcall(IsPlayerHost, p)
+	if not (p and okH and host) then return end
+	PC.S().wallsHost = on and true or false
+	SetBool(PC.cfg.save .. "wallsoff", not on)
 end
 
 -- the host moved the distance bar (or pressed Reset)
@@ -831,8 +842,15 @@ function PC.serverTick(dt)
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
 	PC.heartbeat()
 	-- a game's switches (set every tick by it): walls, and who talks only to the dead
-	local walls = GetBool(PC.cfg.reg .. ".walls")
-	if walls ~= s.walls then s.walls = walls; shared.pcWalls = walls end
+	-- walls: the game's word for its map (proxchat.walls true / false, when it sets it), else the host's
+	-- Settings (on unless turned off)
+	local by = HasKey(PC.cfg.reg .. ".walls") and "game" or "host"
+	local walls
+	if by == "game" then walls = GetBool(PC.cfg.reg .. ".walls") else walls = s.wallsHost end
+	if walls ~= s.walls or by ~= s.wallsBy then
+		s.walls, s.wallsBy = walls, by
+		shared.pcWalls, shared.pcWallsBy = walls, by
+	end
 	local chan, changed = {}, false
 	for _, q in ipairs(PC.allPlayers()) do
 		local v = GetString(PC.cfg.reg .. ".channel." .. q)
@@ -1007,7 +1025,8 @@ function PC.distTo(p)
 	return VecLength(VecSub(a, b))
 end
 
--- WALLS (opt-in: proxchat.walls on the host -> shared.pcWalls). How far a voice SOUNDS (PC.hearDist):
+-- WALLS (on by default; the host's Settings can turn them off, and a game that sets proxchat.walls true /
+-- false decides for its map instead -> shared.pcWalls). How far a voice SOUNDS (PC.hearDist):
 --   1. a beam, every cfg.wallEvery s per speaker: 9 parallel rays from the listener's head toward the
 --      speaker's on a 3 x 3 grid cfg.wallBeam m apart (up / down / sideways of the straight line), against
 --      the static world above the debris size, glass not counting. One ray clear = no wall: the
@@ -2320,6 +2339,11 @@ function PC.drawSettings(W, H)
 		{"set_b", "Speech bubbles", c.bubbleLevel, PC.setBubbleLevel},
 		{"set_v", "Babble volume", "slider", c.babbleVolume, PC.setBabbleVolume},
 	}
+	if PC.isHost() then                                               -- (the host: walls, for everyone)
+		local byGame = shared.pcWallsBy == "game"
+		rows[#rows + 1] = {"set_m", byGame and "Walls muffle voices (by the game)" or "Walls muffle voices (host)",
+			shared.pcWalls == true, "On", "Off", function(v) if not byGame then ServerCall("server.pc_walls", GetLocalPlayer(), v) end end}
+	end
 	for k, r in ipairs(rows) do
 		UiPush()
 		UiTranslate(0, (k - 1) * 40)
@@ -2514,7 +2538,7 @@ end
 function PC.drawWindow()
 	local c, cfg = PC.C(), PC.cfg
 	local W, H = cfg.winW, cfg.winH
-	if c.page == "settings" and PC.isHost() then H = H + 110 end      -- (room for the host's distance bar)
+	if c.page == "settings" and PC.isHost() then H = H + 150 end      -- (room for the host's walls row and distance bar)
 	UiPush()
 	UiTranslate(24, UiHeight() - 160 - H)
 	UiAlign("left top")
