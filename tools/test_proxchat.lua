@@ -71,6 +71,7 @@ local function machine(me, isHost, presetReg, prePC)
 	api.SetString = function(k, v) env.reg[k] = tostring(v) end
 	api.SetFloat = function(k, v) env.reg[k] = tonumber(v) end
 	api.GetFloat = function(k) return tonumber(env.reg[k]) or 0 end
+	api.HasKey = function(k) return env.reg[k] ~= nil end
 	api.GetString = function(k) local v = env.reg[k]; if v == nil then return "" end return tostring(v) end
 	api.ClearKey = function(k) for key in pairs(env.reg) do if key == k or key:sub(1, #k + 1) == k .. "." then env.reg[key] = nil end end end
 	api.GetTime = function() return W.time end
@@ -259,7 +260,7 @@ for _, p in ipairs(P2.loads) do
 end
 check(clipsOk and nWhisper == 12, "all 32 clips load from snd/ and exist (12 whisper / Robot-whisper)")
 check(P2.shared.pcMsgs ~= P2.shared.pcMsgs and type(P2.shared.pcMsgs) == "table", "mock: every client read of shared is a fresh copy")
-check(drawn(P2, "^Proximity Babble Chat %- Enter: talk to players near you %(Tab: Whisper / Shout / Global%)") ~= nil, "intro hint on screen")
+check(drawn(P2, "^Proximity Babble Chat %- Enter: talk to players near you %(Tab: Whisper / Speak / Yell / Global%)") ~= nil, "intro hint on screen")
 
 -- ================================================================== the input line: modes, chips, Tab
 press(P2, "return")
@@ -267,27 +268,30 @@ check(P2.PC.c.typing and P2.interactive, "Enter opens the line (UiMakeInteractiv
 step()
 check(P2.interactive and P2.focused, "while typing: interactive, the field has the keyboard")
 check(P1.PC.isTyping(2) and P1.reg["proxchat.typing.2"] == true, "the server knows P2 types (PC.isTyping, registry proxchat.typing.2)")
-check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Shout$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the four mode chips (Speak / Whisper / Shout / Global)")
+check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Yell$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the four mode chips (Whisper / Speak / Yell / Global)")
+local chipOrder = {}
+for _, t in ipairs(P2.texts) do if t == "Whisper" or t == "Speak" or t == "Yell" or t == "Global" then chipOrder[#chipOrder + 1] = t end end
+check(table.concat(chipOrder, " ") == "Whisper Speak Yell Global", "the chips in Tab order: " .. table.concat(chipOrder, " "))
 check(drawn(P2, "^Chat$") and drawn(P2, "^Settings$") and not drawn(P2, "^Proximity$"), "the window: one history ('Chat'), a Settings button, no history tabs")
 check(drawn(P1, "...", true) ~= nil and not drawn(P3, "^%.%.%.$"), "P1 (4 m) sees P2's '...' typing bubble, P3 (26 m) does not")
 press(P2, "tab")
-check(P2.PC.mode() == "w" and drawn(P2, "^Whisper: $"), "Tab: 'Whisper:' (the same frame; no distance in the prompt)")
+check(P2.PC.mode() == "y" and drawn(P2, "^Yell: $"), "Tab from Speak: 'Yell:' (the same frame)")
 step()
-check(P1.PC.s.typing[2] == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the server knows P2 whispers; the mode is saved as P2's default")
-press(P2, "tab")
-check(P2.PC.mode() == "y" and drawn(P2, "^Shout: $"), "Tab: 'Shout:'")
+check(P1.PC.s.typing[2] == "y" and P2.reg["savegame.mod.pcmode"] == "y", "the server knows P2 yells; the mode is saved as P2's default")
 press(P2, "tab")
 check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "Tab: 'Global:'")
+press(P2, "tab")
+check(P2.PC.mode() == "w" and drawn(P2, "^Whisper: $"), "Tab: round to 'Whisper:' (no distance in the prompt)")
 typeText(P2, "\t"); step()
-check(P2.PC.mode() == "p" and P2.PC.c.text == "" and drawn(P2, "^Speak: $"), "a Tab returned by the field: back to Speak (no tab character typed)")
+check(P2.PC.mode() == "p" and P2.PC.c.text == "" and drawn(P2, "^Speak: $"), "a Tab returned by the field: on to Speak (no tab character typed)")
 P2.keys.tab = true; typeText(P2, "\t")
-check(P2.PC.mode() == "w", "the Tab key and a field Tab in one frame move one mode, not two")
+check(P2.PC.mode() == "y", "the Tab key and a field Tab in one frame move one mode, not two")
 P2.hover = {100, 34, 4}; P2.keys.lmb = true; step()                -- (press on the 4th chip: Global)
 P2.release = true; step()                                       -- (its release: ignored)
 P2.hover = nil
 check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "clicking the Global chip (press fires, release de-duplicated)")
-P2.hover = {100, 34, 1}; P2.release = true; step(); P2.hover = nil
-check(P2.PC.mode() == "p", "a release alone on the Nearby chip also works (UiBlankButton fallback)")
+P2.hover = {100, 34, 2}; P2.release = true; step(); P2.hover = nil
+check(P2.PC.mode() == "p", "a release alone on the Speak chip (2nd) also works (UiBlankButton fallback)")
 P2.hover = {100, 34, 2}; step(); P2.hover = nil
 check(P2.PC.mode() == "p", "hovering a chip does not change the mode")
 
@@ -321,9 +325,9 @@ waitRate()
 say(P2, "/y please help me now")
 local l1 = lastLine(P1, "y")
 check(l1 and l1.text == "please help me now" and l1.shout and P1.PC.c.bubbles[2].shout and P2.PC.mode() == "p",
-	"/y says one line in Shout (the mode stays Speak): P1 has it, a Shout bubble")
+	"/y says one line in Yell (the mode stays Speak): P1 has it, a Yell bubble")
 local l3 = lastLine(P3, "y")
-check(l3 and l3.text == "please help me now" and not l3.far, "a shout reaches P3 (26 m) in full: Shout carries 40 m")
+check(l3 and l3.text == "please help me now" and not l3.far, "a yell reaches P3 (26 m) in full: Yell carries 40 m")
 check(#hist(P4) == 0, "P4 (56 m, past 55) hears nothing")
 waitRate()
 say(P2, "everyone come HERE!!")
@@ -335,17 +339,17 @@ say(P2, "/y come here now")
 steps(60)
 local nPlain = soundsFrom(P1, 4, "babble")
 local nShout, vShout = soundsFrom(P1, 4, "shout")
-check(nPlain == 0 and nShout >= 4 and vShout <= 0.801, string.format("Shout babbles every syllable in the raised voice (%d, vol %.2f, cfg 0.8)", nShout, vShout))
+check(nPlain == 0 and nShout >= 4 and vShout <= 0.801, string.format("Yell babbles every syllable in the raised voice (%d, vol %.2f, cfg 0.8)", nShout, vShout))
 W.pos[4] = Vec(8, 0, 0); steps(5)
 -- the event API: the host's registry gets every message (proxchat.said.*) for other mods (titans...)
 local said = P1.reg["proxchat.said.last"]
 local sk = "proxchat.said." .. (said % 16) .. "."
-check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "shout" and P1.reg[sk .. "shout"] == true
+check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "yell" and P1.reg[sk .. "yell"] == true
 	and P1.reg[sk .. "text"] == "come here now" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 40
 	and math.abs(P1.reg[sk .. "x"] - 4) < 0.01 and P1.reg[sk .. "lobby"] == false,
-	"API: the host's registry has the event (proxchat.said.<n>: player 2, shout, at x = 4, words to 40 m, babble to 55 m)")
+	"API: the host's registry has the event (proxchat.said.<n>: player 2, yell, at x = 4, words to 40 m, babble to 55 m)")
 local pk = "proxchat.said." .. ((said - 1) % 16) .. "."
-check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "mode"] == "speak" and P1.reg[pk .. "shout"] == false and P1.reg[pk .. "radius"] == 35,
+check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "mode"] == "speak" and P1.reg[pk .. "yell"] == false and P1.reg[pk .. "radius"] == 35,
 	"API: the one before it is kept too (a ring of 16): Speak, 35 m")
 check(P2.reg["proxchat.said.last"] == nil, "API: host only (clients do not run the server)")
 check(#hist(P4) == 1 and lastLine(P4, "y").text == "come here now", "P4 walked over while P2's last bubble was up: it shows, in full, and joins P4's history (older ones: no)")
@@ -357,8 +361,8 @@ check(lastLine(P4, "p").text == "now you are close", "P4 walked away: its histor
 
 -- ================================================================== whisper (5 m, no shouting, breathy)
 steps(60 * 10)                                                   -- (the last bubbles and babble are over)
-press(P2, "return"); press(P2, "tab")
-check(P2.PC.mode() == "w", "P2 switches to whisper")
+press(P2, "return"); press(P2, "tab"); press(P2, "tab"); press(P2, "tab")
+check(P2.PC.mode() == "w", "P2 switches to whisper (Tab: Yell, Global, Whisper)")
 step()
 check(drawn(P1, "^%.%.%.$") ~= nil and not drawn(P5, "^%.%.%.$"), "the whisper '...' shows to P1 (4 m), not to P5 (10 m)")
 waitRate()
@@ -397,8 +401,8 @@ check(q[1] > 1.1 and q[2] < 0.9, string.format("the voice's pitch still shifts t
 
 -- ================================================================== everyone
 waitRate()
-press(P3, "return"); press(P3, "tab"); press(P3, "tab"); press(P3, "tab")
-check(P3.PC.mode() == "g" and drawn(P3, "^Global: $"), "P3: Tab three times = Global")
+press(P3, "return"); press(P3, "tab"); press(P3, "tab")
+check(P3.PC.mode() == "g" and drawn(P3, "^Global: $"), "P3: Tab twice from Speak = Global")
 typeText(P3, "hi all")
 P1.sounds, P4.sounds = {}, {}
 press(P3, "return"); step()
@@ -460,14 +464,14 @@ say(P2, "/s the key is here")
 check(garbled(lastLine(P3, "p").text) and #hist(P3) == n3 + 1, "a Speak line from 26 m: garbled")
 W.pos[3] = Vec(20, 0, 0); step(); step()
 check(lastLine(P3, "p").text == "the key is here" and not lastLine(P3, "p").far and #hist(P3) == n3 + 1, "closer: that history line is completed (not a second one)")
--- Shout's own buffer, 40-55 m: garbled like any buffer (more letters closer)
+-- Yell's own buffer, 40-55 m: garbled like any buffer (more letters closer)
 W.pos[3] = Vec(58, 0, 0)                                            -- (54 m)
 waitRate()
 say(P2, "/y come here right now")
 local bs5 = P3.PC.c.bubbles[2]
 local t54 = bs5 and P3.PC.bubbleText(2, bs5, W.time) or ""
 check(bs5 and bs5.level == "mumble" and bs5.shout and not bs5.hidden and garbled(t54) and garbled(lastLine(P3, "y").text),
-	"54 m: a Shout bubble, garbled, a history line too: " .. t54)
+	"54 m: a Yell bubble, garbled, a history line too: " .. t54)
 W.pos[3] = Vec(46, 0, 0); step(); step()                            -- (42 m)
 local t42 = P3.PC.bubbleText(2, bs5, W.time)
 check(letters(t42) > letters(t54) and garbled(t42), "42 m: more of it, still not all: " .. t42)
@@ -572,14 +576,29 @@ check(P2.PC.c.typing and P2.PC.page() == "settings", "/settings opens the line o
 P2.hover = {120, 40, 1}; P2.keys.lmb = true; step()            -- (hint Show)
 P2.hover = {120, 40, 4}; P2.keys.lmb = true; step(); P2.hover = nil   -- (keep open: No)
 check(not P2.PC.c.hideHint and not P2.PC.c.pinned, "switches back: shown / not pinned")
-check(drawn(P2, "^Speech bubbles$") and drawn(P2, "^Babble volume$") and drawn(P2, "^25%%$"), "Settings: speech bubbles and babble volume, Off to 100%")
+check(drawn(P2, "^Speech bubbles$") and drawn(P2, "^Babble volume$") and drawn(P2, "^25%%$") and drawn(P2, "^100%%$"),
+	"Settings: speech bubbles (Off to 100%) and the babble volume slider (100%)")
 P2.hover = {90, 36, 3}; P2.keys.lmb = true; step(); P2.hover = nil          -- (speech bubbles: 50%)
-P2.hover = {90, 36, 6}; P2.keys.lmb = true; step(); P2.hover = nil          -- (babble: Off)
-check(P2.PC.c.bubbleLevel == 3 and P2.reg["savegame.mod.pcbubbles"] == 3 and P2.PC.c.babbleLevel == 1 and P2.reg["savegame.mod.pcbabblevol"] == 1,
-	"picking bubbles 50% and babble Off (saved)")
+check(P2.PC.c.bubbleLevel == 3 and P2.reg["savegame.mod.pcbubbles"] == 3, "picking bubbles 50% (saved)")
+P2.hover = {400, 36, 1}; P2.keys.lmb = true; P2.held = {lmb = true}; P2.mouseX = 0.41 * 400; step(); P2.hover = nil
+check(P2.PC.c.sdrag == "set_v" and math.abs(P2.PC.c.babbleVolume - 0.4) < 1e-9 and drawn(P2, "^40%%$") and P2.reg["savegame.mod.pcvolume"] == nil,
+	"the babble slider: pressed and dragged to 41 % -> 40 % (snaps to 5 %), heard at once, not saved yet")
+P2.mouseX = -50; step()
+check(P2.PC.c.babbleVolume == 0 and drawn(P2, "^Off$"), "dragged past the left end: Off")
+P2.held = nil; step()
+check(not P2.PC.c.sdrag and P2.reg["savegame.mod.pcvolume"] == 0, "let go: saved (savegame.mod.pcvolume = 0)")
+P2.PC.c.babbleVolume = nil; P2.PC.c.babbleVolume = P2.PC.savedVolume()
+check(P2.PC.c.babbleVolume == 0, "read back: Off")
 P2.hover = {90, 36, 5}; P2.keys.lmb = true; step()
-P2.hover = {90, 36, 10}; P2.keys.lmb = true; step(); P2.hover = nil
-check(P2.PC.c.bubbleLevel == 5 and P2.PC.c.babbleLevel == 5, "... and back to 100%")
+P2.hover = {400, 36, 1}; P2.keys.lmb = true; P2.held = {lmb = true}; P2.mouseX = 999; step(); P2.held = nil; step(); P2.hover = nil
+check(P2.PC.c.bubbleLevel == 5 and P2.PC.c.babbleVolume == 1 and P2.reg["savegame.mod.pcvolume"] == 1, "... and back to 100%")
+do                                                                           -- (an old 1-5 level carries over)
+	local reg = P2.reg
+	local keep = reg["savegame.mod.pcvolume"]
+	reg["savegame.mod.pcvolume"] = nil; reg["savegame.mod.pcbabblevol"] = 2
+	check(P2.PC.savedVolume() == 0.25, "an old Babble volume level (25 %) carries over to the slider")
+	reg["savegame.mod.pcbabblevol"] = nil; reg["savegame.mod.pcvolume"] = keep
+end
 P2.hover = {120, 40, 6}; P2.keys.lmb = true; step(); P2.hover = nil          -- (your own bubble: Hide)
 check(P2.PC.c.hideOwn and P2.reg["savegame.mod.pchideown"] == true, "your own bubble: Hide (saved)")
 P2.hover = {120, 40, 5}; P2.keys.lmb = true; step(); P2.hover = nil          -- (Show)
@@ -773,6 +792,11 @@ local function optionsEnv(reg)
 	o.SetInt = function(k, v) o.reg[k] = v end
 	o.GetBool = function(k) return o.reg[k] == true end
 	o.SetBool = function(k, v) o.reg[k] = v end
+	o.GetFloat = function(k) return tonumber(o.reg[k]) or 0 end
+	o.SetFloat = function(k, v) o.reg[k] = v end
+	o.HasKey = function(k) return o.reg[k] ~= nil end
+	o.UiRect, o.UiSliderHoverColorFilter, o.UiSliderThumbSize = nop, nop, nop
+	o.UiSlider = function(img, axis, cur) if o.slideTo then local v = o.slideTo; o.slideTo = nil; return v, true end return cur, false end
 	o.Menu = function() o.closed = true end
 	setmetatable(o, {__index = _G})
 	local chunk = assert(loadstring(readFile(MODDIR .. "options.lua"), "options.lua"))
@@ -784,7 +808,11 @@ end
 local O = optionsEnv()
 O.frame()
 local function otext(pat) for _, t in ipairs(O.texts) do if t:find(pat, 1, true) then return t end end end
-check(otext("Speak / Whisper / Shout / Global") and otext("Not picked"), "Options: explains the keys; no voice picked yet")
+check(otext("Whisper / Speak / Yell / Global") and otext("Not picked") and otext("100%"), "Options: explains the keys; no voice picked yet; babble volume 100 %")
+O.slideTo = 0.6 * 400; O.frame()
+check(O.reg["savegame.mod.pcvolume"] == 0.6, "Options: the volume slider saves savegame.mod.pcvolume (60 %)")
+O.frame()
+check(otext("60%"), "Options: ... and shows it")
 O.frame("Robot")
 check(O.reg["savegame.mod.pcvoice"] == 6, "Options: picking Robot saves savegame.mod.pcvoice = 6")
 O.frame("Hide")
@@ -966,20 +994,20 @@ local m1 = P1.PC.measure("measure me once")
 check(P1.PC.measure("measure me once") == m1, "a bubble's text is measured once and reused")
 
 -- ================================================================== the bubble and babble settings at work
-P1.PC.setBubbleLevel(1); P1.PC.setBabbleLevel(1)
+P1.PC.setBubbleLevel(1); P1.PC.setBabbleVolume(0)
 P1.sounds = {}
 waitRate(); say(P2, "/s can you see this")
 steps(30)
 check(hasLine(P1, "p", "can you see this") and #(P1.PC.c.bubbleRects or {}) == 0 and #P1.sounds == 0,
 	"bubbles Off and babble Off: only the chat line (no bubble, no sound)")
-P1.PC.setBubbleLevel(2); P1.PC.setBabbleLevel(2)
+P1.PC.setBubbleLevel(2); P1.PC.setBabbleVolume(0.25)
 P1.sounds = {}
 waitRate(); say(P2, "/s and now at a quarter")
 steps(40)
 local nq, vq = soundsFrom(P1, 4, "babble")
 check(#(P1.PC.c.bubbleRects or {}) >= 1 and drawn(P1, "^and now at a quarter$") and nq >= 2 and vq <= 0.75 * 0.25 + 1e-6,
 	string.format("bubbles 25%% (still drawn, the text too) and babble 25%% (vol %.3f)", vq))
-P1.PC.setBubbleLevel(5); P1.PC.setBabbleLevel(5)
+P1.PC.setBubbleLevel(5); P1.PC.setBabbleVolume(1)
 
 -- ================================================================== drawing order: far first
 W.pos[3] = Vec(30, 0, 0)
@@ -1067,7 +1095,7 @@ waitRate(); say(P2, "/y no shaking here")
 step()
 local shook
 for _, L in ipairs(P1.PC.drawOrder or {}) do if L.p == 2 and L.age == 1 then shook = L.shake end end
-check(shook == false, "a Shout bubble does not shake")
+check(shook == false, "a Yell bubble does not shake")
 waitRate(); say(P2, "/s WAIT FOR ME")
 step()
 for _, L in ipairs(P1.PC.drawOrder or {}) do if L.p == 2 and L.age == 1 then shook = L.shake end end
@@ -1145,8 +1173,8 @@ for _, r in ipairs(R) do if r.bottom < R[1].bottom then raised = raised + 1 end 
 check(apart and raised >= 1, "bubbles on the same spot (the mock draws every head at one pixel): " .. #R .. " stacked (above, or below with no room left), none covers another")
 local names = {}
 for _, e in ipairs(hist(P1)) do if P1.PC.isDummy(e.p) then names[#names + 1] = e.name end end
-check(#names == 3 and names[1]:find("^Whisperer %(") and names[2]:find("^Speaker %(") and names[3]:find("^Shouter %(") and names[1] ~= names[2]:gsub("Speaker", "Whisperer"),
-	"history: Whisperer / Speaker / Shouter, each in another voice: " .. table.concat(names, ", "))
+check(#names == 3 and names[1]:find("^Whisperer %(") and names[2]:find("^Speaker %(") and names[3]:find("^Yeller %(") and names[1] ~= names[2]:gsub("Speaker", "Whisperer"),
+	"history: Whisperer / Speaker / Yeller, each in another voice: " .. table.concat(names, ", "))
 steps(60)
 local wsnd, ssnd = 0, 0
 for _, x in ipairs(P1.sounds) do
@@ -1161,7 +1189,7 @@ steps(60 * 9.5)                                                             -- (
 bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
 local L2 = P1.PC.DUMMY_LINES[2]
 check((not bw or bw.hidden) and bs and bs.mumble and bh and bh.level == "full" and bh.shout and P1.PC.bubbleText(DH, bh, 0) == L2[2],
-	"from 28 m: no whisper, the speaker garbled, the shouter (Shout mode) readable")
+	"from 28 m: no whisper, the speaker garbled, the yeller (Yell mode) readable")
 W.pos[1] = Vec(0, 0, 0)
 steps(60 * 11 * 8)
 local seen = {}
