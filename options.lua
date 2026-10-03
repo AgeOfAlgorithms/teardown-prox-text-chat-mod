@@ -1,7 +1,7 @@
 -- Proximity Babble Chat options (Mod Manager > Options). A menu script like the game's own speedometer
 -- options.lua: plain draw(), no #version line. Settings are this player's own (savegame.mod.pc*):
 -- the default voice (also chat window > Settings or /voice <name> in game), the hint, the speech
--- bubbles (Off / opacity) and the babble volume (Off / 25-100 %).
+-- bubbles (Off / opacity) and the babble volume (a 0-100 % slider, pcvolume).
 PCO_VOICES = {"Squeaky", "Chirpy", "Plain", "Low", "Deep", "Robot"}
 
 function pcoButton(label, selected, w)
@@ -30,6 +30,39 @@ function pcoLevels(key)
 	UiPop()
 end
 
+-- the babble volume, 0..1 (savegame.mod.pcvolume; before the slider: a level 1-5 in pcbabblevol)
+function pcoVolume()
+	if HasKey("savegame.mod.pcvolume") then return math.max(0, math.min(1, GetFloat("savegame.mod.pcvolume"))) end
+	local i = GetInt("savegame.mod.pcbabblevol")
+	return (i >= 1 and i <= 5) and (i - 1) / 4 or 1
+end
+
+-- a 0-100 % slider for the babble volume, centred on the current point
+function pcoVolumeSlider()
+	local w = 400
+	local v = pcoVolume()
+	UiPush()
+	UiAlign("left top")
+	UiTranslate(-w / 2 - 40, -10)
+	UiPush()
+	UiTranslate(0, 4)
+	UiColor(1, 1, 1, 0.15)
+	UiRect(w + 20, 12)
+	UiColor(1, 0.82, 0.3, 0.7)
+	UiRect((w + 20) * v, 12)
+	UiPop()
+	UiColor(1, 1, 1, 1)
+	UiSliderHoverColorFilter(1, 1, 0.5, 1)
+	UiSliderThumbSize(20, 20)
+	local x = UiSlider("ui/common/dot.png", "x", v * w, 0, w)
+	local nv = math.floor(math.max(0, math.min(1, x / w)) * 20 + 0.5) / 20
+	if math.abs(nv - v) > 0.001 then SetFloat("savegame.mod.pcvolume", nv) end
+	UiTranslate(w + 50, 10)
+	UiAlign("left middle")
+	UiText(nv == 0 and "Off" or string.format("%d%%", math.floor(nv * 100 + 0.5)))
+	UiPop()
+end
+
 function draw()
 	UiPush()
 	UiButtonHoverColor(1, 1, 0.5, 1)
@@ -41,7 +74,7 @@ function draw()
 	UiTranslate(0, 60)
 	UiFont("regular.ttf", 22)
 	UiColor(1, 1, 1, 0.7)
-	UiText("In game: Enter to chat, Tab: Speak / Whisper / Shout / Global, Settings in the chat window, /help")
+	UiText("In game: Enter to chat, Tab: Whisper / Speak / Yell / Global, Settings in the chat window, /help")
 	UiColor(1, 1, 1, 1)
 
 	UiFont("regular.ttf", 26)
@@ -95,7 +128,7 @@ function draw()
 	UiTranslate(0, 80)
 	UiText("Babble volume")
 	UiTranslate(0, 50)
-	pcoLevels("savegame.mod.pcbabblevol")
+	pcoVolumeSlider()
 
 	UiTranslate(0, 110)
 	if UiTextButton("Close", 200, 40) then Menu() end
