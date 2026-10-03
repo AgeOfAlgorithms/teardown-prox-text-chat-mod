@@ -221,7 +221,8 @@ far a speaker **sounds**, and that decides both the words they make out and the 
 
 The way round never counts as nearer than the speaker really is, and never as farther than through the
 wall. It costs nothing while nobody talks: the beam runs 4 times a second per speaker with a message up,
-and the way round at most once a second per speaker, 2 at a time.
+and the way round at most once a second per speaker, 2 at a time, never longer than that voice carries
+(Whisper 12 m, Speak 35 m, Yell 55 m at the defaults). A speaker too far away to hear is not checked.
 
 ```lua
 -- server: inside the castle, walls muffle; out in the courtyard they don't matter anyway

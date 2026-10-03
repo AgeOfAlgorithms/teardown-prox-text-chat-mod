@@ -137,6 +137,7 @@ local function machine(me, isHost, presetReg, prePC)
 	end
 	api.QueryRequire = function() end
 	api.QueryRaycast = function(o, d, L)
+		env.rays = (env.rays or 0) + 1
 		local best
 		for _, b in ipairs(W.boxes or {}) do
 			local t = rayBox(o, d, L or 1e9, b)
@@ -1309,7 +1310,17 @@ do
 	for q = 2, 5 do P1.PC.hearDist(q) end
 	for _, o in pairs(P1.PC.c.walls) do if o.busy then busy = busy + 1 end end
 	check(busy == cfg.pathMax, string.format("4 speakers behind a floor: %d searches at once (cfg.pathMax %d)", busy, cfg.pathMax))
-	W.pathBusy, W.pathAround, W.boxes = nil, nil, nil
+	W.pathBusy, W.pathAround = nil, nil
+	-- out of reach: no rays, no search (a Speak bubble's farthest is 35 + 1.5 m)
+	for q = 2, 5 do P1.PC.c.walls[q] = nil end
+	W.pos[2] = Vec(60, 0, 0); W.boxes = {{lo = Vec(30, -5, -40), hi = Vec(30.3, 30, 40)}}
+	P1.PC.c.bubbles[2] = {mode = "p"}; P1.PC.c.prevBubbles[2] = nil
+	local rays0 = P1.rays or 0
+	local hd = P1.PC.hearDist(2)
+	check((P1.rays or 0) == rays0 and hd == 60 and P1.PC.speakerReach(2) == cfg.mumbleR + cfg.soundGrace,
+		"a speaker beyond their voice's reach (60 m, Speak: 36.5): no rays, no search")
+	P1.PC.c.bubbles[2] = nil
+	W.boxes = nil
 	HOST.reg["proxchat.walls"] = false; steps(2)
 	check(P1.shared.pcWalls == false and math.abs(P1.PC.hearDist(2) - P1.PC.distTo(2)) < 1e-6, "walls off again")
 	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), keep3, keep4, keep5
