@@ -651,9 +651,15 @@ function server.pc_ranges(p, w, sp, sh)
 end
 
 -- every player (server)
+-- every player id (the engine's GetAllPlayers; Players() is only a helper in script/include/player.lua,
+-- which this mod does not include - relying on it left whispers with no one to go to)
 function PC.allPlayers()
 	local out = {}
-	if Players then for q in Players() do out[#out + 1] = q end end
+	if GetAllPlayers then
+		for _, q in ipairs(GetAllPlayers() or {}) do out[#out + 1] = q end
+	elseif Players then
+		for q in Players() do out[#out + 1] = q end
+	end
 	return out
 end
 
