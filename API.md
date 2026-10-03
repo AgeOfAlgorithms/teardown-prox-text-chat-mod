@@ -95,7 +95,7 @@ end
 
 **Bool, read only.** True while that player has the chat line open. While they type, the keys they
 press are meant for the chat, so your mod should ignore them. Otherwise typing "q" in a message would
-also fire your Q ability.
+also fire whatever event Q is mapped to in your game.
 
 - **On the host** (server or client script): every player's state.
 - **On any machine** (client script): that machine's own player, `GetLocalPlayer()`. It is set the same
