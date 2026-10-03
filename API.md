@@ -207,6 +207,10 @@ end
 
 ## `proxchat.walls`
 
+![Is there a wall?](docs/walls_1_beam.png)
+![Is there a way around?](docs/walls_2_around.png)
+![Through the wall](docs/walls_3_through.png)
+
 **Server, bool.** While true, walls, floors and roofs muffle voices on every player's game, for a
 castle, a house, a bunker. Off by default (open maps don't change). Each player's game works out how
 far a speaker **sounds**, and that decides both the words they make out and the babble's volume:
@@ -375,7 +379,8 @@ function client.tick(dt) PC.clientTick(dt) end
 function client.draw() PC.draw() end
 ```
 
-Mode ids in this API are single letters: `"w"` Whisper, `"p"` Speak, `"y"` Yell, `"g"` Global.
+Mode ids in this API are single letters, as in the chat commands (`/w`, `/s`, `/y`, `/g`): `"w"` Whisper,
+`"s"` Speak, `"y"` Yell, `"g"` Global. (`"p"`, the old id for Speak, still works.)
 
 | function | side | what |
 |---|---|---|
@@ -392,7 +397,7 @@ Mode ids in this API are single letters: `"w"` Whisper, `"p"` Speak, `"y"` Yell,
 | `inLobby()` | server | true: everything said goes to everyone (like `proxchat.lobby`) |
 | `blockKeys()` | client | true: Enter does not open the chat (like `proxchat.block`) |
 | `everyoneHears(speaker)` | client | true: the local player hears this speaker's Speak / Yell in full from anywhere (spectators, radios); whispers still need the whisper range |
-| `onMessage(msg, heard)` | client | a message arrived: `msg = {id, p, name, ch, text}`, `heard` = the words this player made out (garbled in the buffer zone), or nil |
+| `onMessage(msg, heard)` | client | a message arrived: `msg = {id, p, name, ch, text}` (`ch`: the mode id, `"d"` from a channel), `heard` = the words this player made out (garbled in the buffer zone), or nil |
 | `log(line)` | server | diagnostics |
 
 ```lua
