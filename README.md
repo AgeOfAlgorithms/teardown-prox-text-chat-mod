@@ -67,14 +67,18 @@ whisper, speak and yell (defaults 8, 25 and 40 m). The garbled zones follow at t
 
 Your map or game mode can work with the chat through a few registry keys (mods can't call each
 other's functions): put the chat in lobby mode, keep Enter free for your own UI, ignore keys while a
-player types, set the distances for your map, and react to every message said (monsters that hear
-yelling, guards that notice whispers, answers typed in chat).
+player types, set the distances for your map, let dead players talk only to each other, make walls
+muffle voices, and react to every message said (monsters that hear yelling, guards that notice
+whispers, answers typed in chat).
 
 ```lua
 SetBool("proxchat.lobby", true)          -- server: everyone hears everything while your lobby is up
 SetBool("proxchat.block", true)          -- client: Enter must not open the chat (your own text input is up)
 GetBool("proxchat.typing." .. player)    -- true while that player types: ignore your own keys then
 SetString("proxchat.ranges", "8,25,40")  -- server: your map's distances (whisper, speak, yell in m)
+SetString("proxchat.channel." .. p, "dead")  -- server: p talks only to that channel (the dead), hears everyone
+SetBool("proxchat.walls", true)          -- server: walls, floors and roofs muffle voices
+GetInt("proxchat.version")               -- any machine: the chat runs here (proxchat.alive: its last tick)
 GetInt("proxchat.said.last")             -- host: chat events, proxchat.said.<n % 16>.player / mode / text / x y z / radius ...
 ```
 

@@ -7,10 +7,13 @@ whole interface:
 
 | key | type | who writes it | where | what it does |
 |---|---|---|---|---|
+| [`proxchat.version`, `proxchat.alive`](#proxchatversion-proxchatalive) | int, float | the chat | each machine | the chat is running here (and which API version) |
 | [`proxchat.lobby`](#proxchatlobby) | bool | your **server** script | host | while true, everything said goes to everyone |
 | [`proxchat.block`](#proxchatblock) | bool | your **client** script | each machine | while true, Enter does not open the chat |
 | [`proxchat.typing.<player>`](#proxchattypingplayer) | bool | the chat | host: every player; each machine: its own player | true while that player is typing |
 | [`proxchat.ranges`](#proxchatranges) | string | your **server** script | host | sets the Whisper / Speak / Yell distances |
+| [`proxchat.channel.<player>`](#proxchatchannelplayer) | string | your **server** script | host | `"dead"` (or `"dead red"`...): that player talks only to the same channel, and hears everyone |
+| [`proxchat.walls`](#proxchatwalls) | bool | your **server** script | host | walls, floors and roofs muffle voices |
 | [`proxchat.said.*`](#proxchatsaid-chat-events) | several | the chat | host | an event for every message said |
 
 Everything here is optional. If the chat isn't enabled, nothing reads the keys you set and every key
@@ -29,6 +32,26 @@ you read stays `false` / `0` / `""`, so your mod works the same without it.
   file.)
 
 ---
+
+## `proxchat.version`, `proxchat.alive`
+
+**Read only, every machine.** The chat sets both every tick on every machine where it runs:
+`proxchat.version` is the API version (2 = this document), `proxchat.alive` the `GetTime()` of its last
+tick. Use them to show chat hints only when there is a chat. A key can outlive a mod, so check that
+`alive` is recent:
+
+```lua
+-- client: show "Enter: talk" in your HUD only when the chat runs
+local function chatRuns()
+	return GetInt("proxchat.version") >= 2 and math.abs(GetTime() - GetFloat("proxchat.alive")) < 1
+end
+
+function client.draw()
+	if chatRuns() then
+		UiPush(); UiTranslate(40, UiHeight() - 60); UiFont("regular.ttf", 22); UiText("Enter: talk"); UiPop()
+	end
+end
+```
 
 ## `proxchat.lobby`
 
@@ -65,7 +88,11 @@ press are meant for the chat, so your mod should ignore them. Otherwise typing "
 also fire your Q ability.
 
 - **On the host** (server or client script): every player's state.
-- **On any machine** (client script): that machine's own player, `GetLocalPlayer()`.
+- **On any machine** (client script): that machine's own player, `GetLocalPlayer()`. It is set the same
+  frame the line opens and cleared the frame it closes, so no letter of a message reaches your keys.
+
+The chat line takes the mouse and the engine stops walking and tools while it is open, but whether
+your script's `InputPressed` still fires is not guaranteed: check this flag.
 
 ```lua
 -- server: a per-player ability on Q that ignores players who are typing
@@ -123,6 +150,76 @@ function server.tick(dt)
 end
 ```
 
+## `proxchat.channel.<player>`
+
+**Server, string.** A channel name for a player who is out of the game (dead, spectating), as in
+Lethal Company. Use `"dead"`, or one name per team (`"dead red"`, `"dead blue"`) so that the dead of
+different teams can't talk to each other. Players with the **same** name form one channel:
+
+- What they say reaches **only their own channel**, from anywhere, whatever mode they pick. The host
+  sends it to those players alone, so nobody else's game has the text. Nobody sees a bubble or a "..."
+  of theirs, nor hears their babble.
+- They **hear everyone**: every Speak, Yell and Whisper of the living, in full, wherever they are.
+- Their input line shows the channel ("Dead:", "Dead red:"), and their lines are tagged with it
+  (`[dead]`, `[dead red]`).
+- Your lobby (`proxchat.lobby`) comes first: in the lobby everyone hears everyone, the dead too.
+
+Names are tidied to lower case and at most 24 characters. Set it every tick; `""` (or nothing) is the
+normal channel.
+
+```lua
+-- server: dead players talk among themselves
+function server.tick(dt)
+	for _, p in ipairs(GetAllPlayers()) do
+		SetString("proxchat.channel." .. p, GetPlayerHealth(p) <= 0 and "dead" or "")
+	end
+end
+```
+
+```lua
+-- server: teams - each team's dead talk only to their own team's dead
+function server.tick(dt)
+	for _, p in ipairs(GetAllPlayers()) do
+		local dead = GetPlayerHealth(p) <= 0
+		SetString("proxchat.channel." .. p, dead and ("dead " .. teamOf(p)) or "")   -- "dead red", "dead blue"
+	end
+end
+```
+
+Their messages are still chat events, with `channel` set to the name, so your monsters can ignore them:
+
+```lua
+function onChat(e)
+	if e.channel ~= "" then return end           -- the dead make no noise
+	-- ... monsters hear the living
+end
+```
+
+## `proxchat.walls`
+
+**Server, bool.** While true, walls, floors and roofs muffle voices on every player's game, for a
+castle, a house, a bunker. Off by default (open maps don't change). Each player's game works out how
+far a speaker **sounds**, and that decides both the words they make out and the babble's volume:
+
+1. **Is there a wall?** A beam of 9 parallel rays (3 x 3, 0.4 m apart) from the listener's head to the
+   speaker's, against the static world above the debris size. Glass doesn't count. If any ray gets
+   through, there is no wall: a pole, a railing, a low wall or a doorway on the line doesn't muffle.
+2. **Is there a way round?** If all 9 are blocked, the engine's path planner looks for the shortest
+   way through the air: a door to the side, a window, over the wall, down a corridor. Found: the voice
+   sounds as far away as that way is long, so it comes round the corner, a little quieter.
+3. **Otherwise, through the wall:** the voice carries half as far (a wall at 15 m sounds like 30 m).
+
+The way round never counts as nearer than the speaker really is, and never as farther than through the
+wall. It costs nothing while nobody talks: the beam runs 4 times a second per speaker with a message up,
+and the way round at most once a second per speaker, 2 at a time.
+
+```lua
+-- server: inside the castle, walls muffle; out in the courtyard they don't matter anyway
+function server.tick(dt)
+	SetBool("proxchat.walls", true)
+end
+```
+
 ## `proxchat.said.*`: chat events
 
 **Host only, read only.** Every message is also written to the host's registry as an event, so your
@@ -140,6 +237,8 @@ notice whispers, a typed answer to a riddle, a vote. The last 16 events are kept
 | `... .radius` | float | m: how far anyone hears anything, the babble included (defaults: whisper 12, speak 35, yell 55; global 0) |
 | `... .wordsRadius` | float | m: how far the words are heard clearly (defaults: whisper 8, speak 25, yell 40; global 0) |
 | `... .lobby` | bool | said while `proxchat.lobby` was true |
+| `... .time` | float | the host's `GetTime()` when it was said |
+| `... .channel` | string | the speaker's channel (`"dead"`, `"dead red"`...: only that channel heard it), else `""` |
 
 The radii are the distances in use when the message was said, so they follow the host's settings
 and `proxchat.ranges`. Whispers are events too: the chat only sends a whisper's text to the players
@@ -147,8 +246,19 @@ near enough, but the host's scripts see every event.
 
 ### Reading events
 
-Keep the last number you handled, and each tick handle every newer one (at most the 16 the ring
-holds):
+Keep the last number you handled, and each tick handle every newer one. The ring holds 16: if more
+than 16 messages arrive between two reads, the oldest are lost. Each player can send about two
+messages a second, so a read every tick never misses one.
+
+The chat clears its events when a level starts. A line said just before the level loaded can still be
+there for your script's first moment; its `time` is from the previous level's clock (larger than
+`GetTime()` or far older). To react only to fresh lines, check `time`:
+
+```lua
+local fresh = math.abs(GetTime() - GetFloat(k .. "time")) < 1      -- said in the last second
+```
+
+The reader:
 
 ```lua
 local saidSeen = nil
@@ -166,6 +276,8 @@ function server.tick(dt)
 			radius = GetFloat(k .. "radius"),
 			wordsRadius = GetFloat(k .. "wordsRadius"),
 			lobby = GetBool(k .. "lobby"),
+			channel = GetString(k .. "channel"),
+			time = GetFloat(k .. "time"),
 		})
 	end
 	saidSeen = last
@@ -179,7 +291,7 @@ The examples below are `onChat` functions for that reader.
 ```lua
 -- every monster within earshot turns toward the speaker; a yell enrages them
 function onChat(e)
-	if e.mode == "global" or e.lobby then return end
+	if e.mode == "global" or e.lobby or e.channel ~= "" then return end
 	for _, m in ipairs(monsters) do
 		local d = VecLength(VecSub(GetBodyTransform(m.body).pos, e.pos))
 		if d <= e.radius then

@@ -119,7 +119,36 @@ local function machine(me, isHost, presetReg, prePC)
 	end
 	api.TransformToLocalPoint = function(t, p) return api.VecSub(p, t.pos) end
 	api.TransformToParentVec = function(t, v) return v end
-	api.QueryRaycast = function() return false, 0 end
+	-- rays hit W.boxes ({lo = Vec, hi = Vec}: walls, floors, poles); the path planner answers W.pathAround
+	-- (a length: "done"; nil: "fail"; W.pathBusy: "busy")
+	local function rayBox(o, d, L, b)
+		local t0, t1 = 0, L
+		for i = 1, 3 do
+			if math.abs(d[i]) < 1e-9 then
+				if o[i] < b.lo[i] or o[i] > b.hi[i] then return nil end
+			else
+				local a, c = (b.lo[i] - o[i]) / d[i], (b.hi[i] - o[i]) / d[i]
+				if a > c then a, c = c, a end
+				t0, t1 = math.max(t0, a), math.min(t1, c)
+				if t0 > t1 then return nil end
+			end
+		end
+		return t0
+	end
+	api.QueryRequire = function() end
+	api.QueryRaycast = function(o, d, L)
+		local best
+		for _, b in ipairs(W.boxes or {}) do
+			local t = rayBox(o, d, L or 1e9, b)
+			if t and (not best or t < best) then best = t end
+		end
+		if best then return true, best, Vec(0, 1, 0), 1 end
+		return false, 0
+	end
+	api.CreatePathPlanner = function() env.planners = (env.planners or 0) + 1; return env.planners end
+	api.PathPlannerQuery = function() env.pathAsked = (env.pathAsked or 0) + 1 end
+	api.GetPathState = function() if W.pathBusy then return "busy" end return W.pathAround and "done" or "fail" end
+	api.GetPathLength = function() return W.pathAround or 0 end
 	env.spawned, env.deleted = {}, {}
 	api.Spawn = function(xml, t, static) env.spawned[#env.spawned + 1] = {xml = xml, t = t, static = static}; return {900 + #env.spawned} end
 	api.Delete = function(h) env.deleted[h] = true end
@@ -265,6 +294,7 @@ check(drawn(P2, "^Proximity Babble Chat %- Enter: talk to players near you %(Tab
 -- ================================================================== the input line: modes, chips, Tab
 press(P2, "return")
 check(P2.PC.c.typing and P2.interactive, "Enter opens the line (UiMakeInteractive: cursor)")
+check(P2.reg["proxchat.typing.2"] == true, "the typing flag is in P2's own registry the same frame the line opens")
 step()
 check(P2.interactive and P2.focused, "while typing: interactive, the field has the keyboard")
 check(P1.PC.isTyping(2) and P1.reg["proxchat.typing.2"] == true, "the server knows P2 types (PC.isTyping, registry proxchat.typing.2)")
@@ -735,7 +765,7 @@ check(lastLine(P4, "g").text == "lobby hello" and P1.shared.pcMsgs[#P1.shared.pc
 waitRate()
 P2.PC.say("sneaky", "w"); step()
 check(P1.shared.pcMsgs[#P1.shared.pcMsgs].ch == "g", "lobby: the server turns a whisper into everyone")
-P1.PC.hooks.inLobby = nil
+P1.PC.hooks.inLobby = hookLobby                                 -- (back to the registry hook, main.lua's)
 step(); step()
 check(P2.PC.mode() == "p", "out of the lobby: back to the player's own mode")
 P4.PC.hooks.everyoneHears = function(speaker) return true end
@@ -1228,6 +1258,113 @@ check(not P1.PC.c.dummy, "/dummy clear removes them all")
 say(P1, "/dummy clear")
 check(lastLine(P1).text == "No test dummies to clear.", "... and says so when there are none")
 W.pos[1] = Vec(0, 0, 0)
+
+-- ================================================================== "the chat runs here": version + heartbeat
+check(P2.reg["proxchat.version"] == P2.PC.API_VERSION and P2.PC.API_VERSION >= 2 and math.abs(P2.reg["proxchat.alive"] - W.time) < 0.05
+	and HOST.reg["proxchat.version"] == P2.PC.API_VERSION, "proxchat.version and proxchat.alive (GetTime) on every machine, every tick")
+
+-- ================================================================== walls (proxchat.walls)
+do
+	local cfg = P1.PC.cfg
+	local keep3, keep4, keep5 = W.pos[3], W.pos[4], W.pos[5]
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(15, 0, 0), Vec(0, 0, 90), Vec(0, 0, -90), Vec(90, 0, 0)
+	local wall = {lo = Vec(7, -5, -40), hi = Vec(7.3, 30, 40)}                  -- (a wall between P1 and P2, 15 m apart)
+	W.boxes, W.pathAround = {wall}, nil
+	steps(2)
+	waitRate(); say(P2, "/s through the wall")
+	check(lastLine(P1, "p").text == "through the wall" and P1.PC.hearDist(2) == 15, "walls off (the default): a wall changes nothing")
+	HOST.reg["proxchat.walls"] = true; steps(20)
+	check(P1.shared.pcWalls == true and math.abs(P1.PC.hearDist(2) - 15 / cfg.wallFactor) < 1e-6 and math.abs(P1.PC.wallMul(2) - 1 / cfg.wallFactor) < 1e-6,
+		string.format("walls on, sealed off (no way round): through the wall - sounds %.0f m away, the babble as far", P1.PC.hearDist(2) or -1))
+	waitRate(); say(P2, "/s can you hear me")
+	local lw = lastLine(P1, "p")
+	check(lw.far and garbled(lw.text), "... so 15 m through a wall is the Speak buffer (30 m): garbled - " .. lw.text)
+	W.pathAround = 18; steps(70)                                                  -- (a door to the side: 18 m round)
+	check(math.abs(P1.PC.hearDist(2) - 18) < 1e-6, string.format("a way round (18 m) is shorter than through: heard as 18 m (%.1f)", P1.PC.hearDist(2) or -1))
+	waitRate(); say(P2, "/s round the corner")
+	check(lastLine(P1, "p").text == "round the corner" and not lastLine(P1, "p").far, "... round the corner within 25 m: every word")
+	W.pathAround = 50; steps(70)
+	check(math.abs(P1.PC.hearDist(2) - 30) < 1e-6, "a way round longer than through the wall: through it counts (30 m)")
+	W.boxes = {{lo = Vec(7, -5, -0.1), hi = Vec(7.3, 30, 0.1)}}; steps(20)      -- (a pole on the line)
+	check(P1.PC.hearDist(2) == 15, "a pole on the line: some rays get by - no wall")
+	W.boxes = {{lo = Vec(7, -5, -40), hi = Vec(7.3, 1.5, 40)}}; steps(20)        -- (a low wall, chest high)
+	check(P1.PC.hearDist(2) == 15, "a low wall: the top rays go over it - no wall")
+	W.boxes = {{lo = Vec(7, -5, -40), hi = Vec(7.3, 30, -0.45)}, {lo = Vec(7, -5, 0.45), hi = Vec(7.3, 30, 40)}}; steps(20)
+	check(P1.PC.hearDist(2) == 15, "a doorway on the line: the middle rays go through - no wall")
+	W.pos[2] = Vec(3, 6, 0); W.boxes = {{lo = Vec(-40, 3, -40), hi = Vec(40, 3.3, 40)}}; W.pathAround = nil; steps(70)
+	local d2 = P1.PC.distTo(2)
+	check(math.abs(P1.PC.hearDist(2) - d2 / cfg.wallFactor) < 1e-6, string.format("a floor between them (upstairs, %.1f m): muffled, as %.1f m", d2, P1.PC.hearDist(2) or -1))
+	W.pathBusy = true; W.pathAround = 4; steps(70)
+	check(math.abs(P1.PC.hearDist(2) - d2 / cfg.wallFactor) < 1e-6, "while the way round is still being searched: through the floor")
+	W.pathBusy = nil; steps(2)
+	check(math.abs(P1.PC.hearDist(2) - d2) < 1e-6, "found a way round shorter than the distance (the stairs right there): never nearer than the speaker is")
+	local asked = P1.pathAsked or 0
+	steps(20)
+	check((P1.pathAsked or 0) == asked, "nobody moved, less than a second: the way round is not asked again")
+	-- a crowd behind walls: at most cfg.pathMax searches at once
+	W.pathBusy = true
+	local busy = 0
+	for q = 2, 5 do P1.PC.c.walls[q] = nil end
+	W.pos[3], W.pos[4], W.pos[5] = Vec(3, 6, 2), Vec(3, 6, -2), Vec(5, 6, 0)
+	for q = 2, 5 do P1.PC.hearDist(q) end
+	for _, o in pairs(P1.PC.c.walls) do if o.busy then busy = busy + 1 end end
+	check(busy == cfg.pathMax, string.format("4 speakers behind a floor: %d searches at once (cfg.pathMax %d)", busy, cfg.pathMax))
+	W.pathBusy, W.pathAround, W.boxes = nil, nil, nil
+	HOST.reg["proxchat.walls"] = false; steps(2)
+	check(P1.shared.pcWalls == false and math.abs(P1.PC.hearDist(2) - P1.PC.distTo(2)) < 1e-6, "walls off again")
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), keep3, keep4, keep5
+	steps(2)
+end
+
+-- ================================================================== the dead talk to the dead (proxchat.channel.<p>)
+do
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(6, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	HOST.reg["proxchat.channel.3"] = "dead"; HOST.reg["proxchat.channel.4"] = "dead"
+	steps(2)
+	check(P3.PC.dead() and P4.PC.dead() and not P1.PC.dead() and P1.PC.channelOf(3) == "dead", "P3 and P4 are dead (the game set proxchat.channel.<p> = \"dead\" on the host)")
+	waitRate(); say(P3, "/y boo from beyond")
+	local inShared = false
+	for _, m in ipairs(P1.shared.pcMsgs) do if m.text == "boo from beyond" then inShared = true end end
+	local function heardBoo(M) for _, e in ipairs(hist(M)) do if e.text == "boo from beyond" then return true end end return false end
+	check(not heardBoo(P1) and not heardBoo(P2) and not heardBoo(P5) and not inShared,
+		"a dead player yells 2 m from the living: they get nothing (it is not even in shared)")
+	check(not (P1.PC.c.bubbles[3] and P1.PC.c.bubbles[3].full == "boo from beyond"), "... no bubble over the dead one")
+	check(hasLine(P4, "d", "boo from beyond") and hasLine(P3, "d", "boo from beyond"), "the dead (P4, 54 m away) get it, tagged [dead]; so does the speaker")
+	local k = "proxchat.said." .. (HOST.reg["proxchat.said.last"] % 16) .. "."
+	check(HOST.reg[k .. "text"] == "boo from beyond" and HOST.reg[k .. "channel"] == "dead", "the event says channel = \"dead\" (games: no monster noise)")
+	check(math.abs((HOST.reg[k .. "time"] or -1) - W.time) < 0.2, "the event has its time (the host's GetTime when it was said)")
+	waitRate(); say(P2, "/s the living speak")
+	local l4 = lastLine(P4, "p")
+	check(l4 and l4.text == "the living speak" and not l4.far, "the dead hear the living in full from anywhere (P4, 56 m)")
+	waitRate(); say(P2, "/w a living secret")
+	check(hasLine(P4, "w", "a living secret"), "... whispers too")
+	local kk = "proxchat.said." .. (HOST.reg["proxchat.said.last"] % 16) .. "."
+	check(HOST.reg[kk .. "channel"] == "", "a living player's event: channel \"\"")
+	press(P3, "return"); step()
+	local dots = false
+	for _, L in ipairs(P1.PC.drawOrder or {}) do if L.p == 3 then dots = true end end
+	check(not dots and drawn(P3, "^Dead: $"), "a dead player typing: no \"...\" for the living; their line says \"Dead:\"")
+	press(P3, "esc"); step()
+	HOST.reg["proxchat.lobby"] = true; steps(2)
+	waitRate(); say(P3, "everyone back to the lobby")
+	check(hasLine(P1, "g", "everyone back to the lobby"), "in the lobby everyone hears everyone, the dead too")
+	HOST.reg["proxchat.lobby"] = false
+	-- two teams' dead: each channel to itself (names tidied to lower case)
+	HOST.reg["proxchat.channel.3"] = "Dead Red"; HOST.reg["proxchat.channel.4"] = "dead blue"; HOST.reg["proxchat.channel.5"] = "dead red"
+	steps(2)
+	waitRate(); say(P3, "/s red team only")
+	local l5 = lastLine(P5, "d")
+	local function got(M) for _, e in ipairs(hist(M)) do if e.text == "red team only" then return true end end return false end
+	check(l5 and l5.text == "red team only" and l5.chan == "dead red" and not got(P4) and not got(P1) and not got(P2),
+		"two teams' dead (\"dead red\", \"dead blue\"): red's dead hear red's dead only - blue's dead and the living get nothing")
+	check(P5.PC.channelInfo(l5.chan)[4] == "[dead red]" and P3.PC.channelInfo(P3.PC.channelOf(3))[2] == "Dead red: ", "the tag and the prompt say the channel: [dead red], \"Dead red:\"")
+	HOST.reg["proxchat.channel.5"] = nil
+	HOST.reg["proxchat.channel.3"] = ""; HOST.reg["proxchat.channel.4"] = nil
+	steps(2)
+	check(not P3.PC.dead() and not P4.PC.dead() and P1.PC.channelOf(3) == "", "alive again: the channel cleared")
+	W.pos[3], W.pos[4], W.pos[5] = Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	steps(2)
+end
 
 print(string.format("\n%d checks, %d failed", NCHECK, FAILED))
 if FAILED > 0 then os.exit(1) end
