@@ -2226,20 +2226,23 @@ function PC.rangeBar(W)
 	UiFont("regular.ttf", 22)
 	UiColor(1, 1, 1, 0.85)
 	UiPush(); UiTranslate(0, 14); UiText("Distances (host: for everyone) - drag a knob"); UiPop()
-	UiPush()                                                          -- (Reset: the defaults)
-	UiTranslate(bw - 110, 0)
+	UiPush()                                                          -- (Reset: the defaults; styled like the header button)
+	UiAlign("left top")                                               -- (the rect, its click area and its text share one box,
+	UiTranslate(bw - 110, -1)                                         --  centred on the label's line)
 	local hoverR = c.typing and UiIsMouseInRect(110, 30)
 	if c.typing and PC.clicked("rangeReset", 110, 30, hoverR) then
 		local d = PC.defaultRanges or {8, 25, 40}
 		c.rangesWant = {d[1], d[2], d[3]}
 		ServerCall("server.pc_ranges", GetLocalPlayer(), d[1], d[2], d[3])
 	end
-	UiColor(1, 1, 1, hoverR and 0.2 or 0.08)
+	UiColor(1, 1, 1, hoverR and 0.2 or 0.1)
 	UiRoundedRect(110, 30, 8)
+	UiColor(1, 1, 1, 0.45)
+	UiRoundedRectOutline(110, 30, 8, 1.5)
 	UiTranslate(55, 15)
 	UiAlign("center middle")
-	UiFont("regular.ttf", 20)
-	UiColor(1, 1, 1, 0.8)
+	UiFont("bold.ttf", 20)
+	UiColor(1, 1, 1, 0.95)
 	UiText("Reset")
 	UiPop()
 	UiTranslate(0, 50)                                                -- (the bar)
