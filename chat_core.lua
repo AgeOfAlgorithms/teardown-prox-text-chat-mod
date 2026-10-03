@@ -1,25 +1,22 @@
--- chat_core.lua - Proximity Chat for Teardown v2 multiplayer: text chat with three speaking MODES,
--- speech bubbles and an Animal-Crossing-style "babble" voice. Works in any level / game mode; reusable
--- by #include in other mods. Source of truth: teardown-mods/proxchat/mods/proximity chat/chat_core.lua.
+-- chat_core.lua - Proximity Babble Chat for Teardown v2 multiplayer: text chat with four speaking
+-- MODES, speech bubbles and an Animal-Crossing-style "babble" voice. Works in any level / game mode;
+-- reusable by #include in other mods. Source of truth: teardown-mods/proxchat/mods/proximity chat/chat_core.lua.
 --
--- MODES (chosen on the input line; they decide how OTHERS hear your message)
---   "p" Speak, the default: a speech bubble over your head and a babble voice played in 3D at
---     you (quieter and echoing with distance), heard within cfg.chatR (25 m). ALL-CAPS words or a word
---     ending in "!" are shouted and reach cfg.shoutR (40 m), where only the shouted words get through;
---     from there to cfg.shoutMumbleR (55 m) the shouted words are garbled too (their own buffer).
---     The BUFFER chatR-cfg.mumbleR (25-35 m): the babble and a bubble with the message GARBLED
---     (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
---     cfg.garbleMax; shouted words readable), on the screen edge in the speaker's direction when off
---     screen. The history line holds the most of it you made out (it only gains letters); coming
---     within range while the bubble is up shows the words and completes that line. A Speak message
---     said out of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while
---     it is up shows it (no babble then). Not a whisper: it is private to who was within its reach.
---   "w" Whisper: heard within cfg.whisperR (8 m); its buffer to cfg.whisperMumbleR (12 m) is garbled
---     the same way; beyond it nothing at all. CAPS stay a whisper (no shout reach). A pale lavender bubble; a breathy babble
---     (whisper0-7.ogg: noise through vowel formants; Robot: rwhisper0-3, a crushed hiss), quiet, at
---     your head, no echo; the voice's pitch still shifts it a little.
---   "g" Global: every player gets the line in their chat - a plain chat line only: no bubble, no babble
---     (only Speak and Whisper make bubbles and babble).
+-- MODES (chosen on the input line; they decide how OTHERS hear your message). Each of Whisper, Speak and
+-- Shout has a range (the words; PC.rangeOf) and a BUFFER beyond it where the message comes through
+-- GARBLED (PC.garble: letters as mysterious glyphs; the closer, the more real letters show, up to
+-- cfg.garbleMax). The history line holds the most of it you made out (it only gains letters); coming
+-- within range while the bubble is up shows the words and completes that line. A Speak / Shout message
+-- said out of earshot is kept, hidden, for its bubble's life: walking into the buffer or range while
+-- it is up shows it (no babble then). Not a whisper: it is private to who was within its reach.
+--   "p" Speak, the default: a speech bubble over your head and a babble voice played at you (quieter
+--     and echoing with distance). Words within cfg.chatR (25 m), garbled to cfg.mumbleR (35 m).
+--   "w" Whisper: words within cfg.whisperR (8 m), garbled to cfg.whisperMumbleR (12 m), nothing beyond.
+--     A pale lavender bubble; a breathy babble (whisper0-7.ogg: noise through vowel formants; Robot:
+--     rwhisper0-3, a crushed hiss), quiet, at your head, no echo; the voice's pitch still shifts it.
+--   "y" Shout: words within cfg.shoutR (40 m), garbled to cfg.shoutMumbleR (55 m). A red, shaking bubble
+--     and the raised-voice clips (shout0-7.ogg), a little louder.
+--   "g" Global: every player gets the line in their chat - a plain chat line only: no bubble, no babble.
 --   Lobby (PC.hooks.inLobby() true on the server): everything said is Global.
 --   Your last mode is kept as your default next time (savegame.mod.pcmode).
 --
@@ -29,7 +26,8 @@
 --   window stays in the game fonts. A bubble shows only while the listener is within its message's
 --   reach (PC.inReach: buffer included). At most 2 bubbles a speaker (c.bubbles: the newest, c.prevBubbles: the
 --   one before it, stacked above). Bubbles never cover each other (PC.layoutBubbles): lowest first,
---   an overlapping one is raised above, with a thin line down to its speaker. A bubble shows
+--   an overlapping one is raised above, with a thin line down to its speaker. A message written all in capitals shakes (PC.allCaps), in any
+--   mode; nothing else does. A bubble shows
 --   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
 --   the bubble stays up that much longer (b.extra).
 --
@@ -38,12 +36,12 @@
 --   SetString("proxchat.ranges", "w,s,sh"). PC.applyRanges sets cfg.whisperR .. shoutMumbleR.
 --
 -- HISTORY: ONE list per player of everything THEY received: every Global line, plus the Speak /
---   Whisper lines they were in range of at the moment each arrived (only the shouted words from
---   25-40 m), so every player's history is different. Lines are tagged [global] / [speak] / [whisper]
---   (whispers in lavender). Bounded to cfg.keepHist.
+--   Whisper / Shout lines they were in range (or a buffer) of, so every player's history is different.
+--   Lines are tagged [global] / [speak] / [whisper] / [shout] (whispers lavender, shouts red).
+--   Bounded to cfg.keepHist.
 --
 -- THE WINDOW: Enter opens the input line and the chat window (interactive: mouse cursor). The line
---   shows the mode ("Speak:", "Whisper:", "Global:") and three mode chips at its
+--   shows the mode ("Speak:", "Whisper:", "Shout:", "Global:") and four mode chips at its
 --   right end; Tab or a click on a chip changes the mode. Enter says it, Esc closes. The window shows
 --   the history (wheel / PgUp / PgDn scroll) and, right-aligned in its header, a "Settings" button:
 --   the Settings page has the voice picker (a click picks: synced so others hear it, saved, a preview
@@ -54,7 +52,7 @@
 --   Clicks fire on the mouse PRESS (UiIsMouseInRect + InputPressed("lmb")), with UiBlankButton (fires
 --   on release) as a de-duplicated fallback: one click is one action (UiBlankButton alone missed
 --   clicks in Tall Order's lobby).
--- COMMANDS (echoed locally): /s /w /g [text] (Speak / Whisper / Global: set the mode, or say one line
+-- COMMANDS (echoed locally): /s /w /y /g [text] (Speak / Whisper / Shout (yell) / Global: set the mode, or say one line
 --   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /mute [name], /unmute name|all, /dummy [1|2|3|clear]
 --   (local test speakers), /help, //text sends "/text".
 --
@@ -111,8 +109,8 @@ PC.hooks = PC.hooks or {}
 do
 	local defaults = {
 		chatR = 25,              -- m: who hears you (nearby)
-		shoutR = 40,             -- m: who hears your shouted words (nearby only)
-		shoutMumbleR = 55,       -- m: the shouts' buffer beyond shoutR: the shouted words garbled, the rest boxes
+		shoutR = 40,             -- m: who hears your shouts
+		shoutMumbleR = 55,       -- m: the shouts' buffer beyond shoutR (garbled; nothing beyond)
 		whisperR = 8,            -- m: who hears a whisper
 		mumbleR = 35,            -- m: Speak's buffer beyond chatR: the babble and the message garbled
 		whisperMumbleR = 12,     -- m: Whisper's buffer beyond whisperR (nothing beyond it)
@@ -153,7 +151,7 @@ do
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pchideown, pcbubbles, pcbabblevol
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
-		shoutVol = 0.8,          -- shouted words (shout clips, already a little louder than babble)
+		shoutVol = 0.8,          -- Shout (the shout clips, already a little louder than babble)
 		globalVol = 0.35,        -- the voice preview (Settings): this much of the voice's volume, at the listener
 		globalMaxSyl = 14,       -- the voice preview: at most this many syllables
 		whisperVol = 0.45,       -- whisper babble: this much of the voice's volume, at the speaker
@@ -191,6 +189,7 @@ PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "w
 PC.MODES = {
 	{"p", "Speak: ", "Speak", "[speak]", {1, 0.82, 0.3}},
 	{"w", "Whisper: ", "Whisper", "[whisper]", {0.78, 0.78, 0.9}},
+	{"y", "Shout: ", "Shout", "[shout]", {1, 0.58, 0.28}},
 	{"g", "Global: ", "Global", "[global]", {0.55, 0.8, 1}},
 }
 function PC.modeInfo(m)
@@ -280,32 +279,10 @@ function PC.utf8Len(s)
 	return k
 end
 
--- a word is shouted: 2+ cased letters and none lower case, or (any script) it ends in "!" / "！"
-function PC.isShout(w)
-	if w:find("!%s*$") or w:find("\239\188\129%s*$") then return true end
-	local n, low = 0, false
-	for ch in w:gmatch(PC.UTF8_CHAR) do
-		local k = PC.utf8Case(ch)
-		if k == "upper" or k == "lower" then n = n + 1 end
-		if k == "lower" then low = true end
-	end
-	return n >= 2 and not low
-end
-
--- the shouted words of a message (heard farther)
-function PC.shoutWords(text)
-	local out = {}
-	for w in text:gmatch("%S+") do
-		if PC.isShout(w) then out[#out + 1] = w end
-	end
-	return out
-end
-
 -- ---- the buffer range: a message half heard. Each letter becomes a mysterious glyph unless it is
 -- revealed: a fixed share of the letters (frac, 0-1) chosen per message (seed), so walking closer
--- uncovers more of the same message. Spaces and punctuation stay (the shape of the sentence shows);
--- keepShouts leaves shouted words readable; shoutFrac instead reveals that share of them (the shouts'
--- own buffer). With several PC.GARBLE glyphs they shimmer with tick.
+-- uncovers more of the same message. Spaces and punctuation stay (the shape of the sentence shows).
+-- With several PC.GARBLE glyphs they shimmer with tick.
 -- The glyph: ⬚ (U+2B1A). Our Pangolin has it (added by tools/add_box_glyph.py); of the game's fonts
 -- only the CJK ones do, so without Pangolin a garbled bubble falls back to bold_sc.ttf (PC.scriptOf
 -- counts ⬚ as "cjk"; that font has Latin and Cyrillic too).
@@ -313,37 +290,46 @@ PC.GARBLE = {"\226\172\154"}
 local function hash01(a, b, c)
 	return ((a * 73856093 + b * 19349663 + c * 83492791) % 1000003) / 1000003
 end
-function PC.garble(text, frac, seed, tick, keepShouts, shoutFrac)
+function PC.garble(text, frac, seed, tick)
 	local out, i = {}, 0
 	for sp, w in text:gmatch("(%s*)(%S+)") do
 		out[#out + 1] = sp
-		local shouted = (keepShouts or shoutFrac) and PC.isShout(w)
-		if shouted and keepShouts then
-			out[#out + 1] = w
-			for _ in w:gmatch(PC.UTF8_CHAR) do i = i + 1 end
-		else
-			local f = shouted and shoutFrac or frac                    -- (shoutFrac: the shouted words' own share)
-			for ch in w:gmatch(PC.UTF8_CHAR) do
-				i = i + 1
-				if (#ch == 1 and ch:find("%p")) or hash01(seed, i, 0) < f then
-					out[#out + 1] = ch
-				else
-					out[#out + 1] = PC.GARBLE[math.floor(hash01(seed, i, tick + 1) * #PC.GARBLE) + 1]
-				end
+		for ch in w:gmatch(PC.UTF8_CHAR) do
+			i = i + 1
+			if (#ch == 1 and ch:find("%p")) or hash01(seed, i, 0) < frac then
+				out[#out + 1] = ch
+			else
+				out[#out + 1] = PC.GARBLE[math.floor(hash01(seed, i, tick + 1) * #PC.GARBLE) + 1]
 			end
 		end
 	end
 	return table.concat(out)
 end
 
+-- a message written all in capitals (2+ cased letters, none lower case, any script): its bubble shakes
+function PC.allCaps(text)
+	local n = 0
+	for ch in (text or ""):gmatch(PC.UTF8_CHAR) do
+		local k = PC.utf8Case(ch)
+		if k == "lower" then return false end
+		if k == "upper" then n = n + 1 end
+	end
+	return n >= 2
+end
+
+-- a mode's range: where its words are heard (inner) and where its buffer ends (outer)
+function PC.rangeOf(mode)
+	local cfg = PC.cfg
+	if mode == "w" then return cfg.whisperR, cfg.whisperMumbleR end
+	if mode == "y" then return cfg.shoutR, cfg.shoutMumbleR end
+	return cfg.chatR, cfg.mumbleR
+end
+
 -- what a bubble shows now: in the buffer range the message garbled, more of it revealed the closer
 -- the listener is (up to cfg.garbleMax just outside the range)
 function PC.bubbleText(p, b, now)
-	if b.level ~= "mumble" and b.level ~= "shout" and b.level ~= "shoutmumble" then return b.text end
-	local f = PC.bufferF(p, b)
-	if b.level == "shoutmumble" then return PC.garble(b.full, 0, b.id or 0, math.floor(now * 3), false, f or 0) end
-	if b.level == "shout" and not f then return b.text end              -- (farther: "⬚⬚⬚ HELP ⬚⬚ NOW")
-	return PC.garble(b.full, f or 0, b.id or 0, math.floor(now * 3), b.level == "shout")
+	if b.level ~= "mumble" then return b.text end
+	return PC.garble(b.full, PC.bufferF(p, b) or 0, b.id or 0, math.floor(now * 3))
 end
 
 -- the listener is within the farthest reach of this bubble's message (its buffer included): beyond it
@@ -354,7 +340,7 @@ function PC.inReach(p, b)
 	if not b.whisper and PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return true end
 	local d = PC.distTo(p)
 	if not d then return false end
-	local reach = b.whisper and cfg.whisperMumbleR or (#PC.shoutWords(b.full or "") > 0 and cfg.shoutMumbleR or cfg.mumbleR)
+	local _, reach = PC.rangeOf(b.mode)
 	return d <= reach
 end
 
@@ -368,8 +354,7 @@ end
 -- nil beyond the buffer
 function PC.bufferF(p, b)
 	local cfg = PC.cfg
-	local inner = b.whisper and cfg.whisperR or (b.level == "shoutmumble" and cfg.shoutR or cfg.chatR)
-	local outer = b.whisper and cfg.whisperMumbleR or (b.level == "shoutmumble" and cfg.shoutMumbleR or cfg.mumbleR)
+	local inner, outer = PC.rangeOf(b.mode)
 	local d = PC.distTo(p)
 	if not (d and d <= outer) then return nil end
 	return math.max(0, math.min(1, (outer - d) / (outer - inner))) * cfg.garbleMax
@@ -378,8 +363,7 @@ end
 -- the history line of a bubble: the most of it this player ever made out
 function PC.histText(b)
 	if b.level == "full" then return b.full end
-	if b.level == "shoutmumble" then return PC.garble(b.full, 0, b.id or 0, 0, false, math.max(0, b.bestF or 0)) end
-	return PC.garble(b.full, math.max(0, b.bestF or 0), b.id or 0, 0, b.level == "shout")
+	return PC.garble(b.full, math.max(0, b.bestF or 0), b.id or 0, 0)
 end
 
 -- characters removed outright: zero-width ones, direction overrides / isolates, line and paragraph
@@ -621,7 +605,7 @@ end
 -- a mode from the network: "p", "w" or "g" ("g" only in the lobby)
 function PC.validMode(m)
 	if PC.inLobby() then return "g" end
-	if m == "g" or m == "w" then return m end
+	if m == "g" or m == "w" or m == "y" then return m end
 	return "p"
 end
 
@@ -728,10 +712,10 @@ end
 -- which all scripts on the host share (mods cannot call each other). A ring of the last 16:
 --   proxchat.said.last              int: the newest event number (counts up, never resets in a session)
 --   proxchat.said.<n % 16>.player   int: who spoke
---   ... .mode   "speak" / "whisper" / "global"       ... .shout  bool: a shouted word (Speak only)
+--   ... .mode   "speak" / "whisper" / "shout" / "global"       ... .shout  bool: mode == "shout"
 --   ... .x .y .z  where the speaker stood (feet)       ... .text   string
 --   ... .radius   m: how far anyone hears anything (the babble): whisper 12, speak 35, shout 55, global 0 (defaults; the host may change them)
---   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, shout 40 (shouted words only)
+--   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, shout 40
 --   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
@@ -740,8 +724,8 @@ function PC.publishSaid(p, ch, text)
 	local base = cfg.reg .. ".said."
 	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
 	local k = base .. (s.said % PC.SAID_RING) .. "."
-	local mode = ch == "w" and "whisper" or (ch == "g" and "global" or "speak")
-	local shout = mode == "speak" and #PC.shoutWords(text) > 0
+	local mode = ch == "w" and "whisper" or (ch == "g" and "global" or (ch == "y" and "shout" or "speak"))
+	local shout = mode == "shout"
 	local okT, tr = pcall(GetPlayerTransform, p)
 	local pos = okT and tr and tr.pos or Vec(0, 0, 0)
 	SetInt(k .. "player", p)
@@ -855,7 +839,7 @@ function PC.clientInit()
 		babble = {clips = {}, queue = {}, echoes = {}},
 	}
 	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
-	c.mode = (m == "w" or m == "g") and m or "p"
+	c.mode = (m == "w" or m == "g" or m == "y") and m or "p"
 	local v = GetInt(cfg.save .. "voice")
 	if PC.VOICES[v] then c.voiceWant = v end                    -- (Settings / Options / /voice)
 	for set, n in pairs(PC.BABBLE_SETS) do
@@ -866,7 +850,7 @@ function PC.clientInit()
 	-- joining: recent Global lines go into the history; Speak / Whisper from before you came is not heard
 	for _, msg in ipairs(shared.pcMsgs or {}) do
 		if msg.id > c.seen then c.seen = msg.id end
-		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text, shout = #PC.shoutWords(msg.text) > 0}) end
+		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text}) end
 	end
 end
 
@@ -886,7 +870,7 @@ end
 function PC.setMode(m)
 	local c = PC.C()
 	if PC.lobby() then return end                                   -- (the lobby is Global only)
-	if m ~= "g" and m ~= "w" then m = "p" end
+	if m ~= "g" and m ~= "w" and m ~= "y" then m = "p" end
 	if c.mode == m then return end
 	c.mode = m
 	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
@@ -955,29 +939,18 @@ function PC.distTo(p)
 	return VecLength(VecSub(a, b))
 end
 
--- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (Speak
--- within chatR, Whisper within whisperR), "shout" (only the shouted words, within shoutR: far = true),
--- "shoutmumble" (a shouted message shoutR-shoutMumbleR: the shouted words garbled, the rest boxes),
--- "mumble" (the buffer just beyond: chatR-mumbleR / whisperR-whisperMumbleR: the babble and a garbled
--- bubble, the history line as much as was made out). nil = nothing (yet: PC.updateBubble).
-PC.LEVEL = {none = 0, mumble = 1, shoutmumble = 1, shout = 2, full = 3}
+-- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (within
+-- the mode's range: PC.rangeOf), "mumble" (in its buffer: the babble and a garbled bubble, the history
+-- line as much as was made out). nil = nothing (yet: PC.updateBubble).
+PC.LEVEL = {none = 0, mumble = 1, full = 2}
 function PC.heard(p, text, mode)
 	if p == GetLocalPlayer() then return text, false, "full", 0 end
-	local cfg = PC.cfg
-	if mode == "w" then
-		local d = PC.distTo(p)
-		if d and d <= cfg.whisperR then return text, false, "full", d end
-		if d and d <= cfg.whisperMumbleR then return "...", true, "mumble", d end
-		return nil
-	end
-	if PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false, "full", 0 end
+	if mode ~= "w" and PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false, "full", 0 end
 	local d = PC.distTo(p)
 	if not d then return nil end
-	if d <= cfg.chatR then return text, false, "full", d end
-	local shouted = #PC.shoutWords(text) > 0
-	if shouted and d <= cfg.shoutR then return PC.garble(text, 0, 0, 0, true), true, "shout", d end   -- (the shouted words, the rest as boxes)
-	if d <= cfg.mumbleR then return "...", true, "mumble", d end
-	if shouted and d <= cfg.shoutMumbleR then return "...", true, "shoutmumble", d end   -- (the shouts' buffer)
+	local inner, outer = PC.rangeOf(mode)
+	if d <= inner then return text, false, "full", d end
+	if d <= outer then return "...", true, "mumble", d end
 	return nil
 end
 
@@ -996,10 +969,10 @@ function PC.receive(m)
 	local late = age > PC.cfg.lateAge
 	if m.ch == "g" then
 		heard = m.text
-		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, shout = #PC.shoutWords(m.text) > 0, me = m.p == me})
+		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, me = m.p == me})
 		-- (Global: a chat line only - no bubble, no babble)
 	else
-		local mode = (m.ch == "w") and "w" or "p"
+		local mode = (m.ch == "w" or m.ch == "y") and m.ch or "p"
 		local whisper = mode == "w"
 		local level, d
 		heard, far, level, d = PC.heard(m.p, m.text, mode)
@@ -1017,18 +990,13 @@ function PC.receive(m)
 			PC.updateBubble(m.p, b, b.t, true)
 		end
 		-- the babble: also cfg.soundGrace m past the bubble's reach (the bubble goes a little before the sound)
-		local cfg = PC.cfg
-		local shouted = not whisper and #PC.shoutWords(m.text) > 0
 		local dd = d or PC.distTo(m.p)
-		local inGrace = not heard and dd and m.p ~= me
-			and dd <= (whisper and cfg.whisperMumbleR or (shouted and cfg.shoutMumbleR or cfg.mumbleR)) + cfg.soundGrace
+		local _, outer = PC.rangeOf(mode)
+		local inGrace = not heard and dd and m.p ~= me and dd <= outer + PC.cfg.soundGrace
 		if (heard or inGrace) and not late then
-			-- all of it, except beyond the speech buffer where only the shouted words carry
-			local inBuffer = dd and dd <= (whisper and cfg.whisperMumbleR or cfg.mumbleR)
-			local onlyShouts = shouted and not inBuffer
-			PC.babbleSay(m.p, onlyShouts and table.concat(PC.shoutWords(m.text), " ") or m.text, nil, whisper and "whisper" or nil)
+			PC.babbleSay(m.p, m.text, nil, whisper and "whisper" or (mode == "y" and "shout" or nil))
 		end
-		if level == "mumble" or level == "shoutmumble" then heard, far = nil, nil end   -- (the hook: no words heard)
+		if level == "mumble" then heard, far = nil, nil end              -- (the hook: no words heard)
 	end
 	if PC.hooks.onMessage and not PC.isDummy(m.p) then PC.hooks.onMessage(m, heard) end
 end
@@ -1043,15 +1011,15 @@ function PC.updateBubble(p, b, now, fresh)
 	local changed = false
 	if text and PC.LEVEL[level] > PC.LEVEL[b.level] then
 		b.level, b.text, b.hidden = level, text, false
-		b.mumble = level == "mumble" or level == "shoutmumble"
-		b.shout = not b.whisper and (level == "shoutmumble" or (level ~= "mumble" and #PC.shoutWords(text) > 0))   -- (CAPS stay a whisper)
+		b.mumble = level == "mumble"
+		b.shout = b.mode == "y"
 		b.bestF = -1                                                         -- (a new level: its own best share)
 		if not fresh and level == "full" then
 			b.t = math.max(b.t, now - PC.bubbleLife(b) + PC.cfg.revealHold)   -- (fully revealed: up at least 1 s more)
 		end
 		changed = true
 	end
-	if b.level == "mumble" or b.level == "shout" or b.level == "shoutmumble" then
+	if b.level == "mumble" then
 		local f = PC.bufferF(p, b) or 0
 		if f > b.bestF + 1e-6 then b.bestF, changed = f, true end
 	end
@@ -1122,7 +1090,7 @@ end
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
 -- and a shouter; /dummy 1 / 2 / 3 one of them (moved if it exists); /dummy clear removes them. Only
 -- for you (client-side, no server, not synced). They say the same line at the same
--- moment (the shouter in CAPS / with "!"), line after line, the voices rotating, so you can walk back
+-- moment (the shouter in Shout mode, in CAPS), line after line, the voices rotating, so you can walk back
 -- and forth and compare the bubbles and the babble at every distance. They take turns, cfg.dummyGap s
 -- apart: the whisperer, then the speaker, then the shouter; then the next line. Each line: "..." typing for
 -- cfg.dummyType s, then the message as if a player said it (PC.receive).
@@ -1262,7 +1230,7 @@ function PC.dummyTick(now)
 				d.voice = (dm.round + d.idx - 2) % #PC.VOICES + 1        -- (each round shifts the voices)
 				dm.n = (dm.n or 0) + 1
 				PC.receive({id = 1000000 + dm.n, p = d.p, name = d.name .. " (" .. PC.VOICES[d.voice][1] .. ")",
-					ch = d.kind == "w" and "w" or "p", text = d.kind == "s" and line[2] or line[1]})
+					ch = d.kind == "w" and "w" or (d.kind == "s" and "y" or "p"), text = d.kind == "s" and line[2] or line[1]})
 			end
 		end
 	end
@@ -1278,14 +1246,8 @@ function PC.voiceOf(p)
 	return (p * 37) % 5 + 1                                       -- (no pick yet: one of the first five)
 end
 
--- a message as syllables: {variant hash, pause after, pitch factor, shouted}
+-- a message as syllables: {variant hash, pause after, pitch factor, shouted (set by babbleSay)}
 function PC.babbleSyllables(text)
-	local caps = {}                                               -- byte index -> in a shouted word
-	for s0, w in text:gmatch("()(%S+)") do
-		if PC.isShout(w) then
-			for k = s0, s0 + #w - 1 do caps[k] = true end
-		end
-	end
 	local out, pair, angry = {}, "", false
 	local function flush(pause)
 		if pair ~= "" then
@@ -1301,12 +1263,11 @@ function PC.babbleSyllables(text)
 		local k = PC.utf8Kind(ch)
 		if k == "cjk" then                                        -- Chinese / Japanese / Korean: one each
 			flush(0); nch = 0
-			pair, angry = ch, caps[i] or false
+			pair = ch
 			flush(0)
 		elseif k == "letter" then                                 -- other scripts: two letters a syllable
 			pair = pair .. ch:lower()
 			nch = nch + 1
-			angry = angry or caps[i] or false
 			if nch >= 2 then flush(0); nch = 0 end
 		elseif k == "space" then flush(0.05); nch = 0
 		elseif k == "pause" then flush(0.16); nch = 0 end
@@ -1319,9 +1280,9 @@ function PC.babbleSyllables(text)
 	return out
 end
 
--- start babbling text for player p. how: nil = in the world at the speaker (nearby: shouts, echo),
--- "whisper" = breathy clips at the speaker, quiet, no echo, no shouting; "flat" = at the listener
--- (the voice preview in Settings), short and quiet
+-- start babbling text for player p. how: nil = Speak, in the world at the speaker (echo with distance);
+-- "shout" = the same with the raised-voice clips, a little louder, farther; "whisper" = breathy clips at
+-- the speaker, quiet, no echo; "flat" = at the listener (the voice preview in Settings), short and quiet
 function PC.babbleSay(p, text, voice, how)
 	local c = PC.C()
 	local B = c.babble
@@ -1342,8 +1303,8 @@ function PC.babbleSay(p, text, voice, how)
 		q.step = v[3] * 1.1
 		vol = cfg.whisperVol
 		shoutVol = vol
-		for _, s in ipairs(syl) do s[4] = false end               -- (CAPS stay a whisper)
 	end
+	for _, s in ipairs(syl) do s[4] = how == "shout" end          -- (Shout: every syllable raised)
 	q.vol, q.shoutVol = vol * lv, shoutVol * lv
 	B.queue[p] = q
 end
@@ -1351,7 +1312,7 @@ end
 -- how a voice carries: past cfg.soundNear the syllable is played that far away IN THE SPEAKER'S
 -- DIRECTION (PC.soundPos), so the game's own distance fade is the same for every speaker and ours sets
 -- the loudness: full near, falling gently with distance, then fading smoothly to nothing across the
--- buffer and cfg.soundGrace m past it (speech chatR-mumbleR, shouted words shoutR-shoutMumbleR,
+-- buffer and cfg.soundGrace m past it (speech chatR-mumbleR, shouts shoutR-shoutMumbleR,
 -- whispers whisperR-whisperMumbleR): the bubble goes a little before the sound does. The game's fade on top of ours made far
 -- shouts with a readable bubble almost silent. Speech echoes more the farther it carries (1-3 delayed,
 -- fainter repeats from beside and behind the speaker's direction).
@@ -1663,6 +1624,8 @@ function PC.command(text)
 		PC.modeCommand("g", rest)
 	elseif cmd == "s" or cmd == "speak" or cmd == "p" or cmd == "n" or cmd == "near" or cmd == "nearby" or cmd == "local" or cmd == "proximity" or cmd == "say" then
 		PC.modeCommand("p", rest)
+	elseif cmd == "y" or cmd == "yell" or cmd == "shout" or cmd == "sh" then
+		PC.modeCommand("y", rest)
 	elseif cmd == "w" or cmd == "whisper" then
 		PC.modeCommand("w", rest)
 	elseif cmd == "settings" or cmd == "options" then
@@ -1683,8 +1646,8 @@ function PC.command(text)
 		c.scroll = 0
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
-		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Global. Settings (window header): voice and more. " .. key .. "CAPS or ! shouts farther (Speak only).")
-		PC.system("/s /w /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /dummy [1|2|3|clear] (test speakers)")
+		PC.system("Enter: chat. Tab or the chips on the line: Speak / Whisper / Shout / Global. Settings (window header): voice and more. " .. key)
+		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /dummy [1|2|3|clear] (test speakers)")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -1801,7 +1764,7 @@ function PC.drawLine(e, w, size, a, measureOnly)
 			UiTranslate(pw, 0)
 		end
 		if e.sys then UiColor(0.6, 0.95, 0.85, a)
-		elseif e.shout then UiColor(1, 0.45, 0.35, a)
+		elseif e.shout then UiColor(1, 0.62, 0.32, a)
 		elseif whisper then UiColor(0.8, 0.82, 1, fa)                    -- (lavender: readable, still not a Speak line)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
 		else UiColor(1, 1, 1, a) end
@@ -1919,7 +1882,7 @@ function PC.bubbleDraw(L)
 	end
 	UiPush()
 	UiTranslate(L.x, L.y - L.lift)
-	if L.shout then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end    -- (shaking with anger)
+	if L.shake then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end    -- (ALL CAPS: shaking)
 	UiScale(s)
 	UiFont(L.font, L.size)
 	UiWordWrap(PC.cfg.bubbleW)
@@ -1932,7 +1895,7 @@ function PC.bubbleDraw(L)
 	if L.whisper then UiColor(0.86, 0.87, 1, ab) else UiColor(1, 1, 1, ab) end
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
-	if L.shout then UiColor(0.9, 0.1, 0.05, ab); UiRoundedRectOutline(w, h, 10, 4) end
+	if L.shout then UiColor(0.96, 0.45, 0.12, ab); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
 	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
 		UiPush()
@@ -1945,7 +1908,7 @@ function PC.bubbleDraw(L)
 		UiPop()
 	end
 	if L.whisper then UiColor(0.2, 0.2, 0.38, L.mumble and 0.85 * a or a)
-	else UiColor(L.shout and 0.6 or 0.08, 0.05, L.shout and 0.03 or 0.1, L.mumble and 0.85 * a or a) end
+	else UiColor(L.shout and 0.62 or 0.08, L.shout and 0.24 or 0.05, L.shout and 0.04 or 0.1, L.mumble and 0.85 * a or a) end
 	if L.th > L.vh + 1 then
 		UiPush()
 		UiWindow(w - 30, L.vh, true)                                      -- (clipped to the visible lines)
@@ -2012,22 +1975,24 @@ function PC.drawBubbles()
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
 					L.age = age
+					L.shake = PC.allCaps(b.full)
 				end
 				add(L)
 			end
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
-		if (mode == "p" or mode == "w") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden) then
+		if (mode == "p" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden) then
 			local d = PC.distTo(p)
-			if d and d <= (mode == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(p, "...", false, 0.75, true, mode == "w")) end
+			if d and d <= (PC.rangeOf(mode)) then add(PC.bubbleLayout(p, "...", mode == "y", 0.75, true, mode == "w")) end
 		end
 	end
 	local dm = c.dummy
 	for _, du in ipairs(dm and dm.list or {}) do                       -- (a dummy typing before its turn)
 		if du.typing then
 			local d = not (c.bubbles[du.p] and not c.bubbles[du.p].hidden) and PC.distTo(du.p)
-			if d and d <= (du.kind == "w" and cfg.whisperR or cfg.chatR) then add(PC.bubbleLayout(du.p, "...", false, 0.75, true, du.kind == "w")) end
+			local dmode = du.kind == "w" and "w" or (du.kind == "s" and "y" or "p")
+			if d and d <= (PC.rangeOf(dmode)) then add(PC.bubbleLayout(du.p, "...", dmode == "y", 0.75, true, dmode == "w")) end
 		end
 	end
 	-- drawn farthest speaker first (each with its line): a nearer speaker's bubble covers the lines of
@@ -2164,7 +2129,7 @@ function PC.drawHistory(W, H)
 		UiTranslate(14, top + 6)
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.45)
-		UiText("Nothing yet. Speak: " .. cfg.chatR .. " m (CAPS or ! carry to " .. cfg.shoutR .. " m), Whisper: " .. cfg.whisperR .. " m, Global: all players.")
+		UiText("Nothing yet. Whisper: " .. cfg.whisperR .. " m, Speak: " .. cfg.chatR .. " m, Shout: " .. cfg.shoutR .. " m, Global: all players.")
 		UiPop()
 	end
 	for i = #h - c.scroll, 1, -1 do
@@ -2198,7 +2163,7 @@ end
 
 -- the host's distance bar (Settings): 0..rangeMax m, a knob each for whisper, speech and shout (how far
 -- the words carry); each range shaded, its buffer lighter. Dragging a knob and letting go sends it.
-PC.RANGE_KINDS = {{"Whisper", {0.78, 0.78, 0.95}, "whisperBuf"}, {"Speak", {1, 0.82, 0.3}, "speakBuf"}, {"Shout", {1, 0.4, 0.32}, "shoutBuf"}}
+PC.RANGE_KINDS = {{"Whisper", {0.78, 0.78, 0.95}, "whisperBuf"}, {"Speak", {1, 0.82, 0.3}, "speakBuf"}, {"Shout", {1, 0.58, 0.28}, "shoutBuf"}}
 function PC.rangeBar(W)
 	local c, cfg = PC.C(), PC.cfg
 	local bw = W - 64
@@ -2356,8 +2321,8 @@ end
 function PC.drawTyping()
 	local c, cfg = PC.C(), PC.cfg
 	local W = cfg.winW
-	local cw, chh, cg = 104, 34, 6
-	local chipsW = 3 * cw + 2 * cg
+	local cw, chh, cg = 100, 34, 6
+	local chipsW = #PC.MODES * cw + (#PC.MODES - 1) * cg
 	UiPush()
 	UiTranslate(24, UiHeight() - 146)
 	UiAlign("left top")
@@ -2390,7 +2355,7 @@ function PC.drawTyping()
 	local col = info[5]
 	UiColor(col[1], col[2], col[3], 0.95)
 	UiRoundedRectOutline(W, 54, 8, 2)
-	local label = (m == "w") and ("Whisper (" .. cfg.whisperR .. " m): ") or info[2]
+	local label = info[2]
 	UiFont("bold.ttf", 28)
 	local lw = UiGetTextSize(label) or 160
 	UiPush()
@@ -2409,7 +2374,7 @@ function PC.drawTyping()
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
 	UiText(PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
-		or "Enter: say it   Tab / chips: Speak, Whisper, Global   Esc: close   Settings: your voice and more   /help")
+		or "Enter: say it   Tab / chips: Speak, Whisper, Shout, Global   Esc: close   Settings: your voice and more   /help")
 	UiPop()
 	-- the character limit: a count once it gets close, red when full
 	local n = PC.utf8Len(c.text)
@@ -2436,7 +2401,7 @@ function PC.drawHint()
 	if intro then
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.8)
-		UiText("Proximity Chat - Enter: talk to players near you (Tab: Whisper / Global)" .. key .. "   /help   (hide: /hint)")
+		UiText("Proximity Babble Chat - Enter: talk to players near you (Tab: Whisper / Shout / Global)" .. key .. "   /help   (hide: /hint)")
 	else
 		UiFont("regular.ttf", 18)
 		UiColor(1, 1, 1, 0.35)

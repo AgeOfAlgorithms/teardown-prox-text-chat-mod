@@ -1,6 +1,6 @@
 #version 2
--- Proximity Chat (global mod, Teardown v2 multiplayer): text chat with three speaking modes (nearby,
--- whisper, everyone), speech bubbles and a babble voice, in any level or game mode. Everything lives in chat_core.lua (namespaced:
+-- Proximity Babble Chat (global mod, Teardown v2 multiplayer): text chat with four speaking modes
+-- (speak, whisper, shout, global), speech bubbles and a babble voice, in any level or game mode. Everything lives in chat_core.lua (namespaced:
 -- the PC table, server.pc_*, shared.pc*, registry proxchat.*), so it cannot clash with the level's own
 -- scripts (each script has its own Lua state anyway) and other mods can #include the same file.
 -- This mod does not touch tools, player parameters or the level.
