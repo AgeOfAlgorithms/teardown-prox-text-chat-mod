@@ -79,10 +79,10 @@ local function machine(me, isHost, presetReg, prePC)
 	api.PlaySound = function(h, pos, vol, reg, pitch) env.sounds[#env.sounds + 1] = {h = h, pos = pos, vol = vol, pitch = pitch} end
 	api.ServerCall = function(name, ...) W.calls[#W.calls + 1] = {name = name:match("^server%.(.+)$"), args = deep({...}), n = select("#", ...)} end
 	api.ClientCall = function(p, name, ...) W.ccalls[#W.ccalls + 1] = {p = p, name = name:match("^client%.(.+)$"), args = deep({...}), n = select("#", ...)} end
-	api.Players = function()
-		local list, i = {}, 0
+	api.GetAllPlayers = function()                              -- (the engine's; Players() is only in an include the mod does not use)
+		local list = {}
 		for _, m in ipairs(MACHINES) do if W.pos[m.me] then list[#list + 1] = m.me end end
-		return function() i = i + 1; return list[i] end
+		return list
 	end
 	api.InputPressed = function(k) return env.keys[k] == true end
 	api.InputDown = function(k) return (env.held and env.held[k]) == true end
