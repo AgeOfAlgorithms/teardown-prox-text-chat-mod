@@ -1072,7 +1072,22 @@ function PC.pathPoll(w)
 	end
 end
 
--- step 1 + 2 for speaker p (nil: walls off, or nobody to hear)
+-- the farthest p's voice carries right now (+ cfg.soundGrace): its bubbles', its "...", its babble's
+-- mode; Yell when nothing is known
+function PC.speakerReach(p)
+	local c = PC.C()
+	local best = 0
+	local function add(mode) if mode then local _, r = PC.rangeOf(mode); best = math.max(best, r) end end
+	for _, t in ipairs({c.bubbles, c.prevBubbles}) do if t[p] then add(t[p].mode) end end
+	add((shared.pcTyping or {})[p])
+	local q = c.babble.queue[p]
+	if q then add(q.how == "whisper" and "w" or (q.how == "shout" and "y" or "p")) end
+	if best == 0 then add("y") end
+	return best + PC.cfg.soundGrace
+end
+
+-- step 1 + 2 for speaker p (nil: walls off, or nobody to hear). Beyond the farthest p's voice carries
+-- now (PC.speakerReach) nothing is checked; the way round is searched no longer than that
 function PC.wallState(p)
 	if not shared.pcWalls or p == GetLocalPlayer() or PC.isDummy(p) then return nil end
 	local c = PC.C()
@@ -1082,12 +1097,16 @@ function PC.wallState(p)
 	if not w then w = {t = -1e9}; c.walls[p] = w end
 	local now = GetTime()
 	local a, b = PC.listenerHead(), VecAdd(feet, Vec(0, 1.7, 0))
+	local reach = PC.speakerReach(p)
+	if VecLength(VecSub(b, a)) > reach then                          -- (too far to hear anyway: no rays, no search)
+		w.blocked, w.around = false, nil
+		return w
+	end
 	if now - w.t >= PC.cfg.wallEvery then
 		w.t = now
 		w.blocked = PC.beamBlocked(a, b)
 		if w.blocked then
-			local _, reach = PC.rangeOf("y")                         -- (no way round longer than any voice carries)
-			PC.pathAsk(w, a, b, reach + PC.cfg.soundGrace)
+			PC.pathAsk(w, a, b, reach)                               -- (no way round longer than this voice carries)
 		else
 			w.around = nil
 		end
