@@ -37,19 +37,29 @@ you read stays `false` / `0` / `""`, so your mod works the same without it.
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
 `proxchat.version` is the API version (2 = this document), `proxchat.alive` the `GetTime()` of its last
-tick. Use them to show chat hints only when there is a chat. A key can outlive a mod, so check that
+tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
+make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
 
 ```lua
--- client: show "Enter: talk" in your HUD only when the chat runs
 local function chatRuns()
 	return GetInt("proxchat.version") >= 2 and math.abs(GetTime() - GetFloat("proxchat.alive")) < 1
 end
 
+-- client: a game rule worth telling, only when players can actually talk
 function client.draw()
-	if chatRuns() then
-		UiPush(); UiTranslate(40, UiHeight() - 60); UiFont("regular.ttf", 22); UiText("Enter: talk"); UiPop()
+	if chatRuns() and showRules then
+		UiPush(); UiTranslate(UiCenter(), 120); UiAlign("center middle"); UiFont("bold.ttf", 26)
+		UiText("Monsters hear voices. Whisper near them.")
+		UiPop()
 	end
+end
+```
+
+```lua
+-- client: no chat? offer your own fallback (a "ping" on G) instead
+function client.tick(dt)
+	if not chatRuns() and InputPressed("g") then ServerCall("server.ping", GetLocalPlayer()) end
 end
 ```
 
