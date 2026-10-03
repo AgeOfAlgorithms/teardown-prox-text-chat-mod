@@ -259,7 +259,7 @@ for _, p in ipairs(P2.loads) do
 end
 check(clipsOk and nWhisper == 12, "all 32 clips load from snd/ and exist (12 whisper / Robot-whisper)")
 check(P2.shared.pcMsgs ~= P2.shared.pcMsgs and type(P2.shared.pcMsgs) == "table", "mock: every client read of shared is a fresh copy")
-check(drawn(P2, "^Proximity Chat %- Enter: talk to players near you %(Tab: Whisper / Global%)") ~= nil, "intro hint on screen")
+check(drawn(P2, "^Proximity Babble Chat %- Enter: talk to players near you %(Tab: Whisper / Shout / Global%)") ~= nil, "intro hint on screen")
 
 -- ================================================================== the input line: modes, chips, Tab
 press(P2, "return")
@@ -267,26 +267,28 @@ check(P2.PC.c.typing and P2.interactive, "Enter opens the line (UiMakeInteractiv
 step()
 check(P2.interactive and P2.focused, "while typing: interactive, the field has the keyboard")
 check(P1.PC.isTyping(2) and P1.reg["proxchat.typing.2"] == true, "the server knows P2 types (PC.isTyping, registry proxchat.typing.2)")
-check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the three mode chips (Speak / Whisper / Global)")
+check(drawn(P2, "^Speak: $") and drawn(P2, "^Speak$") and drawn(P2, "^Whisper$") and drawn(P2, "^Shout$") and drawn(P2, "^Global$"), "the line: 'Speak:' and the four mode chips (Speak / Whisper / Shout / Global)")
 check(drawn(P2, "^Chat$") and drawn(P2, "^Settings$") and not drawn(P2, "^Proximity$"), "the window: one history ('Chat'), a Settings button, no history tabs")
 check(drawn(P1, "...", true) ~= nil and not drawn(P3, "^%.%.%.$"), "P1 (4 m) sees P2's '...' typing bubble, P3 (26 m) does not")
 press(P2, "tab")
-check(P2.PC.mode() == "w" and drawn(P2, "^Whisper %(8 m%): $"), "Tab: 'Whisper (8 m):' (the same frame)")
+check(P2.PC.mode() == "w" and drawn(P2, "^Whisper: $"), "Tab: 'Whisper:' (the same frame; no distance in the prompt)")
 step()
 check(P1.PC.s.typing[2] == "w" and P2.reg["savegame.mod.pcmode"] == "w", "the server knows P2 whispers; the mode is saved as P2's default")
+press(P2, "tab")
+check(P2.PC.mode() == "y" and drawn(P2, "^Shout: $"), "Tab: 'Shout:'")
 press(P2, "tab")
 check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "Tab: 'Global:'")
 typeText(P2, "\t"); step()
 check(P2.PC.mode() == "p" and P2.PC.c.text == "" and drawn(P2, "^Speak: $"), "a Tab returned by the field: back to Speak (no tab character typed)")
 P2.keys.tab = true; typeText(P2, "\t")
 check(P2.PC.mode() == "w", "the Tab key and a field Tab in one frame move one mode, not two")
-P2.hover = {104, 34, 3}; P2.keys.lmb = true; step()                -- (press on the 3rd chip: Global)
+P2.hover = {100, 34, 4}; P2.keys.lmb = true; step()                -- (press on the 4th chip: Global)
 P2.release = true; step()                                       -- (its release: ignored)
 P2.hover = nil
 check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "clicking the Global chip (press fires, release de-duplicated)")
-P2.hover = {104, 34, 1}; P2.release = true; step(); P2.hover = nil
+P2.hover = {100, 34, 1}; P2.release = true; step(); P2.hover = nil
 check(P2.PC.mode() == "p", "a release alone on the Nearby chip also works (UiBlankButton fallback)")
-P2.hover = {104, 34, 2}; step(); P2.hover = nil
+P2.hover = {100, 34, 2}; step(); P2.hover = nil
 check(P2.PC.mode() == "p", "hovering a chip does not change the mode")
 
 -- ================================================================== nearby: typing, sending, hearing
@@ -316,35 +318,37 @@ waitRate()
 press(P2, "return"); typeText(P2, "second line\n"); step(); step()
 check(lastLine(P1, "p").text == "second line" and not P2.PC.c.typing, "a newline returned by the field sends too")
 waitRate()
-say(P2, "please HELP me NOW")
-check(lastLine(P1, "p").text == "please HELP me NOW", "P1 hears the whole shout")
-local l3 = lastLine(P3, "p")
-check(l3 and l3.text:find(" HELP ", 1, true) and l3.text:find(" NOW", 1, true) and garbled(l3.text) and l3.far and l3.shout, "P3 (26 m) reads the shouted words, the rest only in part: " .. tostring(l3 and l3.text))
-check(#hist(P4) == 0, "P4 (56 m) hears nothing")
+say(P2, "/y please help me now")
+local l1 = lastLine(P1, "y")
+check(l1 and l1.text == "please help me now" and l1.shout and P1.PC.c.bubbles[2].shout and P2.PC.mode() == "p",
+	"/y says one line in Shout (the mode stays Speak): P1 has it, a Shout bubble")
+local l3 = lastLine(P3, "y")
+check(l3 and l3.text == "please help me now" and not l3.far, "a shout reaches P3 (26 m) in full: Shout carries 40 m")
+check(#hist(P4) == 0, "P4 (56 m, past 55) hears nothing")
 waitRate()
 say(P2, "everyone come HERE!!")
-check(lastLine(P3, "p").text:find(" HERE!!$") and garbled(lastLine(P3, "p").text), "a word ending in !! is shouted too")
-waitRate()
+check(lastLine(P3, "p").text ~= "everyone come HERE!!" and garbled(lastLine(P3, "p").text) and not lastLine(P3, "p").shout,
+	"no word-level shouting: CAPS and !! in Speak stay Speak (garbled at 26 m)")
+steps(150)                                                       -- (the last babble is over)
 P1.sounds = {}
-say(P2, "come here now!")
-check(lastLine(P3, "p").text:find(" now!$") and garbled(lastLine(P3, "p").text), "a single ! is enough: that word is shouted")
+say(P2, "/y come here now")
 steps(60)
-local nPlain, vPlain = soundsFrom(P1, 4, "babble")
+local nPlain = soundsFrom(P1, 4, "babble")
 local nShout, vShout = soundsFrom(P1, 4, "shout")
-check(nPlain >= 2 and nShout >= 1 and vPlain <= 0.751 and vShout <= 0.801,
-	string.format("shout volume: the shouted word at %.2f (cfg 0.8), the rest of the message stays at %.2f (a ! no longer raises it)", vShout, vPlain))
+check(nPlain == 0 and nShout >= 4 and vShout <= 0.801, string.format("Shout babbles every syllable in the raised voice (%d, vol %.2f, cfg 0.8)", nShout, vShout))
 W.pos[4] = Vec(8, 0, 0); steps(5)
 -- the event API: the host's registry gets every message (proxchat.said.*) for other mods (titans...)
 local said = P1.reg["proxchat.said.last"]
 local sk = "proxchat.said." .. (said % 16) .. "."
-check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "speak" and P1.reg[sk .. "shout"] == true
-	and P1.reg[sk .. "text"] == "come here now!" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 40
+check(said and said >= 3 and P1.reg[sk .. "player"] == 2 and P1.reg[sk .. "mode"] == "shout" and P1.reg[sk .. "shout"] == true
+	and P1.reg[sk .. "text"] == "come here now" and P1.reg[sk .. "radius"] == 55 and P1.reg[sk .. "wordsRadius"] == 40
 	and math.abs(P1.reg[sk .. "x"] - 4) < 0.01 and P1.reg[sk .. "lobby"] == false,
-	"API: the host's registry has the event (proxchat.said.<n>: player 2, speak, shouted, at x = 4, words to 40 m, babble to 55 m)")
+	"API: the host's registry has the event (proxchat.said.<n>: player 2, shout, at x = 4, words to 40 m, babble to 55 m)")
 local pk = "proxchat.said." .. ((said - 1) % 16) .. "."
-check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "radius"] == 55, "API: the one before it is kept too (a ring of 16)")
+check(P1.reg[pk .. "text"] == "everyone come HERE!!" and P1.reg[pk .. "mode"] == "speak" and P1.reg[pk .. "shout"] == false and P1.reg[pk .. "radius"] == 35,
+	"API: the one before it is kept too (a ring of 16): Speak, 35 m")
 check(P2.reg["proxchat.said.last"] == nil, "API: host only (clients do not run the server)")
-check(#hist(P4) == 1 and lastLine(P4, "p").text == "come here now!", "P4 walked over while P2's last bubble was up: it shows, in full, and joins P4's history (older ones: no)")
+check(#hist(P4) == 1 and lastLine(P4, "y").text == "come here now", "P4 walked over while P2's last bubble was up: it shows, in full, and joins P4's history (older ones: no)")
 waitRate()
 say(P2, "now you are close")
 check(lastLine(P4, "p").text == "now you are close", "P4 near P2 now: hears the new message")
@@ -393,8 +397,8 @@ check(q[1] > 1.1 and q[2] < 0.9, string.format("the voice's pitch still shifts t
 
 -- ================================================================== everyone
 waitRate()
-press(P3, "return"); press(P3, "tab"); press(P3, "tab")
-check(P3.PC.mode() == "g" and drawn(P3, "^Global: $"), "P3: Tab twice = Global")
+press(P3, "return"); press(P3, "tab"); press(P3, "tab"); press(P3, "tab")
+check(P3.PC.mode() == "g" and drawn(P3, "^Global: $"), "P3: Tab three times = Global")
 typeText(P3, "hi all")
 P1.sounds, P4.sounds = {}, {}
 press(P3, "return"); step()
@@ -408,10 +412,10 @@ check(#P4.sounds == 0 and #P1.sounds == 0, "Global: no babble either (a plain ch
 
 -- ================================================================== one history per player, different
 local function modes(M) local t = {} for _, e in ipairs(hist(M)) do t[#t + 1] = e.ch end return table.concat(t, " ") end
-check(modes(P1) == "p p p p p p w w g", "P1's history: nearby, whispers, everyone, in order: " .. modes(P1))
-check(modes(P5) == "p p p p p p w w g", "P5 (10 m): the Speak lines, the whispers garbled (its buffer), Global: " .. modes(P5))
-check(modes(P3) == "p p p p p p g", "P3 (26 m, the buffer): every Speak line as far as it made it out, and Global: " .. modes(P3))
-check(modes(P4) == "p p g", "P4: the bubble it walked into, what it heard while close, Global: " .. modes(P4))
+check(modes(P1) == "p p y p y p w w g", "P1's history: nearby, whispers, everyone, in order: " .. modes(P1))
+check(modes(P5) == "p p y p y p w w g", "P5 (10 m): the Speak lines, the whispers garbled (its buffer), Global: " .. modes(P5))
+check(modes(P3) == "p p y p y p g", "P3 (26 m): the Speak lines as far as it made them out, the shouts, Global: " .. modes(P3))
+check(modes(P4) == "y p g", "P4: the bubble it walked into, what it heard while close, Global: " .. modes(P4))
 local n1 = #hist(P1)
 steps(120)
 check(#hist(P1) == n1, "no message is received twice although every shared read is a new table")
@@ -435,7 +439,6 @@ local function shown(t) local o, i = {}, 0 for ch in t:gmatch(P3.PC.UTF8_CHAR) d
 local a3, a6, sub = shown(G("meet me at the tower now", 0.3, 9, 0)), shown(G("meet me at the tower now", 0.6, 9, 5)), true
 for i in pairs(a3) do if not a6[i] then sub = false end end
 check(sub, "closer only adds letters (the same ones stay)")
-check(G("come HERE now", 0, 9, 0, true):find(" HERE ", 1, true) ~= nil, "garble keeps shouted words readable")
 check(g0 == "\226\172\154\226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154 \226\172\154\226\172\154\226\172\154\226\172\154\226\172\154!"
 	and P3.PC.bubbleFont(g0) == "MOD/fonts/pangolin.ttf" and P3.PC.chatFont(g0) == "bold_sc.ttf",
 	"the mystery letters are all U+2B1A, in our Pangolin (without it: bold_sc, the game font that has the glyph)")
@@ -453,36 +456,28 @@ steps(5)
 check(#hist(P3) == n3, "... the same line, not a second one")
 W.pos[3] = Vec(30, 0, 0)
 waitRate()
-say(P2, "/s the KEY is here")
-check(lastLine(P3, "p").text:find(" KEY ", 1, true) and garbled(lastLine(P3, "p").text) and #hist(P3) == n3 + 1, "a shout from 26 m: the shouted word, the rest in part")
+say(P2, "/s the key is here")
+check(garbled(lastLine(P3, "p").text) and #hist(P3) == n3 + 1, "a Speak line from 26 m: garbled")
 W.pos[3] = Vec(20, 0, 0); step(); step()
-check(lastLine(P3, "p").text == "the KEY is here" and not lastLine(P3, "p").far and #hist(P3) == n3 + 1, "closer: that history line is completed (not a second one)")
-W.pos[3] = Vec(44, 0, 0)                                            -- (40 m: past the buffer, within shouting)
-waitRate()
-say(P2, "/s please HELP me NOW")
-local b40 = P3.PC.c.bubbles[2]
-local X = "\226\172\154"
-check(b40 and P3.PC.bubbleText(2, b40, W.time) == string.rep(X, 6) .. " HELP " .. string.rep(X, 2) .. " NOW" and not b40.text:find("...", 1, true),
-	"35-40 m: the shouted words in place, every other word as boxes (no '...')")
--- the shouts' own buffer, 40-55 m: the shouted words garbled (more of them closer), the rest boxes
+check(lastLine(P3, "p").text == "the key is here" and not lastLine(P3, "p").far and #hist(P3) == n3 + 1, "closer: that history line is completed (not a second one)")
+-- Shout's own buffer, 40-55 m: garbled like any buffer (more letters closer)
 W.pos[3] = Vec(58, 0, 0)                                            -- (54 m)
 waitRate()
-say(P2, "/s come HERE RIGHT NOW")
+say(P2, "/y come here right now")
 local bs5 = P3.PC.c.bubbles[2]
-local function upper(t) local n = 0 for _ in t:gmatch("[A-Z]") do n = n + 1 end return n end
 local t54 = bs5 and P3.PC.bubbleText(2, bs5, W.time) or ""
-check(bs5 and bs5.level == "shoutmumble" and bs5.shout and not bs5.hidden and garbled(t54) and letters(t54) == 0 and garbled(lastLine(P3, "p").text),
-	"54 m: a red bubble with the shout garbled, a history line too: " .. t54)
-W.pos[3] = Vec(50, 0, 0); step(); step()                            -- (46 m)
-local t46 = P3.PC.bubbleText(2, bs5, W.time)
-check(upper(t46) > upper(t54) and letters(t46) == 0 and upper(t46) < 12, "46 m: more of the shouted words, still not all; 'come' stays boxes: " .. t46)
-W.pos[3] = Vec(44, 0, 0); step(); step()                            -- (40 m)
-check(bs5.level == "shout" and P3.PC.bubbleText(2, bs5, W.time):find(" HERE RIGHT NOW$") and lastLine(P3, "p").text:find(" HERE RIGHT NOW$"),
-	"40 m (within 40): the shouted words read in full; the same history line")
+check(bs5 and bs5.level == "mumble" and bs5.shout and not bs5.hidden and garbled(t54) and garbled(lastLine(P3, "y").text),
+	"54 m: a Shout bubble, garbled, a history line too: " .. t54)
+W.pos[3] = Vec(46, 0, 0); step(); step()                            -- (42 m)
+local t42 = P3.PC.bubbleText(2, bs5, W.time)
+check(letters(t42) > letters(t54) and garbled(t42), "42 m: more of it, still not all: " .. t42)
+W.pos[3] = Vec(43, 0, 0); step(); step()                            -- (39 m)
+check(bs5.level == "full" and P3.PC.bubbleText(2, bs5, W.time) == "come here right now" and lastLine(P3, "y").text == "come here right now",
+	"39 m (within 40): the words in full; the same history line")
 W.pos[3] = Vec(64, 0, 0)                                            -- (60 m: beyond 55)
 waitRate()
-say(P2, "/s ANYONE THERE")
-check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].hidden and lastLine(P3, "p").text ~= "ANYONE THERE", "beyond 55 m: no shout at all")
+say(P2, "/y anyone there")
+check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].hidden and (lastLine(P3, "y") or {}).text ~= "anyone there", "beyond 55 m: no shout at all")
 -- the history keeps the most the listener made out
 W.pos[3] = Vec(38, 0, 0)                                            -- (34 m: the buffer's far end)
 waitRate()
@@ -626,11 +621,11 @@ check(lastLine(P1, "p").text == "/slash", "//text sends a line starting with /")
 say(P2, "/frobnicate")
 check(lastLine(P2).text:find("Unknown command", 1, true) ~= nil, "unknown command echoed")
 say(P2, "/help")
-check(lastLine(P2).text:find("/s /w /g", 1, true) ~= nil, "/help lists commands")
+check(lastLine(P2).text:find("/s /w /y /g", 1, true) ~= nil, "/help lists commands")
 say(P2, "/g"); say(P2, "/s")
 check(P2.PC.mode() == "p" and P2.PC.page() ~= "settings", "/s switches to Speak (Settings is /settings)")
 say(P2, "/hint"); step()
-check(P2.PC.c.hideHint and not drawn(P2, "^Enter: chat$") and not drawn(P2, "^Proximity Chat %- Enter"), "/hint hides the hint (saved)")
+check(P2.PC.c.hideHint and not drawn(P2, "^Enter: chat$") and not drawn(P2, "^Proximity Babble Chat %- Enter"), "/hint hides the hint (saved)")
 say(P2, "/hint")
 say(P2, "/mute")
 check(lastLine(P2).text:find("Nobody is muted", 1, true) ~= nil, "/mute alone: who is muted")
@@ -668,8 +663,9 @@ check(P1.PC.utf8Len(got) == 90 and #got == 180, "90 characters, cut on a charact
 
 -- ================================================================== every language
 local PC = P1.PC
-check(PC.isShout("\208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149") and not PC.isShout("\208\191\208\190\208\188\208\190\209\137\209\140"), "Cyrillic: ПОМОГИТЕ shouts, помощь does not")
-check(PC.isShout("\206\148\206\145") and PC.isShout("\228\189\160\229\165\189\239\188\129\239\188\129"), "Greek capitals shout; Chinese ending in ！！ shouts")
+check(PC.allCaps("\208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149") and not PC.allCaps("\208\191\208\190\208\188\208\190\209\137\209\140"), "Cyrillic: ПОМОГИТЕ is all caps, помощь is not")
+check(PC.allCaps("\206\148\206\145") and PC.allCaps("WAIT FOR ME!") and not PC.allCaps("wait FOR me") and not PC.allCaps("\228\189\160\229\165\189") and not PC.allCaps("A"),
+	"all caps: Greek capitals, 'WAIT FOR ME!'; not mixed case, not Chinese (no case), not a single letter")
 check(#PC.babbleSyllables("\228\189\160\229\165\189\229\144\151") == 3 and PC.chatFont("\228\189\160\229\165\189\229\144\151") == "bold_sc.ttf", "Chinese: a syllable per character, the Chinese font")
 check(#PC.babbleSyllables("\227\129\147\227\130\147\227\129\171\227\129\161\227\129\175") == 5 and PC.chatFont("\227\129\147\227\130\147\227\129\171\227\129\161\227\129\175") == "bold_jp.ttf", "Japanese: a syllable per kana, the Japanese font")
 check(PC.chatFont("\236\149\136\235\133\149") == "bold_sc.ttf", "Korean: a font with Hangul")
@@ -688,7 +684,7 @@ check(PC.chatVisual("hi \215\169\215\156\215\149\215\157") == "hi \215\157\215\1
 check(PC.utf8Head("\208\150\208\150\208\150", 2) == "\208\150\208\150", "utf8Head never splits a letter")
 waitRate()
 P2.PC.say("\208\191\208\190\208\188\208\190\208\179\208\184\209\130\208\181 \208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149", "p"); step()
-check(lastLine(P3, "p").text:find(" \208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149$") and lastLine(P3, "p").text:find("\226\172\154", 1, true), "P3 at 26 m reads the Cyrillic shouted word, the rest in part")
+check(lastLine(P3, "p").text:find("\226\172\154", 1, true) ~= nil, "Cyrillic CAPS in Speak are not a shout: garbled at 26 m like the rest")
 waitRate()
 P2.PC.say("\208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149", "w"); step()
 check(lastLine(P1, "w").text == "\208\159\208\158\208\156\208\158\208\147\208\152\208\162\208\149" and lastLine(P3, "w") == nil, "a Cyrillic CAPS whisper stays a whisper (P3 gets nothing)")
@@ -710,7 +706,7 @@ step(); step()
 check(P2.PC.mode() == "g", "lobby: clients say everything to everyone")
 press(P2, "return"); press(P2, "tab")
 check(P2.PC.mode() == "g" and drawn(P2, "^Global: $"), "lobby: Tab does not leave Global")
-P2.hover = {104, 34, 2}; P2.keys.lmb = true; step(); P2.hover = nil
+P2.hover = {100, 34, 2}; P2.keys.lmb = true; step(); P2.hover = nil
 check(P2.PC.mode() == "g", "lobby: the Whisper chip is disabled")
 waitRate()
 typeText(P2, "lobby hello"); press(P2, "return"); step()
@@ -788,7 +784,7 @@ end
 local O = optionsEnv()
 O.frame()
 local function otext(pat) for _, t in ipairs(O.texts) do if t:find(pat, 1, true) then return t end end end
-check(otext("Speak / Whisper / Global") and otext("Not picked"), "Options: explains the keys; no voice picked yet")
+check(otext("Speak / Whisper / Shout / Global") and otext("Not picked"), "Options: explains the keys; no voice picked yet")
 O.frame("Robot")
 check(O.reg["savegame.mod.pcvoice"] == 6, "Options: picking Robot saves savegame.mod.pcvoice = 6")
 O.frame("Hide")
@@ -899,7 +895,7 @@ W.pos[3] = Vec(44, 0, 0); step()                                          -- (40
 local out40 = shows(P3, 2)
 W.pos[3] = Vec(32, 0, 0); step()                                          -- (28 m: back while it is up)
 check(in26 and not out40 and shows(P3, 2), "walking out of the buffer hides the bubble; coming back while it is up shows it again")
-waitRate(); say(P2, "/s COME BACK HERE")
+waitRate(); say(P2, "/y come back here")
 W.pos[3] = Vec(54, 0, 0); step()                                          -- (50 m: a shout reaches 55)
 local sh50 = shows(P3, 2)
 W.pos[3] = Vec(62, 0, 0); step()                                          -- (58 m)
@@ -1066,6 +1062,17 @@ check(C2.whisperR == 8 and C2.chatR == 25 and C2.shoutR == 40 and C2.whisperMumb
 press(P1, "esc"); step()
 W.pos[3] = Vec(30, 0, 0)
 
+-- ================================================================== only an ALL CAPS message shakes
+waitRate(); say(P2, "/y no shaking here")
+step()
+local shook
+for _, L in ipairs(P1.PC.drawOrder or {}) do if L.p == 2 and L.age == 1 then shook = L.shake end end
+check(shook == false, "a Shout bubble does not shake")
+waitRate(); say(P2, "/s WAIT FOR ME")
+step()
+for _, L in ipairs(P1.PC.drawOrder or {}) do if L.p == 2 and L.age == 1 then shook = L.shake end end
+check(shook == true, "a message in ALL CAPS shakes (any mode)")
+
 -- ================================================================== off screen and at the edges
 local function inside(L) return L and L.left >= 0 and L.right <= 1920 and L.top >= 0 and L.bottom <= 1080 end
 P1.offscreen = true
@@ -1153,8 +1160,8 @@ W.pos[1] = Vec(0, 0, 25)                                                    -- (
 steps(60 * 9.5)                                                             -- (the 2nd line: all three have spoken)
 bw, bs, bh = P1.PC.c.bubbles[DW], P1.PC.c.bubbles[DS], P1.PC.c.bubbles[DH]
 local L2 = P1.PC.DUMMY_LINES[2]
-check((not bw or bw.hidden) and bs and bs.mumble and bh and bh.level == "shout" and P1.PC.bubbleText(DH, bh, 0) == L2[2],
-	"from 28 m: no whisper, the speaker garbled, the shouter readable (all shouted)")
+check((not bw or bw.hidden) and bs and bs.mumble and bh and bh.level == "full" and bh.shout and P1.PC.bubbleText(DH, bh, 0) == L2[2],
+	"from 28 m: no whisper, the speaker garbled, the shouter (Shout mode) readable")
 W.pos[1] = Vec(0, 0, 0)
 steps(60 * 11 * 8)
 local seen = {}
