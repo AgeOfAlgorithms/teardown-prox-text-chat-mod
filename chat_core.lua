@@ -88,6 +88,9 @@
 --   PC.hooks.blockKeys()              client: true = Enter (and cfg.windowKey) do nothing
 --   PC.hooks.onMessage(msg, heard)    client: a message arrived; heard = what was heard or nil
 --   PC.hooks.log(line)                server: diagnostics
+--   Registry switches a game sets on the host, every tick: proxchat.walls (bool: walls muffle voices,
+--   PC.walled) and proxchat.channel.<p> (a name, "dead": p talks only to that channel and hears everyone). Every
+--   machine, every tick: proxchat.version (PC.API_VERSION) and proxchat.alive (GetTime()).
 --
 -- Engine notes (see the teardown-modding skill, "Multiplayer social features"):
 --   - Text entry is the engine's UiTextInput used as a real field (pass the current text, focus = true
@@ -124,6 +127,13 @@ do
 		speakBuf = 0.4,          --   shout 40 -> 55 m (the host's distance bar keeps these shares)
 		shoutBuf = 0.375,
 		rangeMin = 2, rangeMax = 80,  -- m: the host's distance bar
+		wallFactor = 0.5,        -- walls on (proxchat.walls): through a wall / floor / roof a voice carries this share as far
+		wallBeam = 0.4,          -- m: the beam's 3 x 3 rays, this far apart (up / down / sideways)
+		wallEvery = 0.25,        -- s: a speaker's beam re-checked this often while it matters
+		pathEvery = 1.0,         -- s: the way round asked again at most this often (unless an end moved:)
+		pathMove = 1.0,          -- m: ... or when the listener or the speaker moved this far
+		pathTarget = 0.5,        -- m: the way round must end this close to the speaker's head
+		pathMax = 2,             -- searches for a way round running at once (each machine; more speakers wait)
 		garbleMax = 0.75,        -- share of the letters revealed at the buffer's inner edge (0 at its outer edge)
 		dummyType = 1.5,         -- s the test dummy (/dummy) shows "..." before each line
 		dummyShow = 4.5,         -- s after the last of them spoke, before the next line
@@ -193,7 +203,16 @@ PC.MODES = {
 	{"y", "Yell: ", "Yell", "[yell]", {1, 0.58, 0.28}},
 	{"g", "Global: ", "Global", "[global]", {0.55, 0.8, 1}},
 }
+-- what a player in a channel says (proxchat.channel.<p> = "dead", "dead red"...): only that channel
+-- hears it - not a mode on the line. The tag and the prompt show the channel's name (PC.channelInfo)
+PC.DEAD = {"d", "Dead: ", "Dead", "[dead]", {0.62, 0.62, 0.68}}
+function PC.channelInfo(chan)
+	if not chan or chan == "" or chan == "dead" then return PC.DEAD end
+	local label = chan:sub(1, 1):upper() .. chan:sub(2)
+	return {"d", label .. ": ", label, "[" .. chan .. "]", PC.DEAD[5]}
+end
 function PC.modeInfo(m)
+	if m == "d" then return PC.DEAD end
 	for _, x in ipairs(PC.MODES) do if x[1] == m then return x end end
 	return PC.MODES[2]                                             -- (Speak)
 end
@@ -338,8 +357,9 @@ end
 function PC.inReach(p, b)
 	local cfg = PC.cfg
 	if p == GetLocalPlayer() then return true end
+	if PC.dead() then return true end                                 -- (the dead hear everyone)
 	if not b.whisper and PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return true end
-	local d = PC.distTo(p)
+	local d = PC.hearDist(p)
 	if not d then return false end
 	local _, reach = PC.rangeOf(b.mode)
 	return d <= reach
@@ -356,7 +376,7 @@ end
 function PC.bufferF(p, b)
 	local cfg = PC.cfg
 	local inner, outer = PC.rangeOf(b.mode)
-	local d = PC.distTo(p)
+	local d = PC.hearDist(p)
 	if not (d and d <= outer) then return nil end
 	return math.max(0, math.min(1, (outer - d) / (outer - inner))) * cfg.garbleMax
 end
@@ -575,13 +595,24 @@ function PC.textWidth(text, size, bold)
 end
 
 -- ============================================================================ server
+-- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
+-- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
+PC.API_VERSION = 2
+function PC.heartbeat()
+	local reg = PC.cfg.reg
+	SetInt(reg .. ".version", PC.API_VERSION)
+	SetFloat(reg .. ".alive", GetTime())
+end
+
 function PC.serverInit()
-	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false}
+	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false, chan = {}, walls = false}
 	ClearKey(PC.cfg.reg)
 	shared.pcMsgs = {}
 	shared.pcVoice = {}
 	shared.pcTyping = {}
 	shared.pcLobby = false
+	shared.pcChan = {}
+	shared.pcWalls = false
 	shared.pcAck = {}
 	shared.pcNow = 0
 	-- the distances: the host's last choice, else the defaults (a map can set proxchat.ranges, see serverTick)
@@ -694,12 +725,19 @@ function server.pc_say(p, ch, text, seq)
 	if seq then pcAck(p, seq) end
 	s.n = s.n + 1
 	local name = PC.cleanName(GetPlayerName(p), p)
-	if ch == "w" then
+	local chan = not PC.inLobby() and s.chan[p] or nil
+	if chan then
+		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
+		-- players alone, never in shared
+		for _, q in ipairs(PC.allPlayers()) do
+			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan) end
+		end
+	elseif ch == "w" then
 		local okT, tr = pcall(GetPlayerTransform, p)
 		for _, q in ipairs(PC.allPlayers()) do
 			local okQ, tq = pcall(GetPlayerTransform, q)
-			if q == p or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= cfg.whisperMumbleR + cfg.whisperSlack) then
-				ClientCall(q, "client.pc_whisper", s.n, p, name, text)
+			if q == p or s.chan[q] or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= cfg.whisperMumbleR + cfg.whisperSlack) then
+				ClientCall(q, "client.pc_whisper", s.n, p, name, text)       -- (the near ones, and every channel: the dead hear everyone)
 			end
 		end
 	else
@@ -711,8 +749,8 @@ function server.pc_say(p, ch, text, seq)
 		while #list > cfg.keepShared do table.remove(list, 1) end
 		shared.pcMsgs = list
 	end
-	PC.publishSaid(p, ch, text)
-	PC.log(string.format("proxchat say p=%d ch=%s len=%d", p, ch, #text))
+	PC.publishSaid(p, ch, text, chan or "")
+	PC.log(string.format("proxchat say p=%d ch=%s len=%d%s", p, ch, #text, chan and (" channel=" .. chan) or ""))
 end
 
 -- ---- the event API for other mods (server / host): every accepted message is written to the registry,
@@ -724,9 +762,11 @@ end
 --   ... .radius   m: how far anyone hears anything (the babble): whisper 12, speak 35, yell 55, global 0 (defaults; the host may change them)
 --   ... .wordsRadius  m: how far the words are heard: whisper 8, speak 25, yell 40
 --   ... .lobby   bool: said while the game's lobby was up (proxchat.lobby)
+--   ... .channel  the speaker's channel ("dead", "dead red"...: only it heard), else ""
+--   ... .time     GetTime() on the host when it was said (a line from before this level: larger than now)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
-function PC.publishSaid(p, ch, text)
+function PC.publishSaid(p, ch, text, channel)
 	local s, cfg = PC.S(), PC.cfg
 	local base = cfg.reg .. ".said."
 	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
@@ -743,6 +783,8 @@ function PC.publishSaid(p, ch, text)
 	SetFloat(k .. "radius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperMumbleR or (shout and cfg.shoutMumbleR or cfg.mumbleR)))
 	SetFloat(k .. "wordsRadius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperR or (shout and cfg.shoutR or cfg.chatR)))
 	SetBool(k .. "lobby", PC.hooks.inLobby and PC.hooks.inLobby() or false)
+	SetString(k .. "channel", channel or "")
+	SetFloat(k .. "time", GetTime())                                   -- (the host's level clock: how old it is)
 	SetInt(base .. "last", s.said)                                    -- (last: the event is complete)
 end
 
@@ -787,6 +829,24 @@ function PC.serverTick(dt)
 	s.time = s.time + dt
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
+	PC.heartbeat()
+	-- a game's switches (set every tick by it): walls, and who talks only to the dead
+	local walls = GetBool(PC.cfg.reg .. ".walls")
+	if walls ~= s.walls then s.walls = walls; shared.pcWalls = walls end
+	local chan, changed = {}, false
+	for _, q in ipairs(PC.allPlayers()) do
+		local v = GetString(PC.cfg.reg .. ".channel." .. q)
+		v = PC.utf8Head(PC.clean(v), 24):lower()                      -- (a name from a game: tidy, short, any case)
+		if v ~= "" then chan[q] = v end
+		if chan[q] ~= s.chan[q] then changed = true end
+	end
+	for q in pairs(s.chan) do if not chan[q] then changed = true end end
+	if changed then
+		s.chan = chan
+		local t = {}
+		for q, v in pairs(chan) do t[q] = v end
+		shared.pcChan = t
+	end
 	-- a map or game mode may set its distances: SetString("proxchat.ranges", "whisper,speak,yell")
 	local reg = GetString(PC.cfg.reg .. ".ranges")
 	if reg ~= "" and reg ~= s.regRanges then
@@ -844,6 +904,7 @@ function PC.clientInit()
 		bubbleLevel = PC.LEVELS[GetInt(cfg.save .. "bubbles")] and GetInt(cfg.save .. "bubbles") or #PC.LEVELS,
 		babbleVolume = PC.savedVolume(),
 		babble = {clips = {}, queue = {}, echoes = {}},
+		walls = {},                                   -- (per speaker: the beam and the way round, PC.wallState)
 	}
 	local m = GetString(cfg.save .. "mode")                       -- (the last mode used)
 	c.mode = (m == "w" or m == "g" or m == "y") and m or "p"
@@ -946,14 +1007,123 @@ function PC.distTo(p)
 	return VecLength(VecSub(a, b))
 end
 
+-- WALLS (opt-in: proxchat.walls on the host -> shared.pcWalls). How far a voice SOUNDS (PC.hearDist):
+--   1. a beam, every cfg.wallEvery s per speaker: 9 parallel rays from the listener's head toward the
+--      speaker's on a 3 x 3 grid cfg.wallBeam m apart (up / down / sideways of the straight line), against
+--      the static world above the debris size, glass not counting. One ray clear = no wall: the
+--      distance. (A pole, a railing, a low wall, a doorway on the line leaves a ray clear.)
+--   2. all 9 blocked (a wall, a floor, a roof): the way ROUND - the engine's path planner, "flying" (the
+--      shortest way through the air: a door to the side, a window, over the wall, down a corridor),
+--      asynchronous, no longer than the message could carry. Found: its length (heard round the corner,
+--      a little quieter). None (sealed off): THROUGH the wall - the distance / cfg.wallFactor (muffled).
+--      Until the planner answers, through the wall. The shorter of the two counts. Cost: only while a
+--      speaker has a message up / types / babbles; a search at most every cfg.pathEvery s per speaker,
+--      cfg.pathMax at once, the engine's own background planner (its robots use it).
+function PC.beamBlocked(a, b)
+	local d = VecSub(b, a)
+	local len = VecLength(d)
+	if len < 1 then return false end
+	local dir = VecScale(d, 1 / len)
+	local side = VecCross(dir, Vec(0, 1, 0))
+	if VecLength(side) < 0.1 then side = Vec(1, 0, 0) else side = VecNormalize(side) end
+	local up = VecNormalize(VecCross(side, dir))
+	local o = PC.cfg.wallBeam
+	for i = 0, 8 do
+		local k = (i + 4) % 9                                       -- (the straight ray first: most often the clear one)
+		local off = VecAdd(VecScale(side, (k % 3 - 1) * o), VecScale(up, (math.floor(k / 3) - 1) * o))
+		QueryRequire("physical static large")
+		if not QueryRaycast(VecAdd(a, off), dir, len, 0, true) then return false end
+	end
+	return true
+end
+
+-- the way round (step 2): one path planner per speaker, re-asked when either end moved cfg.pathMove m
+-- or every cfg.pathEvery s; w.around = the length found, false = none, nil = not known yet
+function PC.pathAsk(w, a, b, maxLen)
+	local cfg = PC.cfg
+	local now = GetTime()
+	if w.busy or not (CreatePathPlanner and PathPlannerQuery and GetPathState and GetPathLength) then return end
+	local busy = 0
+	for _, o in pairs(PC.C().walls) do if o.busy then busy = busy + 1 end end
+	if busy >= cfg.pathMax then return end                           -- (a crowd behind walls: one after another)
+	if w.pathT and now - w.pathT < cfg.pathEvery and VecLength(VecSub(a, w.pathA)) < cfg.pathMove
+		and VecLength(VecSub(b, w.pathB)) < cfg.pathMove then return end
+	if not w.planner then
+		local ok, id = pcall(CreatePathPlanner)
+		if not ok or not id then return end
+		w.planner = id
+	end
+	QueryRequire("physical static large")
+	if pcall(PathPlannerQuery, w.planner, a, b, maxLen, cfg.pathTarget, "flying") then
+		w.busy, w.pathT, w.pathA, w.pathB = true, now, a, b
+	end
+end
+
+function PC.pathPoll(w)
+	if not w.busy then return end
+	local ok, st = pcall(GetPathState, w.planner)
+	if not ok or st == "busy" then return end
+	w.busy = false
+	if st == "done" then
+		local okL, len = pcall(GetPathLength, w.planner)
+		w.around = okL and len or false
+	else
+		w.around = false                                              -- (fail / idle: no way round within reach)
+	end
+end
+
+-- step 1 + 2 for speaker p (nil: walls off, or nobody to hear)
+function PC.wallState(p)
+	if not shared.pcWalls or p == GetLocalPlayer() or PC.isDummy(p) then return nil end
+	local c = PC.C()
+	local feet = PC.speakerPos(p)
+	if not feet then return nil end
+	local w = c.walls[p]
+	if not w then w = {t = -1e9}; c.walls[p] = w end
+	local now = GetTime()
+	local a, b = PC.listenerHead(), VecAdd(feet, Vec(0, 1.7, 0))
+	if now - w.t >= PC.cfg.wallEvery then
+		w.t = now
+		w.blocked = PC.beamBlocked(a, b)
+		if w.blocked then
+			local _, reach = PC.rangeOf("y")                         -- (no way round longer than any voice carries)
+			PC.pathAsk(w, a, b, reach + PC.cfg.soundGrace)
+		else
+			w.around = nil
+		end
+	end
+	PC.pathPoll(w)
+	return w
+end
+
+-- how far p sounds: the distance; with a wall in the way the way round, or through it (see WALLS)
+function PC.hearDist(p)
+	local d = PC.distTo(p)
+	if not d then return nil end
+	local w = PC.wallState(p)
+	if not (w and w.blocked) then return d end
+	local through = d / PC.cfg.wallFactor
+	if w.around then return math.max(d, math.min(through, w.around)) end
+	return through
+end
+
+-- CHANNELS (proxchat.channel.<p> = a name, set by a game on the host -> shared.pcChan): "dead", or
+-- "dead red" / "dead blue" for teams. What a player in a channel says reaches only that channel (the
+-- server sends it to them alone: client.pc_dead), and players in any channel hear everyone in full
+-- (spectators). Nobody sees a bubble or a "..." of theirs, nor hears their babble. The lobby (everyone
+-- hears everything) comes first.
+function PC.channelOf(p) return (shared.pcChan or {})[p] or "" end
+function PC.dead() return not PC.lobby() and PC.channelOf(GetLocalPlayer()) ~= "" end
+
 -- what the local player hears of p's message NOW: text, far, level, distance. Levels: "full" (within
 -- the mode's range: PC.rangeOf), "mumble" (in its buffer: the babble and a garbled bubble, the history
 -- line as much as was made out). nil = nothing (yet: PC.updateBubble).
 PC.LEVEL = {none = 0, mumble = 1, full = 2}
 function PC.heard(p, text, mode)
 	if p == GetLocalPlayer() then return text, false, "full", 0 end
+	if PC.dead() then return text, false, "full", PC.distTo(p) or 0 end
 	if mode ~= "w" and PC.hooks.everyoneHears and PC.hooks.everyoneHears(p) then return text, false, "full", 0 end
-	local d = PC.distTo(p)
+	local d = PC.hearDist(p)
 	if not d then return nil end
 	local inner, outer = PC.rangeOf(mode)
 	if d <= inner then return text, false, "full", d end
@@ -974,10 +1144,10 @@ function PC.receive(m)
 	-- late (the client lagged): timed from when it was said, no babble
 	local age = (m.t and shared.pcNow) and math.max(0, shared.pcNow - m.t) or 0
 	local late = age > PC.cfg.lateAge
-	if m.ch == "g" then
+	if m.ch == "g" or m.ch == "d" then
 		heard = m.text
-		PC.addHist({ch = "g", p = m.p, name = m.name, text = m.text, me = m.p == me})
-		-- (Global: a chat line only - no bubble, no babble)
+		PC.addHist({ch = m.ch, chan = m.chan, p = m.p, name = m.name, text = m.text, me = m.p == me})
+		-- (Global, and the dead to the dead: a chat line only - no bubble, no babble)
 	else
 		local mode = (m.ch == "w" or m.ch == "y") and m.ch or "p"
 		local whisper = mode == "w"
@@ -997,7 +1167,7 @@ function PC.receive(m)
 			PC.updateBubble(m.p, b, b.t, true)
 		end
 		-- the babble: also cfg.soundGrace m past the bubble's reach (the bubble goes a little before the sound)
-		local dd = d or PC.distTo(m.p)
+		local dd = d or PC.hearDist(m.p)
 		local _, outer = PC.rangeOf(mode)
 		local inGrace = not heard and dd and m.p ~= me and dd <= outer + PC.cfg.soundGrace
 		if (heard or inGrace) and not late then
@@ -1060,6 +1230,7 @@ function PC.clientTick(dt)
 		c.regTyping = c.typing
 		SetBool(PC.cfg.reg .. ".typing." .. me, c.typing and true or false)
 	end
+	PC.heartbeat()
 	-- the chosen voice reaches the server (re-sent until shared shows it, 6 s at most)
 	if c.voiceWant then
 		local vs = shared.pcVoice or {}
@@ -1354,10 +1525,11 @@ function PC.listenerHead()
 	return feet and VecAdd(feet, Vec(0, 1.7, 0)) or GetCameraTransform().pos
 end
 
-function PC.babbleDistance(pos, vol, shout, reach, inner)
+-- mul: the distance through walls counts this many times (PC.wallMul)
+function PC.babbleDistance(pos, vol, shout, reach, inner, mul)
 	local cfg = PC.cfg
 	local cam = GetCameraTransform().pos
-	local d = VecLength(VecSub(pos, PC.listenerHead()))                -- (loudness by your distance; direction from the camera)
+	local d = VecLength(VecSub(pos, PC.listenerHead())) * (mul or 1)   -- (loudness by your distance; direction from the camera)
 	reach = reach or (shout and cfg.shoutMumbleR or cfg.mumbleR)
 	inner = inner or (shout and cfg.shoutR or cfg.chatR)
 	local f = math.max(0, math.min(1, (d - cfg.echoFrom) / math.max(1, reach - cfg.echoFrom)))
@@ -1373,6 +1545,14 @@ function PC.babbleDistance(pos, vol, shout, reach, inner)
 		end
 	end
 	return loud, echoes
+end
+
+-- how much farther p sounds than p is (PC.hearDist / the distance): 1 without a wall in the way
+function PC.wallMul(p)
+	if PC.isDummy(p) then return 1 end
+	local d = PC.distTo(p)
+	if not d or d < 0.5 then return 1 end
+	return (PC.hearDist(p) or d) / d
 end
 
 function PC.babbleTick()
@@ -1416,11 +1596,11 @@ function PC.babbleTick()
 					if q.how == "flat" then
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
 					elseif q.how == "whisper" then                          -- (no echo; quiet toward its reach)
-						local d = VecLength(VecSub(pos, PC.listenerHead()))
+						local d = VecLength(VecSub(pos, PC.listenerHead())) * PC.wallMul(p)
 						local v = base * PC.loudness(d, PC.cfg.whisperMumbleR + PC.cfg.soundGrace, PC.cfg.whisperR)
 						if v > 0 then PlaySound(clip, PC.soundPos(pos, cam), v, false, pitch) end   -- (walked out of earshot: silent)
 					else
-						local vol, echoes = PC.babbleDistance(pos, base, s[4], (s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR) + PC.cfg.soundGrace, s[4] and PC.cfg.shoutR or PC.cfg.chatR)
+						local vol, echoes = PC.babbleDistance(pos, base, s[4], (s[4] and PC.cfg.shoutMumbleR or PC.cfg.mumbleR) + PC.cfg.soundGrace, s[4] and PC.cfg.shoutR or PC.cfg.chatR, PC.wallMul(p))
 						if vol > 0 then PlaySound(clip, PC.soundPos(pos, cam), vol, false, pitch) end
 						for _, e in ipairs(vol > 0 and echoes or {}) do
 							B.echoes[#B.echoes + 1] = {t = now + e.delay, clip = clip, pos = PC.soundPos(VecAdd(pos, e.offset), cam), vol = e.vol, pitch = pitch * 0.97}
@@ -1441,6 +1621,8 @@ function PC.setTyping(on)
 	c.text, c.send, c.tab, c.scroll = "", nil, nil, 0
 	c.focus = c.typing
 	c.page = "chat"                                               -- (opens / closes on the history)
+	c.regTyping = c.typing                                        -- (this game's registry at once: no key of the first
+	SetBool(PC.cfg.reg .. ".typing." .. GetLocalPlayer(), c.typing)  --  letter slips through to a game; see clientTick)
 	ServerCall("server.pc_typing", GetLocalPlayer(), c.typing, PC.mode())
 end
 
@@ -1485,6 +1667,11 @@ end
 -- a whisper from the server: only the players near enough get one (it is never in shared)
 function client.pc_whisper(id, p, name, text)
 	PC.receive({id = id, p = p, name = name, ch = "w", text = text})
+end
+
+-- what a dead player said: only the dead get it (never in shared)
+function client.pc_dead(id, p, name, text, chan)
+	PC.receive({id = id, p = p, name = name, ch = "d", text = text, chan = chan})
 end
 
 function PC.findVoice(s)
@@ -1748,7 +1935,7 @@ end
 function PC.drawLine(e, w, size, a, measureOnly)
 	UiPush()
 	UiWordWrap(w)
-	local info = (not e.sys) and PC.modeInfo(e.ch) or nil
+	local info = (not e.sys) and (e.ch == "d" and PC.channelInfo(e.chan) or PC.modeInfo(e.ch)) or nil
 	local whisper = e.ch == "w"
 	local tag = info and (info[4] .. " ") or ""
 	local tagSize = size - 6
@@ -2002,8 +2189,9 @@ function PC.drawBubbles()
 		end
 	end
 	for p, mode in pairs(shared.pcTyping or {}) do
-		if (mode == "p" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden) then
-			local d = PC.distTo(p)
+		if (mode == "p" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden)
+			and (PC.lobby() or PC.channelOf(p) == "") then                    -- (a channel - the dead: no "..." for anyone)
+			local d = PC.hearDist(p)
 			if d and d <= (PC.rangeOf(mode)) then add(PC.bubbleLayout(p, "...", mode == "y", 0.75, true, mode == "w")) end
 		end
 	end
@@ -2395,7 +2583,7 @@ function PC.drawTyping()
 	UiPush()
 	UiTranslate(W - 10 - chipsW, 10)
 	for i, x in ipairs(PC.MODES) do
-		local dim = PC.lobby() and x[1] ~= "g"
+		local dim = (PC.lobby() and x[1] ~= "g") or PC.dead()
 		UiPush()
 		UiTranslate((i - 1) * (cw + cg), 0)
 		local hover = (not dim) and UiIsMouseInRect(cw, chh)
@@ -2414,7 +2602,7 @@ function PC.drawTyping()
 	end
 	UiPop()
 	local m = PC.mode()
-	local info = PC.modeInfo(m)
+	local info = PC.dead() and PC.channelInfo(PC.channelOf(GetLocalPlayer())) or PC.modeInfo(m)
 	local col = info[5]
 	UiColor(col[1], col[2], col[3], 0.95)
 	UiRoundedRectOutline(W, 54, 8, 2)
@@ -2436,7 +2624,8 @@ function PC.drawTyping()
 	UiAlign("left top")
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
-	UiText(PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
+	UiText(PC.dead() and "Enter: say it (only the dead hear you)   Esc: close   Settings: your voice and more   /help"
+		or PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
 		or "Enter: say it   Tab / chips: Whisper, Speak, Yell, Global   Esc: close   Settings: your voice and more   /help")
 	UiPop()
 	-- the character limit: a count once it gets close, red when full
