@@ -741,7 +741,7 @@ end
 
 -- the Translate page: its own tab next to Voice. Without Koetama: the rules greyed out under the notice saying it is
 -- needed (as the Voice page); an old Koetama: "too outdated".
-PC.TR_ROW_H, PC.TR_BTN_W = 96, 260
+PC.TR_ROW_H, PC.TR_BTN_W, PC.TR_LABEL_W = 96, 260, 167   -- (TR_LABEL_W: room for "Translation 2:")
 
 function PC.translatePageHeight(base)
 	local vo = PC.voice()
@@ -780,7 +780,8 @@ function PC.trLangButton(k, side, off)
 	UiPop()
 end
 
--- rule k: "Rule k:  From [lang] → Into [lang]", its state under it (a bar while downloading)
+-- translation k: "Translation k:  From [lang] → Into [lang]", its state under it (a bar while downloading); the row
+-- is TR_LABEL_W + 58 + 2 x (42 + TR_BTN_W) + 96 - 42 = 925 px wide: within cfg.pageMinW
 function PC.drawTrRule(k, off)
 	local c = PC.C()
 	local typing = c.typing
@@ -798,14 +799,15 @@ function PC.drawTrRule(k, off)
 		UiText(text)
 		UiPop()
 	end
-	label(0, "Rule " .. k .. ":", true)
-	label(92, "From")
-	UiPush(); UiTranslate(150, 0); PC.trLangButton(k, "f", off); UiPop()
-	label(150 + 42 + PC.TR_BTN_W + 14, "→ Into")
-	UiPush(); UiTranslate(150 + 42 + PC.TR_BTN_W + 96, 0); PC.trLangButton(k, "t", off); UiPop()
+	local L = PC.TR_LABEL_W
+	label(0, "Translation " .. k .. ":", true)
+	label(L, "From")
+	UiPush(); UiTranslate(L + 58, 0); PC.trLangButton(k, "f", off); UiPop()
+	label(L + 58 + 42 + PC.TR_BTN_W + 14, "→ Into")
+	UiPush(); UiTranslate(L + 58 + 42 + PC.TR_BTN_W + 96, 0); PC.trLangButton(k, "t", off); UiPop()
 	c.typing = typing
 	local text, col, pct = PC.trRuleState(k)
-	UiTranslate(92, 48)
+	UiTranslate(L, 48)
 	if pct then                                                        -- (downloading: a small bar)
 		UiPush()
 		UiTranslate(0, 5)
