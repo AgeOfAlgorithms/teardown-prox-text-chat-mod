@@ -1,70 +1,46 @@
--- VOICE (a prototype, Oct 2026). Real voice and speech-to-text come from KOETAMA, a companion app (the "helper"
--- below; github.com/AgeOfAlgorithms/koetama - its PROTOCOL.md is this link, its Teardown
--- module engine/games/teardown.py the other side). Without it this file does one thing: once a second it asks
--- whether the helper's "on" file is there (one HasFile).
--- Real voice needs a HELPER program outside the game (a script has no microphone and no network). The two
--- talk through files, on each player's own machine:
+-- VOICE (a prototype, Oct 2026). Real voice, speech-to-text and translation come from KOETAMA, a companion app (the
+-- "helper" below; github.com/AgeOfAlgorithms/koetama). Its PROTOCOL.md ("protocol 2": "The objects", "Real voices",
+-- "Translation", "Transport: files") is the contract for this file. Without Koetama this file does one thing: once a
+-- second it asks whether the helper's "on" file is there (one HasFile).
+-- A script has no microphone, no network and no file writes, so the two talk through files, on each player's own PC:
 --
--- GAME -> HELPER: a string in the savegame (the game writes savegame.xml within a frame; the helper reads
--- the file), 20 times a second while there is a voice room or voices to hear, 5 times while only the helper is there
--- (version 6, PROTOCOL.md "Real voices: rooms and the relay" and "Translation (version 6)"):
---   savegame.mod.pcvx.f = "6|<seq>|<voice volume 0..1>|<session>|<ack>|<ping>|<mic>|<lang>|<live>|<room>|<key>|<me>|<to>|<region>|<translations>|<requests>|<speaker>;<speaker>;..."
---     session  a number that is new for every level start (the helper starts its text numbers over)
---     ack      the number of the last text file this script has read (the helper deletes it then)
---     ping     counts up every cfg.voicePing s; the helper answers with the file pcvx_p<ping % 1000>
---     mic      0 = off; 1 = always on (the helper listens and its speech detector finds each line); 2 / 3 = push to
---              talk with the talk key up / held (the helper keeps the microphone open, a line starts only while held
---              and ends 0.25 s after it is let go). Below: THE TALK KEY
---     lang     the language the player speaks (the Voice page: "Language I speak"; PC.VOICE_LANGS), "auto" = guess
---     live     1 = live words while the player talks (the Voice page: "Live words while I talk"); 0 = only the finished
---              line (less CPU for a slow PC)
---     room     the session's voice room (32 lower-case hex digits) and its key (64): shared.pcVoiceRoom, the first one a
---     key      player's helper proposed (message kind "r", server.pc_room); both empty without one (no real voices)
---     me       this player's id (GetLocalPlayer)
---     to       who gets MY voice now, ids comma-separated (PC.voiceTo): the players within my voice mode's whole range
---              (its buffer too) + cfg.voiceToSlack m; everyone in the lobby; nobody in Global or while dead; empty
---              without a room
---     region   where the room should live (the host's Settings, "Voice server"); empty = Auto, and without a room
---     translations  the player's translations (the Translate tab's rules, at most 2), "ja>en,ko>en"; empty = off
---     requests the lines to translate, "<id>:<hex of the UTF-8 text>" joined by ";" (at most cfg.trMax, each at most
---              cfg.trBytes bytes of text; the oldest dropped first), each kept until its reply (kind "x") comes, or
---              cfg.trWait s. Ids count up from 1 for the session. Below: TRANSLATION
---   <speaker> = id,src,talk,gain,azimuth,elevation,muffle
---     src      which voice the helper plays for it: the voice dummies' test voices 1..3; 0 = a real player (id = their
---              player id: what their helper sends through the room; PC.voicePlayers) - never one talking in Global
---              (a Global line is text for everyone, its voice is heard by no one), muted, or dead in another channel
---     talk     1 while it talks (a real player: always 1, the helper plays what arrives)
---     gain     0..1 from the chat's own distances (PC.loudness over PC.hearDist: the mode's range, its
---              buffer, walls)
---     azimuth  degrees from where the camera looks: 0 ahead, 90 right, -90 left, 180 behind;
---     elevation degrees above (+) or below (-)
---     muffle   0..1: 0 clear; rising across the buffer (where text is garbled: a voice you hear but cannot
---              make out), and behind a wall (through it: cfg.voiceWallMuffle; a way round: voiceAroundMuffle)
---     (the lobby: every real player at gain 1, straight ahead, clear)
---   No helper and no speakers: written once more with mic 0, no room, nobody, no translations, no requests and no speakers,
---   then not at all.
+-- GAME -> KOETAMA: the FEED, savegame.mod.pcvx.f = the lower-case hex of one JSON object (PC.voiceFeed; the game writes
+-- savegame.xml within a frame). Written every cfg.voiceFeed s while there are voices or a voice room, cfg.voiceFeedIdle s
+-- otherwise, at once when a line is queued for translation or the talk key changes (PC.voiceFeedNow: at most one
+-- extra write a frame), and once more when nothing is left (listen "off", no room, no speakers), then not at all:
+--   {"type":"feed","seq":n,"session":sid,"ack":n,"ping":n,"volume":0..1,"listen":"off"|"always"|"push_to_talk",
+--    "talk_key":bool,"lang":"en","live":bool,"me":id,"speakers":[...],
+--    "room":"<32 hex>","key":"<64 hex>","to":[ids],"region":"",          (only with a room)
+--    "translations":[{"from","to"}],"to_translate":[{"id","text"}]}       (only while a translation is on)
+--     seq / session / ack / ping: the link (a new session each level start; ack = the last message read; Koetama
+--              answers ping n with the file pcvx_p<n % 1000>)
+--     listen   "off" without Koetama; "push_to_talk" (talk_key true while the key is held) or "always" (its speech
+--              detector finds each line). Below: THE TALK KEY
+--     speakers {"id","gain","azimuth","elevation","muffle"} per voice this player hears now (PC.voiceHear: the chat's
+--              ranges, buffer and walls); real players (PC.voicePlayers) only with a room; the voice dummies add
+--              "test_voice": 1..3 and "talking": bool (ids PC.VDUMMY + 0..2)
+--     room / key: shared.pcVoiceRoom, the first room a player's Koetama made (server.pc_room); to: who gets MY voice
+--              now (PC.voiceTo); region: the host's "Voice server"
+--     translations / to_translate: the Translate tab's rules and the lines waiting for a translation (TRANSLATION)
 -- THE VOICE MODE of every player is known to every game (server.pc_vmode -> shared.pcVMode[p]: "w" / "s" / "y" / "g",
 -- the player's choice; the lobby overrides it): a listener works out how loud a real player is with it (PC.voiceHear).
 --
--- HELPER -> GAME: files next to the mod's folder (PC.VOICE_IO = "MOD/../pcvx_"; a script can ask HasFile
--- and Spawn a prefab file):
---   pcvx_on          the helper runs (it removes the file when it stops)
---   pcvx_v6          it reads feed version 6 (one per version it reads); "on" without it: "too outdated" (PC.voiceHelper)
---   pcvx_vc / _vx    the voice server: connected / can't be reached (PC.voiceNetTick)
---   pcvx_p<n>        its answer to ping n: it is alive (a file left by a crash is not)
---   pcvx_t<n>.xml    message number n (1, 2, ... per session): a prefab
---                    <body tags="pcvx k=<kind> u=<utterance> t=<hex of the UTF-8> [w=<times> a=<ago>]"/>; the script
---                    Spawns it, reads the tags, deletes what it made, and acks n. kind "s" = the player started talking
---                    (no text yet: their head bobs at once, PC.voiceTalk), "l" = the words so far while the player still
---                    talks (LIVE; only ever growing, chunk by chunk), "f" (or none) = the finished line (it may be empty:
---                    nothing made out; talking ends), "r" = a voice room for this session, "<room>:<key>" (never shown or
---                    said: forwarded to the host, which keeps the first, PC.voiceRoomOffer), "x" = the translation of
---                    request u (empty: nothing in it to translate; PC.trReply), "d" = the translations' state,
---                    "<from>><to>=<state>,..." (ready / downloading <0-100> / loading / unavailable / error; PC.trStatus) -
---                    x and d are never shown or said as chat. w: each UNIT's start (PC.voiceUnits: a word, or one CJK / kana
---                    character), 4 hex digits in 1/100 s after the line's audio began; a: how long ago that was, in
---                    1/100 s, when the file was written. With them each listener gets only what was said while they
---                    were in reach (PC.voiceCut): arriving mid-sentence "... the rest", walking away "the start ...".
+-- KOETAMA -> GAME: files next to the mod's folder (PC.VOICE_IO = "MOD/../pcvx_"; a script can ask HasFile and Spawn a
+-- prefab file):
+--   pcvx_on          Koetama runs (removed when it stops). With pcvx_v5 / pcvx_v6 next to it: a Koetama before 0.4.0,
+--                    "too outdated" (PC.voiceHelper)
+--   pcvx_p<n>        its answer to ping n: it is alive (an "on" file left by a crash is not)
+--   pcvx_t<n>.xml    object n (1, 2, ... per session): a prefab <body tags="pcvx j=<hex of a JSON object>"/>; the script
+--                    Spawns it, reads j, deletes what it made, acks n (PC.voiceReadMsg) and acts on its type
+--                    (PC.voiceMessage): "hello" (first each session; its features: no "translate" = the Translate tab
+--                    says "too outdated"), "speech" (kind "start": the player started talking - their head bobs at once,
+--                    PC.voiceTalk; "live": the words so far, only ever growing; "final": the finished line, maybe "" =
+--                    nothing made out; times = each UNIT's start in s after the line's audio began, ago = how long ago
+--                    that was - kept inside the mod as 4 hex digits per unit in 1/100 s, PC.voiceTimesHex), "room" (a voice
+--                    room: never shown or said, forwarded to the host, PC.voiceRoomOffer), "voice" (the voice server's
+--                    state, PC.voiceNetTick), "translation" (PC.trReply), "translations_status" (PC.trStatus). Unknown
+--                    types: acked and ignored. With word times each listener gets only what was said while they were in
+--                    reach (PC.voiceCut): arriving mid-sentence "... the rest", walking away "the start ...".
 -- What the player said (the helper's transcript) is then SAID like a typed line, in the current mode,
 -- flagged as voice (PC.say(text, mode, true)): the same ranges, history and proxchat.said event; no babble.
 -- LIVE words go to the server (server.pc_live, at most every cfg.voiceLiveEvery s) and from there ONLY to the
@@ -74,23 +50,233 @@
 -- shared); not for Global or the dead (no bubbles there). The finished line replaces them; gone after
 -- cfg.voiceLiveLife s without news.
 --
--- TRANSLATION (feed version 6; the Translate tab next to Voice): up to two rules "from A into B", saved per player.
+-- TRANSLATION (the Translate tab next to Voice): up to two rules "from A into B", saved per player.
 -- Every FULL line another player says that goes into this player's history or a bubble - typed, or spoken once
--- finished (never live words), any mode, Global and the dead's channels too - is sent to Koetama (the feed's requests)
--- while a rule is on and Koetama runs; only lines heard in full (not garbled from a buffer; a typed one walked into
--- range: then). Koetama translates on this PC (Mozilla's models) and answers with a message "x"; the translation
--- shows under the original in the history, the feed and its bubble, in its own colour (PC.TR_COLOR).
+-- finished (never live words), any mode, Global and the dead's channels too - is sent to Koetama (the feed's
+-- to_translate) while a rule is on and Koetama runs; only lines heard in full (not garbled from a buffer; a typed one
+-- walked into range: then). Koetama translates on this PC (Mozilla's models) and answers with a "translation"; it shows
+-- under the original in the history, the feed and its bubble, in its own colour (PC.TR_COLOR).
 --
 -- /dummy voice: three VOICE dummies in a row (whisperer, speaker, yeller; green heads), separate from the
 -- chat's test dummies (/dummy): they talk in turns of cfg.voiceTurn s - the helper plays a recorded voice
 -- for each - so you can walk around them and check direction, the three ranges and the walls.
 -- /dummy voice 1 / 2 / 3: one of them 3 m ahead; /dummy voice clear (or /dummy clear): gone.
--- The helper: Koetama (github.com/AgeOfAlgorithms/koetama): its window, or engine/teardown_helper.py
--- (the command line, with test modes).
+-- JSON and hex for the link: PC.jsonEncode / PC.jsonDecode / PC.hexEncode / PC.hexDecode (below).
 
 PC.VDUMMY = 2000                                                      -- (speaker ids PC.VDUMMY + 0..2)
 PC.VOICE_FEED = "savegame.mod.pcvx.f"
 PC.VOICE_IO = "MOD/../pcvx_"
+PC.PROTOCOL = 2                                                       -- (Koetama's game protocol this file speaks)
+
+-- ---- JSON AND HEX (protocol 2: the feed is the hex of a JSON object, so is each message's j tag). Small, PUC Lua 5.1.
+--   PC.jsonEncode(v) -> string. Strings (invalid UTF-8 bytes become U+FFFD), finite numbers (whole ones without ".0";
+--     not finite: null), booleans, PC.JSON_NULL / nil -> null, tables: an ARRAY when marked with PC.jsonArray(t) or
+--     t[1] ~= nil (an empty one must be marked to come out as []), else an object (string keys, sorted, "type" first).
+--   PC.jsonDecode(s) -> the value, or nil for anything malformed (never raises). Arrays come back marked
+--     (PC.jsonArray), null as PC.JSON_NULL (so arrays have no holes), \uXXXX (surrogate pairs too) as UTF-8.
+--   PC.hexEncode(s) -> lower-case hex; PC.hexDecode(h) -> the bytes, or nil (odd length, not hex; either case is read).
+PC.JSON_NULL = setmetatable({}, {__tostring = function() return "null" end})
+local JSON_ARRAY = {__jsonArray = true}
+function PC.jsonArray(t) return setmetatable(t or {}, JSON_ARRAY) end
+function PC.jsonIsArray(t) return type(t) == "table" and getmetatable(t) == JSON_ARRAY end
+
+local HEX_OF, BYTE_OF = {}, {}
+for b = 0, 255 do
+	local h, ch = string.format("%02x", b), string.char(b)
+	HEX_OF[ch] = h
+	local hi, lo = h:sub(1, 1), h:sub(2, 2)
+	for _, x in ipairs({hi, hi:upper()}) do for _, y in ipairs({lo, lo:upper()}) do BYTE_OF[x .. y] = ch end end
+end
+function PC.hexEncode(s) return (tostring(s):gsub(".", HEX_OF)) end
+function PC.hexDecode(h)
+	if type(h) ~= "string" or #h % 2 == 1 or h:find("[^%x]") then return nil end
+	return (h:gsub("%x%x", BYTE_OF))
+end
+
+local JSON_ESC = {['"'] = '\\"', ["\\"] = "\\\\", ["\b"] = "\\b", ["\f"] = "\\f", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t"}
+for b = 0, 31 do
+	local ch = string.char(b)
+	if not JSON_ESC[ch] then JSON_ESC[ch] = string.format("\\u%04x", b) end
+end
+local BAD_UTF8 = "\239\191\189"                                         -- (U+FFFD)
+-- one run of non-ASCII bytes (a lead byte and its continuation bytes): itself when it is one valid UTF-8 character
+local function utf8Seq(m)
+	local c, n = m:byte(1), #m
+	local len = (c >= 0xC2 and c <= 0xDF and 2) or (c >= 0xE0 and c <= 0xEF and 3) or (c >= 0xF0 and c <= 0xF4 and 4) or 0
+	if len == 0 then return string.rep(BAD_UTF8, n) end
+	if n > len then return utf8Seq(m:sub(1, len)) .. string.rep(BAD_UTF8, n - len) end
+	if n < len then return string.rep(BAD_UTF8, n) end
+	local b2 = m:byte(2)
+	if (c == 0xE0 and b2 < 0xA0) or (c == 0xED and b2 > 0x9F) or (c == 0xF0 and b2 < 0x90) or (c == 0xF4 and b2 > 0x8F) then
+		return string.rep(BAD_UTF8, n)                                     -- (overlong, a surrogate, past U+10FFFF)
+	end
+	return m
+end
+local strCache, strCacheN = {}, 0                                       -- (the feed repeats its strings 20 times a second)
+local function jsonStr(s)
+	local e = strCache[s]
+	if e then return e end
+	e = s
+	if e:find("[\128-\255]") then e = e:gsub("[\128-\255][\128-\191]*", utf8Seq) end
+	e = '"' .. e:gsub('[%z\1-\31"\\]', JSON_ESC) .. '"'
+	if strCacheN >= 128 then strCache, strCacheN = {}, 0 end
+	strCache[s], strCacheN = e, strCacheN + 1
+	return e
+end
+local function jsonNum(n)
+	if n ~= n or n == math.huge or n == -math.huge then return "null" end
+	if n == math.floor(n) and math.abs(n) < 1e15 then return string.format("%.0f", n) end
+	return string.format("%.14g", n)
+end
+local function keyOrder(a, b)
+	if a == "type" then return b ~= "type" end
+	if b == "type" then return false end
+	return a < b
+end
+local function jsonEnc(v, out, depth)
+	local t = type(v)
+	if t == "string" then out[#out + 1] = jsonStr(v)
+	elseif t == "number" then out[#out + 1] = jsonNum(v)
+	elseif t == "boolean" then out[#out + 1] = v and "true" or "false"
+	elseif t ~= "table" or v == PC.JSON_NULL or depth > 32 then out[#out + 1] = "null"
+	elseif getmetatable(v) == JSON_ARRAY or v[1] ~= nil then
+		out[#out + 1] = "["
+		for i = 1, #v do
+			if i > 1 then out[#out + 1] = "," end
+			jsonEnc(v[i], out, depth + 1)
+		end
+		out[#out + 1] = "]"
+	else
+		local keys = {}
+		for k in pairs(v) do if type(k) == "string" then keys[#keys + 1] = k end end
+		table.sort(keys, keyOrder)
+		out[#out + 1] = "{"
+		for i, k in ipairs(keys) do
+			if i > 1 then out[#out + 1] = "," end
+			out[#out + 1] = jsonStr(k)
+			out[#out + 1] = ":"
+			jsonEnc(v[k], out, depth + 1)
+		end
+		out[#out + 1] = "}"
+	end
+end
+function PC.jsonEncode(v)
+	local out = {}
+	jsonEnc(v, out, 0)
+	return table.concat(out)
+end
+
+local function utf8Char(cp)
+	if cp < 0x80 then return string.char(cp) end
+	if cp < 0x800 then return string.char(0xC0 + math.floor(cp / 64), 0x80 + cp % 64) end
+	if cp < 0x10000 then return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64) end
+	return string.char(0xF0 + math.floor(cp / 262144), 0x80 + math.floor(cp / 4096) % 64, 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
+end
+local JSON_UNESC = {['"'] = '"', ["\\"] = "\\", ["/"] = "/", b = "\b", f = "\f", n = "\n", r = "\r", t = "\t"}
+local function jsonSkip(s, i) return s:find("[^ \t\r\n]", i) or #s + 1 end
+local function jsonDecStr(s, i)                                         -- (s[i] is the opening quote) -> string, next i
+	local out = {}
+	i = i + 1
+	while true do
+		local j = s:find('[%z\1-\31"\\]', i)
+		if not j then return nil end
+		out[#out + 1] = s:sub(i, j - 1)
+		local ch = s:sub(j, j)
+		if ch == '"' then return table.concat(out), j + 1 end
+		if ch ~= "\\" then return nil end                                  -- (a raw control character)
+		local e = s:sub(j + 1, j + 1)
+		if e == "u" then
+			local h = s:match("^%x%x%x%x", j + 2)
+			if not h then return nil end
+			local cp = tonumber(h, 16)
+			i = j + 6
+			if cp >= 0xD800 and cp <= 0xDBFF then                          -- (a surrogate pair: one character)
+				local h2 = s:match("^\\u(%x%x%x%x)", i)
+				local lo = h2 and tonumber(h2, 16)
+				if lo and lo >= 0xDC00 and lo <= 0xDFFF then
+					cp, i = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00), i + 6
+				else
+					cp = 0xFFFD
+				end
+			elseif cp >= 0xDC00 and cp <= 0xDFFF then
+				cp = 0xFFFD
+			end
+			out[#out + 1] = utf8Char(cp)
+		elseif JSON_UNESC[e] then
+			out[#out + 1] = JSON_UNESC[e]
+			i = j + 2
+		else
+			return nil
+		end
+	end
+end
+local jsonDec
+local function jsonDecNum(s, i)
+	local _, e = s:find("^-?%d+", i)
+	if not e then return nil end
+	local _, f = s:find("^%.%d+", e + 1)
+	if f then e = f end
+	local _, x = s:find("^[eE][-+]?%d+", e + 1)
+	if x then e = x end
+	local n = tonumber(s:sub(i, e))
+	if not n or n ~= n or n == math.huge or n == -math.huge then return nil end
+	return n, e + 1
+end
+jsonDec = function(s, i, depth)                                         -- -> value, next i (nil: malformed)
+	if depth > 64 then return nil end
+	i = jsonSkip(s, i)
+	local c = s:sub(i, i)
+	if c == '"' then return jsonDecStr(s, i) end
+	if c == "{" then
+		local obj = {}
+		i = jsonSkip(s, i + 1)
+		if s:sub(i, i) == "}" then return obj, i + 1 end
+		while true do
+			if s:sub(i, i) ~= '"' then return nil end
+			local k, v
+			k, i = jsonDecStr(s, i)
+			if not k then return nil end
+			i = jsonSkip(s, i)
+			if s:sub(i, i) ~= ":" then return nil end
+			v, i = jsonDec(s, i + 1, depth + 1)
+			if v == nil then return nil end
+			obj[k] = v
+			i = jsonSkip(s, i)
+			c = s:sub(i, i)
+			if c == "}" then return obj, i + 1 end
+			if c ~= "," then return nil end
+			i = jsonSkip(s, i + 1)
+		end
+	end
+	if c == "[" then
+		local arr, n = PC.jsonArray({}), 0
+		i = jsonSkip(s, i + 1)
+		if s:sub(i, i) == "]" then return arr, i + 1 end
+		while true do
+			local v
+			v, i = jsonDec(s, i, depth + 1)
+			if v == nil then return nil end
+			n = n + 1
+			arr[n] = v
+			i = jsonSkip(s, i)
+			c = s:sub(i, i)
+			if c == "]" then return arr, i + 1 end
+			if c ~= "," then return nil end
+			i = i + 1
+		end
+	end
+	if s:sub(i, i + 3) == "true" then return true, i + 4 end
+	if s:sub(i, i + 4) == "false" then return false, i + 5 end
+	if s:sub(i, i + 3) == "null" then return PC.JSON_NULL, i + 4 end
+	return jsonDecNum(s, i)
+end
+function PC.jsonDecode(s)
+	if type(s) ~= "string" then return nil end
+	local ok, v, i = pcall(jsonDec, s, 1, 0)
+	if not ok or v == nil or jsonSkip(s, i) <= #s then return nil end
+	return v
+end
+
 do
 	local defaults = {
 		voiceFeed = 0.05,        -- s between two feed writes while there are voices to hear
@@ -423,7 +609,8 @@ function PC.openKoetama()
 	if Command then pcall(Command, "game.openurl", PC.KOETAMA_URL) end
 end
 
--- Koetama runs but can't read this feed (no pcvx_v6): it has to be updated (its window's "Check for updates")
+-- Koetama runs but is older than 0.4.0 (its pcvx_v5 / pcvx_v6 files: it can't read protocol 2), or its hello lacks a
+-- feature the page needs: it has to be updated (its window's "Check for updates")
 PC.KOETAMA_OLD_H = 60
 
 function PC.drawKoetamaOld(W)
@@ -583,7 +770,7 @@ function PC.voiceRows()
 	return rows
 end
 
--- ---- TRANSLATION (feed version 6; PROTOCOL.md "Translation (version 6)"). Two rules, each "From A into B" (the
+-- ---- TRANSLATION (PROTOCOL.md "Translation"). Two rules, each "From A into B" (the
 -- Translate tab), saved per player (savegame.mod.pcvxtr1 / pcvxtr2 = "from>to", either side "" = Off). A rule with Off
 -- on a side, or the same language twice, is off. Lines to translate (PC.trWant) go into the feed until Koetama answers.
 -- the languages a rule can name: Off, then Koetama's 29 (PC.VOICE_LANGS without "auto")
@@ -650,26 +837,37 @@ function PC.trCut(text)
 	return text:sub(1, n)
 end
 
-local function toHex(s) return (s:gsub(".", function(ch) return string.format("%02x", ch:byte()) end)) end
+-- Koetama translates: it runs, and its hello (once it came) names "translate"
+function PC.trOn(vo)
+	vo = vo or (PC.c and PC.c.voice)
+	if not (vo and vo.h.alive) then return false end
+	return not (vo.h.hello and not vo.h.hello.features.translate)
+end
+
+-- the Translate tab says "too outdated": a Koetama before 0.4.0, or one whose hello lacks "translate"
+function PC.trOld(vo)
+	vo = vo or PC.voice()
+	return vo.h.outdated or (vo.h.alive and vo.h.hello ~= nil and not vo.h.hello.features.translate) or false
+end
 
 -- (chat_core: a history entry e, and its bubble b, heard in full) another player's line: translated while a rule is on
 -- and Koetama runs. Each entry is asked once (e.trId); the reply goes onto both (PC.trReply).
 function PC.trWant(e, b)
 	local c = PC.c
 	local vo = c and c.voice
-	if not (vo and vo.h.alive) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
+	if not PC.trOn(vo) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
 	if #PC.trRules() == 0 then return end
 	local text = PC.trCut(e.text or "")
 	if text == "" then return end
 	local tr = vo.tr
 	tr.nextId = tr.nextId + 1
 	e.trId = tr.nextId
-	tr.reqs[#tr.reqs + 1] = {id = tr.nextId, hex = toHex(text), text = text, t = GetTime(), e = e, b = b}
+	tr.reqs[#tr.reqs + 1] = {id = tr.nextId, text = text, t = GetTime(), e = e, b = b}
 	while #tr.reqs > PC.cfg.trMax do table.remove(tr.reqs, 1) end     -- (the oldest go first)
-	vo.feedT = -1e9                                                    -- (Koetama gets it in the next frame's feed)
+	PC.voiceFeedNow(vo)                                                -- (Koetama gets it at once)
 end
 
--- (message kind "x") the translation of request id; "" (or the line unchanged): nothing to show. Exactly one reply per
+-- (a "translation" object) the translation of request id; "" (or the line unchanged): nothing to show. Exactly one reply per
 -- id: the request leaves the feed either way.
 function PC.trReply(id, text)
 	local vo = PC.voice()
@@ -686,28 +884,33 @@ function PC.trReply(id, text)
 	if r.b then r.b.tr, r.b.trT = text, now end
 end
 
--- (message kind "d") the rules' state: "<from>><to>=<state>" per rule, comma-separated; state ready, downloading <0-100>,
--- loading, unavailable or error. Kept per rule (a rule not named keeps what it had).
-function PC.trStatus(text)
+-- (a "translations_status" object) the rules' state: a list of {from, to, state, progress}; state ready, downloading
+-- (progress 0..1), loading, unavailable or error. Kept per rule (a rule not named keeps what it had); pct: 0..100.
+function PC.trStatus(list)
 	local st = PC.voice().tr.status
-	for item in (text or ""):gmatch("[^,]+") do
-		local f, t, s = item:match("^%s*([%w%-]+)>([%w%-]+)=(.-)%s*$")
-		local state, n = (s or ""):match("^(%a+)%s*([%d%.]*)$")
-		if f and state then
-			n = tonumber(n)
-			st[f .. ">" .. t] = {state = state:lower(), pct = n and math.max(0, math.min(100, n)) or nil}
+	if type(list) ~= "table" then return end
+	for _, it in ipairs(list) do
+		if type(it) == "table" and type(it.from) == "string" and type(it.to) == "string" and type(it.state) == "string"
+			and it.state:find("^%a+$") then
+			local n = type(it.progress) == "number" and it.progress or nil
+			st[it.from .. ">" .. it.to] = {state = it.state:lower(), pct = n and math.max(0, math.min(100, n * 100)) or nil}
 		end
 	end
 end
 
--- the feed's translations and requests fields (empty without the helper)
+-- the feed's translations ({from, to} each) and to_translate ({id, text} each), or nil (Koetama doesn't translate, or
+-- no rule is on)
 function PC.trFeed(vo)
-	if not vo.h.alive then return "", "" end
+	if not PC.trOn(vo) then return nil end
 	local rules = PC.trRules()
-	if #rules == 0 then return "", "" end
-	local reqs = {}
-	for _, r in ipairs(vo.tr.reqs) do reqs[#reqs + 1] = r.id .. ":" .. r.hex end
-	return table.concat(rules, ","), table.concat(reqs, ";")
+	if #rules == 0 then return nil end
+	local tl, reqs = PC.jsonArray({}), PC.jsonArray({})
+	for i, r in ipairs(rules) do
+		local f, t = r:match("^(.-)>(.*)$")
+		tl[i] = {from = f, to = t}
+	end
+	for i, r in ipairs(vo.tr.reqs) do reqs[i] = {id = r.id, text = r.text} end
+	return tl, reqs
 end
 
 -- (each tick) lines without a reply for cfg.trWait s are dropped
@@ -726,7 +929,7 @@ function PC.trRuleState(k)
 	if r.f == "" or r.t == "" then return "Off: pick both languages", TR_GREY end
 	if r.f == r.t then return "Off: the two languages are the same", TR_GREY end
 	local names = PC.trName(r.f) .. " → " .. PC.trName(r.t)
-	if not vo.h.alive then return names, TR_GREY end
+	if not PC.trOn(vo) then return names, TR_GREY end
 	local st = vo.tr.status[r.f .. ">" .. r.t]
 	if not st then return names .. ": starting...", TR_DIM end
 	if st.state == "ready" then return names .. ": ready", TR_OK end
@@ -740,12 +943,12 @@ function PC.trRuleState(k)
 end
 
 -- the Translate page: its own tab next to Voice. Without Koetama: the rules greyed out under the notice saying it is
--- needed (as the Voice page); an old Koetama: "too outdated".
+-- needed (as the Voice page); an old Koetama (or one whose hello lacks "translate"): "too outdated".
 PC.TR_ROW_H, PC.TR_BTN_W, PC.TR_LABEL_W = 96, 260, 167   -- (TR_LABEL_W: room for "Translation 2:")
 
 function PC.translatePageHeight(base)
 	local vo = PC.voice()
-	local box = vo.h.alive and 34 or ((vo.h.outdated and PC.KOETAMA_OLD_H or PC.KOETAMA_BOX_H) + 16)
+	local box = PC.trOn(vo) and 34 or ((PC.trOld(vo) and PC.KOETAMA_OLD_H or PC.KOETAMA_BOX_H) + 16)
 	return math.max(base, 68 + box + 2 * PC.TR_ROW_H + 70)
 end
 
@@ -828,12 +1031,13 @@ function PC.drawTranslatePage(W, H)
 	UiPush()
 	UiTranslate(16, 68)
 	UiAlign("left top")
-	if vo.h.alive then
+	local on = PC.trOn(vo)
+	if on then
 		UiFont("regular.ttf", 20)
 		UiColor(1, 1, 1, 0.6)
 		UiText("Koetama is connected. What other players say is translated on your PC, under the original.")
 		UiTranslate(0, 34)
-	elseif vo.h.outdated then
+	elseif PC.trOld(vo) then
 		PC.drawKoetamaOld(W - 32)
 		UiTranslate(0, PC.KOETAMA_OLD_H + 16)
 	else
@@ -841,7 +1045,7 @@ function PC.drawTranslatePage(W, H)
 		UiTranslate(0, PC.KOETAMA_BOX_H + 16)
 	end
 	for k = 1, 2 do
-		PC.drawTrRule(k, not vo.h.alive)
+		PC.drawTrRule(k, not on)
 		UiTranslate(0, PC.TR_ROW_H)
 	end
 	UiFont("regular.ttf", 18)
@@ -853,9 +1057,9 @@ function PC.drawTranslatePage(W, H)
 end
 
 -- ---- THE TALK KEY (Oct 2026). Push to talk (the default): only what the player says while the talk key is held
--- becomes a line (the feed's mic 3 while held, 2 while not: the helper keeps the microphone open and ends the line
--- 0.25 s after the key is let go). "Always on" (the Voice page; a controller player's choice: no key to hold): the
--- helper's speech detector finds each line (mic 1). Either way, the talk key held + Tab switches the voice's mode:
+-- becomes a line (the feed's listen "push_to_talk", talk_key true while held: the helper keeps the microphone open and
+-- ends the line 0.25 s after the key is let go). "Always on" (the Voice page; a controller player's choice: no key to
+-- hold): the helper's speech detector finds each line (listen "always"). Either way, the talk key held + Tab switches the voice's mode:
 -- Whisper -> Speak -> Yell -> Global (Global: what you say goes to everyone as a chat line only - no bubble, no
 -- babble, and your voice itself is not played to anyone), with Teardown's map (Tab) off meanwhile,
 -- and with the chat window closed a strip at the bottom of the screen shows the mode (PC.drawTalk). The voice has
@@ -1453,20 +1657,19 @@ function PC.voiceHear(p, pos, mode)
 	return gain, az, el, muffle
 end
 
--- ---- REAL VOICES (feed version 5, now 6; PROTOCOL.md "Real voices: rooms and the relay"). Players' voices travel between
+-- ---- REAL VOICES (PROTOCOL.md "Real voices"). Players' voices travel between
 -- their helpers through a relay, in a ROOM: a name and a key every player of the session gets. A script has no good
--- random numbers, so a helper makes the room (message kind "r"); the host keeps the first one offered this session and
+-- random numbers, so a helper makes the room (a "room" object); the host keeps the first one offered this session and
 -- publishes it (shared.pcVoiceRoom); every game puts that one into its feed. The game never carries audio: it tells
 -- its helper who gets this player's voice (PC.voiceTo) and how loud every other player is here (PC.voicePlayers).
 
--- (client) the voice server as Koetama last said (its pcvx_vc / pcvx_vx files, looked at once a second while it runs
--- and there is a room): "connected", "unreachable", "connecting"; a line in the chat when it can't be reached, and
--- when it is again
+-- (client) the voice server as Koetama last said (its "voice" objects: vo.vstate off / connecting / connected /
+-- unreachable), while it runs and there is a room: "connected", "unreachable", "connecting"; a line in the chat when it
+-- can't be reached, and when it is again
+PC.VOICE_STATES = {off = true, connecting = true, connected = true, unreachable = true}
 function PC.voiceNetTick(vo, now)
 	if not (vo.h.alive and vo.room) then vo.net = nil; return end
-	if now - (vo.netT or -1e9) < PC.cfg.voiceCheck then return end
-	vo.netT = now
-	local net = has(PC.VOICE_IO .. "vc") and "connected" or (has(PC.VOICE_IO .. "vx") and "unreachable" or "connecting")
+	local net = (vo.vstate == "connected" or vo.vstate == "unreachable") and vo.vstate or "connecting"
 	if net == "unreachable" and vo.net ~= "unreachable" then
 		PC.system("Koetama can't reach the voice server: voices won't be heard (check your internet connection or firewall).")
 	elseif net == "connected" and vo.net == "unreachable" then
@@ -1488,11 +1691,10 @@ function PC.validRoom(room, key)
 		and not room:find("[^0-9a-f]") and not key:find("[^0-9a-f]")
 end
 
--- (client) the helper's room for this session ("<room>:<key>"): offered to the host until shared shows a room (the
+-- (client) the helper's room for this session (a "room" object): offered to the host until shared shows a room (the
 -- host keeps the first one any player offered; a room already there: nothing to do)
-function PC.voiceRoomOffer(text)
+function PC.voiceRoomOffer(room, key)
 	local vo = PC.voice()
-	local room, key = tostring(text or ""):match("^(%x+):(%x+)$")
 	if not PC.validRoom(room, key) or shared.pcVoiceRoom then return end
 	vo.roomWant = {id = room, key = key, tries = 0, t = -1e9}
 end
@@ -1585,7 +1787,7 @@ function PC.voiceForget(p)
 	shared.pcVMode = t
 end
 
--- (client) who gets my voice now, "id,id,...": the players within my voice mode's whole range (its buffer too) +
+-- (client) who gets my voice now, a list of player ids (PC.jsonArray): the players within my voice mode's whole range (its buffer too) +
 -- cfg.voiceToSlack m, by the plain distance as the server picks who gets a typed line (walls only make a voice sound
 -- farther: the listener's own gain - PC.voiceHear - handles them, and nobody who could hear it is left out), and every
 -- dead player (the dead hear everyone, as they read every line: their own game makes it as loud as their camera is
@@ -1595,9 +1797,9 @@ function PC.voiceTo()
 	local lobby = PC.lobby()
 	local chans = shared.pcChan or {}
 	local mine = not lobby and chans[me] or ""
-	if not lobby and mine == "" and vo.vmode == "g" then return "" end
+	local out = PC.jsonArray({})
+	if not lobby and mine == "" and vo.vmode == "g" then return out end
 	local _, outer = PC.rangeOf(vo.vmode)
-	local out = {}
 	for _, q in ipairs(PC.allPlayers()) do
 		if q ~= me then
 			local theirs = chans[q] or ""
@@ -1609,13 +1811,13 @@ function PC.voiceTo()
 				local d = PC.distTo(q)
 				take = d ~= nil and d <= outer + PC.cfg.voiceToSlack
 			end
-			if take then out[#out + 1] = string.format("%d", q) end
+			if take then out[#out + 1] = q end
 		end
 	end
-	return table.concat(out, ",")
+	return out
 end
 
--- (client) every other real player whose voice I could hear, as feed speakers (src 0, id = their player id): gain,
+-- (client) every other real player whose voice I could hear, as feed speakers ({id = their player id, ...}): gain,
 -- direction and muffle as for the voice dummies (PC.voiceHear: their voice mode's ranges, the buffer, walls) at their
 -- head, from my camera (dead and spectating: where I watch from); not one in Global, muted (/mute) or out of earshot
 -- (gain 0). The dead: to the living, never heard; to the dead of their channel, clear at cfg.voiceDeadGain whatever
@@ -1629,69 +1831,94 @@ function PC.voicePlayers(parts)
 	for _, q in ipairs(PC.allPlayers()) do
 		if q ~= me and not c.muted[q] then
 			if lobby then
-				parts[#parts + 1] = string.format("%d,0,1,1.000,0.0,0.0,0.00", q)
+				parts[#parts + 1] = PC.voiceSpeaker(q, 1, 0, 0, 0)
 			else
 				local m, chan, pos = vm[q], chans[q] or "", PC.speakerPos(q)
 				if chan ~= "" then
-					if chan == mine then parts[#parts + 1] = string.format("%d,0,1,%.3f,0.0,0.0,0.00", q, PC.cfg.voiceDeadGain) end
+					if chan == mine then parts[#parts + 1] = PC.voiceSpeaker(q, PC.cfg.voiceDeadGain, 0, 0, 0) end
 				elseif m and m ~= "g" and pos then
 					local gain, az, el, muffle = PC.voiceHear(q, pos, m)
-					if gain > 0 then
-						parts[#parts + 1] = string.format("%d,0,1,%.3f,%.1f,%.1f,%.2f", q, gain, az, el, muffle)
-					end
+					if gain > 0 then parts[#parts + 1] = PC.voiceSpeaker(q, gain, az, el, muffle) end
 				end
 			end
 		end
 	end
 end
 
--- the feed (version 6). off: the last write when nothing is left - mic 0, no room, nobody, no translations, no requests, no
--- speakers
+-- x rounded to d decimals (the feed stays short)
+local function rnd(x, d)
+	local m = 10 ^ d
+	return math.floor(x * m + 0.5) / m
+end
+
+-- one feed speaker
+function PC.voiceSpeaker(id, gain, az, el, muffle)
+	return {id = id, gain = rnd(gain, 3), azimuth = rnd(az, 1), elevation = rnd(el, 1), muffle = rnd(muffle, 2)}
+end
+
+-- the feed as written into the savegame: the hex of its JSON
+function PC.voiceFeedString(f) return PC.hexEncode(PC.jsonEncode(f)) end
+
+-- the feed (PROTOCOL.md "Game -> Koetama: the feed"). off: the last write when nothing is left - listen off, no room,
+-- no translations, no speakers
 function PC.voiceFeed(vo, off)
-	local parts = {}
+	local sp = PC.jsonArray({})
 	local room = not off and vo.room or nil
 	if not off then
 		for _, d in ipairs(vo.list) do
 			local gain, az, el, muffle = PC.voiceHear(d.p, d.pos, d.kind)
-			parts[#parts + 1] = string.format("%d,%d,%d,%.3f,%.1f,%.1f,%.2f", d.p, d.idx, d.talking and 1 or 0, gain, az, el, muffle)
+			local e = PC.voiceSpeaker(d.p, gain, az, el, muffle)
+			e.test_voice, e.talking = d.idx, d.talking and true or false
+			sp[#sp + 1] = e
 		end
-		if room then PC.voicePlayers(parts) end                      -- (no room: no real voices)
+		if room then PC.voicePlayers(sp) end                         -- (no room: no real voices)
 	end
 	vo.seq = vo.seq + 1
-	-- (mic: 0 off, 1 always on, 2 / 3 push to talk with the talk key up / held - PROTOCOL.md)
-	local mic = 0
-	if vo.h.alive and vo.textOn then mic = vo.ptt and (vo.held and 3 or 2) or 1 end
-	local rules, reqs = "", ""
-	if not off then rules, reqs = PC.trFeed(vo) end                  -- (translation: the rules and the lines waiting)
-	SetString(PC.VOICE_FEED, string.format("6|%d|%.2f|%d|%d|%d|%d|%s|%d|%s|%s|%d|%s|%s|%s|%s|%s", vo.seq, vo.volume, vo.sid, vo.ack, vo.h.ping,
-		mic, PC.VOICE_LANGS[vo.lang][1], vo.liveOn and 1 or 0, room and room.id or "", room and room.key or "", GetLocalPlayer(),
-		room and PC.voiceTo() or "", room and (vo.region or "") or "", rules, reqs, table.concat(parts, ";")))
+	local listen = "off"
+	if vo.h.alive and vo.textOn then listen = vo.ptt and "push_to_talk" or "always" end
+	local f = {type = "feed", seq = vo.seq, session = vo.sid, ack = vo.ack, ping = vo.h.ping, volume = rnd(vo.volume, 2),
+		listen = listen, talk_key = (listen == "push_to_talk" and vo.held) and true or false,
+		lang = PC.VOICE_LANGS[vo.lang][1], live = vo.liveOn and true or false, me = GetLocalPlayer(), speakers = sp}
+	if room then f.room, f.key, f.to, f.region = room.id, room.key, PC.voiceTo(), vo.region or "" end
+	if not off then f.translations, f.to_translate = PC.trFeed(vo) end   -- (translation: the rules and the lines waiting)
+	SetString(PC.VOICE_FEED, PC.voiceFeedString(f))
 end
 
--- a feed that says "nothing": mic 0, no room, nobody, no speakers (version 4's, 5's or 6's: no translations, no requests either)
+-- (a line queued for translation; also usable for anything else Koetama must hear of now) the feed written at once -
+-- at most one such extra write a frame (more in the same frame: the next regular write, made due now)
+function PC.voiceFeedNow(vo)
+	if not (vo.on or vo.h.on or #vo.list > 0) then return end
+	local now = GetTime()
+	if vo.nowT == now then vo.feedT = -1e9; return end
+	vo.nowT, vo.feedT, vo.on = now, now, true
+	PC.voiceFeed(vo)
+end
+
+-- a feed that says "nothing" (listen off, no room, no speakers, nothing to translate): a decoded feed string
 function PC.voiceFeedOff(s)
-	return s:match("^4|.*|0|[%a]*|%d|$") ~= nil or s:match("^5|.*|0|[%a]*|%d|||%d*|||$") ~= nil
-		or s:match("^6|.*|0|[%a]*|%d|||%d*|||||$") ~= nil
+	local f = PC.jsonDecode(PC.hexDecode(s) or "")
+	if type(f) ~= "table" or f.type ~= "feed" then return false end
+	local function none(x) return x == nil or x == PC.JSON_NULL or (type(x) == "table" and x[1] == nil) end
+	return (f.listen == nil or f.listen == "off") and (f.room == nil or f.room == PC.JSON_NULL) and none(f.speakers)
+		and none(f.translations) and none(f.to_translate)
 end
 
--- the feed version this mod writes (Koetama announces each it reads with a pcvx_v<n> file)
-PC.FEED_VERSION = 6
 PC.KOETAMA_OLD = "Your Koetama is too outdated. Please update it from the app."
 
--- is the helper there? Its "on" file starts the feed (with its pcvx_v6: one that reads this feed - voice and
--- translation; a version 5 Koetama is too old); then it must answer every ping (a file left by a crashed helper does not).
+-- is the helper there? Its "on" file starts the feed (but "on" with pcvx_v5 / pcvx_v6: a Koetama before 0.4.0, which
+-- can't read protocol 2 - too old); then it must answer every ping (a file left by a crashed helper does not).
 function PC.voiceHelper(vo, now)
 	local h, cfg = vo.h, PC.cfg
 	if not h.on then
 		if now - h.checkT >= (h.failed and cfg.voiceRetry or cfg.voiceCheck) then
 			h.checkT = now
-			-- (Koetama says which feed versions it reads: pcvx_v<n>. Running without ours: too old - it can't read
-			--  this feed, so it would never answer; the Voice page tells the player to update it)
+			-- (a Koetama before 0.4.0 writes pcvx_v5 / pcvx_v6, the old feed versions it reads; 0.4.0 deletes them.
+			--  An old one can't read this feed, so it would never answer: the Voice page tells the player to update it)
 			local on = has(PC.VOICE_IO .. "on")
-			local fits = on and has(PC.VOICE_IO .. "v" .. PC.FEED_VERSION)
-			if on and not fits and not h.outdated then PC.system(PC.KOETAMA_OLD) end
-			h.outdated = on and not fits
-			if fits then h.on, h.pingT, h.sinceT, h.pongT = true, -1e9, now, nil end
+			local old = on and (has(PC.VOICE_IO .. "v5") or has(PC.VOICE_IO .. "v6"))
+			if old and not h.outdated then PC.system(PC.KOETAMA_OLD) end
+			h.outdated = old
+			if on and not old then h.on, h.pingT, h.sinceT, h.pongT, h.hello = true, -1e9, now, nil, nil end
 		end
 		return
 	end
@@ -1707,38 +1934,81 @@ function PC.voiceHelper(vo, now)
 	end
 	if now - (h.pongT or h.sinceT) > cfg.voicePing + cfg.voicePongWait then
 		if h.alive then PC.system("Koetama disconnected: voice chat is off.") end
-		h.on, h.alive, h.failed, h.checkT = false, false, true, now
-		vo.sayQ = {}
+		h.on, h.alive, h.failed, h.checkT, h.hello = false, false, true, now, nil
+		vo.sayQ, vo.vstate = {}, nil
 		vo.tr.reqs, vo.tr.status = {}, {}                                -- (no translations will come; a new Koetama says
 	end                                                                  --  its rules' state again)
 end
 
--- the text in a file the helper wrote: Spawn the prefab, read its tag t (hex), delete what it made
-function PC.voiceReadText(path)
+-- an object Koetama wrote (pcvx_t<n>.xml): Spawn the prefab, read its j tag (hex of JSON), delete what it made ->
+-- the object (a table with a string "type"), or nil
+function PC.voiceReadMsg(path)
 	local ok, ents = pcall(Spawn, path, Transform(Vec(0, -500, 0)), true)
 	if not ok or type(ents) ~= "table" then return nil end
-	local hex, kind, utt, w, ago = "", "", "", "", ""
+	local j = ""
 	for i = 1, #ents do
-		local function tag(k)
-			local okT, t = pcall(GetTagValue, ents[i], k)
-			return okT and t or ""
+		if j == "" then
+			local okT, t = pcall(GetTagValue, ents[i], "j")
+			if okT and type(t) == "string" then j = t end
 		end
-		if hex == "" then hex = tag("t") end
-		if kind == "" then kind = tag("k") end
-		if utt == "" then utt = tag("u") end
-		if w == "" then w = tag("w") end
-		if ago == "" then ago = tag("a") end
 	end
 	for i = 1, #ents do pcall(Delete, ents[i]) end
-	if hex:find("[^%x]") or #hex % 2 == 1 then return nil end
-	local text = hex:gsub("%x%x", function(b) return string.char(tonumber(b, 16)) end)
-	local _, times = PC.voiceTimed(text, w)
-	local a = tonumber(ago)
-	-- (the text; its kind: "l" live words, "s" talking began, "r" a voice room, "x" a translation (u: its request), "d" the
-	--  translation rules' state, "f" the finished line (also when the tag is missing or unknown); the utterance (or request
-	--  id); the units' times (the w tag, kept as hex) and how long ago (s) the line began - both nil without times)
-	local known = kind == "l" or kind == "s" or kind == "r" or kind == "x" or kind == "d"
-	return text, known and kind or "f", tonumber(utt) or 0, (times and a) and w or nil, (times and a) and a / 100 or nil
+	local obj = PC.jsonDecode(PC.hexDecode(j) or "")
+	if type(obj) ~= "table" or type(obj.type) ~= "string" then return nil end
+	return obj
+end
+
+-- a speech object's word times (times: seconds per unit, ago: seconds) as the mod keeps them: 4 hex digits per unit in
+-- 1/100 s, and ago - both nil unless both are there and the times fit the text's units
+function PC.voiceTimesHex(text, times, ago)
+	ago = type(ago) == "number" and ago or nil
+	if type(times) ~= "table" or not ago or ago ~= ago or times[1] == nil then return nil, nil end
+	local out = {}
+	for i, t in ipairs(times) do
+		if type(t) ~= "number" or t ~= t then return nil, nil end
+		out[i] = string.format("%04x", math.max(0, math.min(65535, math.floor(t * 100 + 0.5))))
+	end
+	local w = table.concat(out)
+	local _, fit = PC.voiceTimed(text, w)
+	if not fit then return nil, nil end
+	return w, math.max(0, math.min(120, ago))
+end
+
+-- (client) act on one object from Koetama (PROTOCOL.md "Koetama -> game"); an unknown type is ignored
+function PC.voiceMessage(vo, obj)
+	local t = obj.type
+	if t == "hello" then
+		local feats = {}
+		if type(obj.features) == "table" then
+			for _, f in ipairs(obj.features) do if type(f) == "string" then feats[f] = true end end
+		end
+		vo.h.hello = {app = type(obj.app) == "string" and obj.app or "", version = type(obj.version) == "string" and obj.version or "",
+			protocol = tonumber(obj.protocol), features = feats}
+	elseif t == "speech" then
+		if not vo.textOn then return end
+		local kind, utt = obj.kind, tonumber(obj.utt) or 0
+		local text = type(obj.text) == "string" and obj.text or ""
+		if kind == "start" then
+			PC.voiceTalk(true, utt)                                      -- (talking: no words yet)
+		elseif kind == "live" then
+			local w, ago = PC.voiceTimesHex(text, obj.times, obj.ago)
+			PC.voiceLive(utt, text, w, ago)                              -- (the words so far)
+		elseif kind == "final" then
+			PC.voiceTalk(false, utt)
+			if vo.live then PC.voiceLive(utt, "") end                    -- (the line is done: the live words go)
+			local w, ago = PC.voiceTimesHex(text, obj.times, obj.ago)
+			if text ~= "" then PC.voiceSay(text, w, ago, utt) end
+		end
+	elseif t == "room" then
+		PC.voiceRoomOffer(obj.room, obj.key)                             -- (a voice room: never shown, never said)
+	elseif t == "voice" then
+		if PC.VOICE_STATES[obj.state] then vo.vstate = obj.state end    -- (the voice server's link: PC.voiceNetTick)
+	elseif t == "translation" then
+		local id = tonumber(obj.id)
+		if id then PC.trReply(id, type(obj.text) == "string" and obj.text or "") end   -- (under its line, never said)
+	elseif t == "translations_status" then
+		PC.trStatus(obj.translations)                                    -- (the rules' state: the Translate tab)
+	end
 end
 
 -- say what the player spoke: like a typed line in the current mode, flagged as voice; a long one in
@@ -1772,8 +2042,9 @@ function PC.voiceTick(now)
 	if not c.voiceChecked then                                          -- (a feed left on by an earlier session: off)
 		c.voiceChecked = true
 		local old = GetString(PC.VOICE_FEED)
-		if old ~= "" and not PC.voiceFeedOff(old) then
-			SetString(PC.VOICE_FEED, string.format("6|0|1.00|0|0|0|0|en|1|||%d|||||", GetLocalPlayer()))
+		if old ~= "" and not PC.voiceFeedOff(old) then                  -- (also any older protocol's feed)
+			SetString(PC.VOICE_FEED, PC.voiceFeedString({type = "feed", seq = 0, session = 0, ack = 0, ping = 0, volume = 1,
+				listen = "off", talk_key = false, lang = "en", live = true, me = GetLocalPlayer(), speakers = PC.jsonArray({})}))
 		end
 	end
 	local vo = PC.voice()
@@ -1798,28 +2069,12 @@ function PC.voiceTick(now)
 			if rw.tries > cfg.voiceRoomTries then vo.roomWant = nil else ServerCall("server.pc_room", me, rw.id, rw.key) end
 		end
 	end
-	-- text from the helper: the next number, read once, then acked in the feed
+	-- an object from the helper: the next number, read once, then acked in the feed (unreadable or unknown: acked too)
 	if vo.h.alive and has(PC.VOICE_IO .. "t" .. (vo.ack + 1) .. ".xml") then
-		local text, kind, utt, w, ago = PC.voiceReadText(PC.VOICE_IO .. "t" .. (vo.ack + 1) .. ".xml")
+		local obj = PC.voiceReadMsg(PC.VOICE_IO .. "t" .. (vo.ack + 1) .. ".xml")
 		vo.ack = vo.ack + 1
 		vo.feedT = -1e9                                                  -- (the ack goes out now)
-		if kind == "r" then
-			if text then PC.voiceRoomOffer(text) end                     -- (a voice room: never shown, never said)
-		elseif kind == "x" then
-			PC.trReply(utt, text)                                        -- (a translation: under its line, never said)
-		elseif kind == "d" then
-			if text then PC.trStatus(text) end                           -- (the rules' state: the Translate tab)
-		elseif text and vo.textOn then
-			if kind == "s" then
-				PC.voiceTalk(true, utt)                                  -- (talking: no words yet)
-			elseif kind == "l" then
-				PC.voiceLive(utt, text, w, ago)                          -- (the words so far)
-			else
-				PC.voiceTalk(false, utt)
-				if vo.live then PC.voiceLive(utt, "") end                -- (the line is done: the live words go)
-				if text ~= "" then PC.voiceSay(text, w, ago, utt) end
-			end
-		end
+		if obj then PC.voiceMessage(vo, obj) end
 	end
 	PC.trTick(vo, now)
 	PC.voiceLiveSend(now)

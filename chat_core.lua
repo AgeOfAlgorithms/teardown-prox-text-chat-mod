@@ -3132,7 +3132,8 @@ function PC.drawWindow(L)
 		UiTranslate(W - 162 - vW - tW, 10)
 		local hv = c.typing and UiIsMouseInRect(140, 40)
 		if c.typing and PC.clicked("theader", 140, 40, hv) then PC.setPage("translate") end
-		local g = helper and {0.45, 0.85, 0.5} or {0.6, 0.6, 0.6}
+		local trOn = PC.trOn and PC.trOn() or false                          -- (green: Koetama runs and translates)
+		local g = trOn and {0.45, 0.85, 0.5} or {0.6, 0.6, 0.6}
 		UiColor(g[1], g[2], g[3], hv and 0.32 or 0.18)
 		UiRoundedRect(140, 40, 8)
 		UiColor(g[1], g[2], g[3], 0.7)
