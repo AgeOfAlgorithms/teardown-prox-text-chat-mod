@@ -1,6 +1,6 @@
-name = Proximity Babble Chat
+name = Proximity Comms (Text and Voice Chat)
 author = McPuppetFace
-description = Talk to the players around you. Press Enter and type: a speech bubble pops up over your head and nearby players hear you babble in your own cartoon voice. Tab picks how you are heard: Whisper (8 m, private), Speak (25 m), Yell (40 m) or Global (everyone). Farther away, words come through garbled. Works in any level or game mode, in every language. The host turns it on under Global mods and can change the distances. /help lists the commands.
+description = Talk to the players around you, by text or by voice. Press Enter and type: a speech bubble pops up over your head and nearby players hear you babble in your own cartoon voice. Tab picks how you are heard: Whisper (8 m, private), Speak (25 m), Yell (40 m) or Global (everyone). Farther away, words come through garbled. Voice chat: with the free Koetama app (github.com/AgeOfAlgorithms/koetama) players hear your real voice from where you stand, your words show as live captions, and lines can be translated between languages (experimental). On a controller, click the left stick twice for the chat and a quick-chat wheel. Works in any level or game mode, in every language. The host turns it on under Global mods and can change the distances. /help lists the commands. [noupload]
 tags = Gameplay
 preview = preview_td.jpg
 version = 2

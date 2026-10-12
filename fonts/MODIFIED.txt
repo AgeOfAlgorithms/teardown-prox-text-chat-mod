@@ -1,3 +1,7 @@
 pangolin.ttf is Pangolin Regular (github.com/googlefonts/pangolin, SIL Open Font License 1.1, see
 OFL.txt; no Reserved Font Name) with one glyph added: U+2B1A (a hollow box), drawn by
 tools/add_box_glyph.py for the chat's half-heard letters.
+
+notosanskr-regular.ttf / notosanskr-bold.ttf are Noto Sans KR (github.com/google/fonts ofl/notosanskr, SIL Open Font
+License 1.1, see NotoSansKR-OFL.txt) at weights 400 and 700, cut to Latin, Hangul and CJK punctuation (fontTools
+instancer + subset), with the same U+2B1A box added by tools/add_box_glyph.py: the game has no font with Hangul.

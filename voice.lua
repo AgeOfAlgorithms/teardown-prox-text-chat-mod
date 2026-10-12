@@ -11,7 +11,7 @@
 --   {"type":"feed","seq":n,"session":sid,"ack":n,"ping":n,"volume":0..1,"listen":"off"|"always"|"push_to_talk",
 --    "talk_key":bool,"lang":"en","live":bool,"me":id,"speakers":[...],
 --    "room":"<32 hex>","key":"<64 hex>","to":[ids],"region":"",          (only with a room)
---    "translations":[{"from","to"}],"to_translate":[{"id","text"}]}       (only while a translation is on)
+--    "to_translate":[{"id","text"}]}                                     (only while lines wait for a translation)
 --     seq / session / ack / ping: the link (a new session each level start; ack = the last message read; Koetama
 --              answers ping n with the file pcvx_p<n % 1000>)
 --     listen   "off" without Koetama; "push_to_talk" (talk_key true while the key is held) or "always" (its speech
@@ -19,9 +19,11 @@
 --     speakers {"id","gain","azimuth","elevation","muffle"} per voice this player hears now (PC.voiceHear: the chat's
 --              ranges, buffer and walls); real players (PC.voicePlayers) only with a room; the voice dummies add
 --              "test_voice": 1..3 and "talking": bool (ids PC.VDUMMY + 0..2)
+--              A real player's entry carries "volume" (0..2, this player's own setting for them, PC.playerVolume) only
+--              when it is not 1: Koetama multiplies it on top of everything (distance, walls, their devices)
 --     room / key: shared.pcVoiceRoom, the first room a player's Koetama made (server.pc_room); to: who gets MY voice
 --              now (PC.voiceTo); region: the host's "Voice server"
---     translations / to_translate: the Translate tab's rules and the lines waiting for a translation (TRANSLATION)
+--     to_translate: the lines waiting for a translation (TRANSLATION; what into is Koetama's own setting)
 -- THE VOICE MODE of every player is known to every game (server.pc_vmode -> shared.pcVMode[p]: "w" / "s" / "y" / "g",
 -- the player's choice; the lobby overrides it): a listener works out how loud a real player is with it (PC.voiceHear).
 --
@@ -38,7 +40,7 @@
 --                    nothing made out; times = each UNIT's start in s after the line's audio began, ago = how long ago
 --                    that was - kept inside the mod as 4 hex digits per unit in 1/100 s, PC.voiceTimesHex), "room" (a voice
 --                    room: never shown or said, forwarded to the host, PC.voiceRoomOffer), "voice" (the voice server's
---                    state, PC.voiceNetTick), "translation" (PC.trReply), "translations_status" (PC.trStatus). Unknown
+--                    state, PC.voiceNetTick), "translation" (PC.trReply), "translations_status" (PC.trStatus: into + the pairs). Unknown
 --                    types: acked and ignored. With word times each listener gets only what was said while they were in
 --                    reach (PC.voiceCut): arriving mid-sentence "... the rest", walking away "the start ...".
 -- What the player said (the helper's transcript) is then SAID like a typed line, in the current mode,
@@ -50,12 +52,14 @@
 -- shared); not for Global or the dead (no bubbles there). The finished line replaces them; gone after
 -- cfg.voiceLiveLife s without news.
 --
--- TRANSLATION (the Translate tab next to Voice): up to two rules "from A into B", saved per player.
+-- TRANSLATION: what chat is translated into is the player's setting in Koetama's window ("Translate chat into"); the
+-- Translate tab next to Voice shows it (Koetama's translations_status: into, and each pair's state).
 -- Every FULL line another player says that goes into this player's history or a bubble - typed, or spoken once
 -- finished (never live words), any mode, Global and the dead's channels too - is sent to Koetama (the feed's
--- to_translate) while a rule is on and Koetama runs; only lines heard in full (not garbled from a buffer; a typed one
--- walked into range: then). Koetama translates on this PC (Mozilla's models) and answers with a "translation"; it shows
--- under the original in the history, the feed and its bubble, in its own colour (PC.TR_COLOR).
+-- to_translate) while Koetama runs and translates (not while it says it is off); only lines heard in full (not garbled
+-- from a buffer; a typed one walked into range: then). Koetama translates on this PC (Mozilla's models) and answers
+-- with a "translation"; it shows under the original in the history, the feed and its bubble, in its own colour
+-- (PC.TR_COLOR).
 --
 -- /dummy voice: three VOICE dummies in a row (whisperer, speaker, yeller; green heads), separate from the
 -- chat's test dummies (/dummy): they talk in turns of cfg.voiceTurn s - the helper plays a recorded voice
@@ -300,7 +304,8 @@ do
 		voiceLiveShow = 70,      -- characters of live words shown in a bubble (the end, after "…")
 		voiceToSlack = 5,        -- m past my voice mode's buffer that still get my voice (the feed's "to": PROTOCOL.md)
 		voiceRoomEvery = 1,      -- s between two offers of the helper's voice room to the host, until shared shows a room
-		voiceRoomTries = 5,      -- ... at most this many
+		voiceRoomTries = 30,     -- ... at most this many (a guest's is taken only while the host has no room of its own)
+		voiceRoomGrace = 2,      -- s after a session starts before a guest's room is taken (the host's own Koetama first)
 		voiceModeEvery = 1,      -- s between two sends of my voice mode to the host, until shared shows it
 		talkKey = "b",           -- the talk key's default (push to talk; + Tab: Whisper / Speak / Yell); Voice page: Talk key
 		talkShow = 0.3,          -- s the talk-mode strip stays after the key is let go (fading)
@@ -310,6 +315,10 @@ do
 		trBytes = 400,           -- bytes of text a line to translate has at most (PROTOCOL.md)
 		trWait = 10,             -- s a line waits for its translation before it is dropped
 		trLen = 300,             -- characters of a translation kept
+		trPerSpeaker = 6,        -- lines of one speaker asked for translation at once at most, then one per cfg.trWindow s
+		trWindow = 2,            --   (a token bucket: a flood costs every listener's Koetama CPU; more: not translated)
+		trSame = 30,             -- s a line already asked (the same text) is not asked again; its translation is reused
+		trCacheMax = 64,         -- translations kept for reuse
 	}
 	for k, v in pairs(defaults) do
 		if PC.cfg[k] == nil then PC.cfg[k] = v end
@@ -359,7 +368,7 @@ function PC.voiceUnits(text)
 			cur, sep = nil, sep .. ch
 		else
 			local sc = #ch > 1 and PC.scriptOf(PC.utf8Code(ch)) or "base"
-			if sc == "cjk" or sc == "kana" then
+			if sc == "cjk" or sc == "kana" or sc == "hangul" then
 				out[#out + 1] = {s = sep, w = ch}
 				cur, sep = nil, ""
 			elseif cur then
@@ -437,6 +446,7 @@ function PC.voiceSample(now)
 	end
 	local vo = c.voice
 	for _, d in ipairs(vo and vo.list or {}) do put(d.p, PC.hearDist(d.p)) end
+	if PC.devSample then PC.devSample(put) end                          -- (devices.lua: the devices)
 end
 
 -- the distance to p at server time T (the nearest sample within 0.35 s; just after the newest one: that one), or nil
@@ -461,10 +471,15 @@ end
 function PC.voiceHeard(p, us, times, start, mode)
 	if PC.voiceHearsAll(p, mode) then return PC.voiceJoin(us, 1, #us), true, nil end
 	local inner, outer = PC.rangeOf(mode)
+	return PC.voiceHeardIn(p, us, times, start, inner, outer)
+end
+
+-- the same from any distance log (key: a player, or "dev:<device>": devices.lua) with the ranges inner / outer
+function PC.voiceHeardIn(key, us, times, start, inner, outer)
 	local out, fr, gap, any, clear = {}, {}, false, false, true
 	local function letters(w, f) for _ in w:gmatch(PC.UTF8_CHAR) do fr[#fr + 1] = f end end
 	for i, u in ipairs(us) do
-		local d = PC.voiceDistAt(p, start + times[i])
+		local d = PC.voiceDistAt(key, start + times[i])
 		if d and d <= outer then
 			if gap then
 				out[#out + 1] = (#out > 0 and " ... " or "... ") .. u.w
@@ -473,7 +488,7 @@ function PC.voiceHeard(p, us, times, start, mode)
 			else
 				out[#out + 1] = (#out > 0 and u.s or "") .. u.w
 			end
-			local f = d <= inner and 1 or (PC.fracAt(d, mode) or 0)
+			local f = d <= inner and 1 or math.max(0, math.min(1, (outer - d) / math.max(0.5, outer - inner))) * PC.cfg.garbleMax
 			if f < 1 then clear = false end
 			letters(u.w, f)
 			any = true
@@ -509,6 +524,7 @@ function PC.voice()
 		local cfg = PC.cfg
 		local sid = GetInt(cfg.save .. "vxsid") % 1000000 + 1             -- (a new session number each level start)
 		SetInt(cfg.save .. "vxsid", sid)
+		ClearKey(cfg.save .. "vxtr1"); ClearKey(cfg.save .. "vxtr2")     -- (the old Translate tab's rules: Koetama's now)
 		c.voice = {list = {}, byP = {}, seq = 0, feedT = -1e9, on = false, cur = 0, talkUntil = 0, nextT = 0,
 			volume = HasKey(cfg.save .. "vxvol") and math.max(0, math.min(1, GetFloat(cfg.save .. "vxvol"))) or 1,
 			textOn = true,       -- (what you say is always written while your helper runs - no switch: the user, 2026-10-06,
@@ -517,11 +533,13 @@ function PC.voice()
 			liveOn = not GetBool(cfg.save .. "vxnolive"),
 			ptt = not GetBool(cfg.save .. "vxalwayson"),           -- (push to talk; false: always on)
 			talkKey = PC.validTalkKey(GetString(cfg.save .. "vxkey")) or cfg.talkKey,
-			vmode = PC.TALK_MODE_I[GetString(cfg.save .. "vxmode")] and GetString(cfg.save .. "vxmode") or "s",
+			-- (the voice's mode is the input line's: one mode for both since 2026-10-11)
+			vmode = PC.TALK_MODE_I[c.mode] and c.mode
+				or (PC.TALK_MODE_I[GetString(cfg.save .. "vxmode")] and GetString(cfg.save .. "vxmode")) or "s",
 			held = false, heldT = -1e9, modeT = -1e9, modeFrom = nil, binding = false,
 			live = nil, liveSentT = -1e9, liveDirty = false,
 			sid = sid, ack = 0, sayQ = {}, sayT = 0,
-			tr = {rules = {PC.trLoad(1), PC.trLoad(2)}, reqs = {}, nextId = 0, status = {}},   -- (TRANSLATION, below)
+			tr = {reqs = {}, nextId = 0, status = {}, into = nil},   -- (TRANSLATION, below; into: Koetama's setting)
 			h = {on = false, alive = false, failed = false, ping = 0, pingT = -1e9, checkT = -1e9, sinceT = 0}}
 	end
 	return c.voice
@@ -599,9 +617,8 @@ function PC.voicePageHeight(base)
 end
 
 -- ---- KOETAMA NEEDED: without it (not running: a mod cannot see whether it is installed) the Voice page starts with
--- a notice and a link to its page. The link is UiText's own ("[[https://...]]" text: the game opens it in the
--- browser when clicked - script_defs.lua, UiText). A controller can't click text: with the link highlighted, A runs
--- the game's "game.openurl" command (as its menu opens the changelog; whether a mod may is not known).
+-- a notice and a link to its page: the address with a button over it, which runs the game's "game.openurl" command
+-- (as its menu opens the changelog); a controller: A on the highlighted link does the same.
 PC.KOETAMA_URL = "https://github.com/AgeOfAlgorithms/koetama"
 PC.KOETAMA_BOX_H = 120
 
@@ -613,7 +630,7 @@ end
 -- feature the page needs: it has to be updated (its window's "Check for updates")
 PC.KOETAMA_OLD_H = 60
 
-function PC.drawKoetamaOld(W)
+function PC.drawKoetamaOld(W, text)
 	UiPush()
 	UiAlign("left top")
 	UiColor(1, 0.55, 0.2, 0.1)
@@ -624,7 +641,7 @@ function PC.drawKoetamaOld(W)
 	UiAlign("left middle")
 	UiFont("bold.ttf", 24)
 	UiColor(1, 1, 1, 0.95)
-	UiText(PC.KOETAMA_OLD)
+	UiText(text or PC.KOETAMA_OLD)
 	UiPop()
 end
 
@@ -654,9 +671,20 @@ function PC.drawKoetamaNeeded(W, what)
 		PC.navMark(470, 26)
 		if c.navAct and c.navAct.accept then PC.openKoetama() end
 	end
+	-- (a button over the address: a click runs the game's own "game.openurl", as its menu opens the changelog - the
+	--  "[[url]]" text link did nothing in-game, 2026-10-10)
 	UiFont("bold.ttf", 22)
-	UiColor(1, 0.7, 0.35, 1)
-	UiText("[[" .. PC.KOETAMA_URL .. "]]")
+	local lw, lh = UiGetTextSize(PC.KOETAMA_URL)
+	local over = UiIsMouseInRect(lw, lh)
+	UiColor(1, over and 0.82 or 0.7, over and 0.5 or 0.35, 1)
+	UiText(PC.KOETAMA_URL)
+	if over then
+		UiPush()
+		UiTranslate(0, lh - 2)
+		UiRect(lw, 2)                                                  -- (underlined while the mouse is on it)
+		UiPop()
+	end
+	if UiBlankButton(lw, lh) then PC.openKoetama() end
 	UiPop()
 end
 
@@ -680,6 +708,10 @@ function PC.drawVoicePage(W, H)
 			if vo.net == "unreachable" then UiColor(1, 0.6, 0.45, 0.95) end
 			UiText("Koetama is connected.   Voice server: " .. net)
 			UiTranslate(0, 34)
+			if PC.koetamaNewer(vo) then
+				PC.drawKoetamaOld(W - 32, PC.KOETAMA_NEWER)
+				UiTranslate(0, PC.KOETAMA_OLD_H + 16)
+			end
 		elseif vo.h.outdated then
 			PC.drawKoetamaOld(W - 32)
 			UiTranslate(0, PC.KOETAMA_OLD_H + 16)
@@ -748,11 +780,19 @@ function PC.drawVoiceLangs(W)
 end
 
 -- the Voice page's rows
--- (without Koetama: the same rows, greyed out - off - under the notice saying it is needed)
+-- (without Koetama: the same rows, greyed out - off - under the notice saying it is needed; the players' own volumes
+-- stay usable: they scale their babble too)
 function PC.voiceRows()
 	local rows = {}
-	local vo = PC.voice()
+	local vo, c = PC.voice(), PC.C()
 	rows[#rows + 1] = {"set_x", "Voice volume", "slider", vo.volume, PC.setVoiceVolume}
+	for _, o in ipairs(PC.otherPlayers()) do                          -- (each other player's volume, 0-200 %: PC.playerVolume)
+		local q = o.p
+		rows[#rows + 1] = {"set_pv" .. q, "      " .. o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / 2,
+			function(v, done) PC.setPlayerVolume(q, v * 2, done) end,
+			function(v) return string.format("%d%%", math.floor(v * 200 + 0.5)) end,
+			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true}
+	end
 	do
 		rows[#rows + 1] = {"set_pt", "Microphone", vo.ptt, "Push to talk", "Always on", PC.setVoicePtt, w = 170}
 		rows[#rows + 1] = {"set_tk", vo.ptt and "Talk key (hold it to talk)" or "Talk key (+ Tab: mode)", "cycle",
@@ -765,64 +805,24 @@ function PC.voiceRows()
 		rows[#rows + 1] = {"set_v2", "Live words while I talk", vo.liveOn, "On", "Off", PC.setVoiceLiveOn}
 	end
 	if not vo.h.alive then
-		for _, r in ipairs(rows) do r.off = true end
+		for _, r in ipairs(rows) do if not r.player then r.off = true end end
 	end
 	return rows
 end
+PC.PVOL_W = 340                                                     -- (a player's slider: room for its Reset button)
 
--- ---- TRANSLATION (PROTOCOL.md "Translation"). Two rules, each "From A into B" (the
--- Translate tab), saved per player (savegame.mod.pcvxtr1 / pcvxtr2 = "from>to", either side "" = Off). A rule with Off
--- on a side, or the same language twice, is off. Lines to translate (PC.trWant) go into the feed until Koetama answers.
--- the languages a rule can name: Off, then Koetama's 29 (PC.VOICE_LANGS without "auto")
-PC.TR_LANGS = {{"", "Off"}}
-for _, l in ipairs(PC.VOICE_LANGS) do
-	if l[1] ~= "auto" then PC.TR_LANGS[#PC.TR_LANGS + 1] = {l[1], l[2]} end
-end
+-- ---- TRANSLATION (PROTOCOL.md "Translation"). What chat is translated into is the player's own setting in Koetama's
+-- window ("Translate chat into"), not this mod's (2026-10-09; the Translate tab's two rules went): the game sends only the
+-- lines it shows (to_translate; PC.trWant) and shows the translations that come back. Koetama says its setting in
+-- translations_status (PC.trStatus): "into" (a language code, "" = off) and the pairs in use with their state; the
+-- Translate tab shows that. Models download the first time Koetama sees a language.
 
--- a language code's index in PC.TR_LANGS (1, Off, when unknown)
-function PC.trLangIndex(code)
-	for i, l in ipairs(PC.TR_LANGS) do
-		if l[1] == code then return i end
+-- a language code's own name (Koetama's languages, PC.VOICE_LANGS; another code: itself)
+function PC.trName(code)
+	for _, l in ipairs(PC.VOICE_LANGS) do
+		if l[1] == code then return l[2] end
 	end
-	return 1
-end
-
-function PC.trName(code) return PC.TR_LANGS[PC.trLangIndex(code)][2] end
-
--- rule k as saved: {f = code, t = code} ("" = Off)
-function PC.trLoad(k)
-	local f, t = GetString(PC.cfg.save .. "vxtr" .. k):match("^([%w%-]*)>([%w%-]*)$")
-	return {f = PC.TR_LANGS[PC.trLangIndex(f)][1], t = PC.TR_LANGS[PC.trLangIndex(t)][1]}
-end
-
--- the Translate tab: rule k's side ("f" from, "t" into) to language i of PC.TR_LANGS (wraps), saved; Koetama hears of
--- it in the next feed. No rule left on: the lines still waiting are dropped.
-function PC.setTrLang(k, side, i)
-	local vo = PC.voice()
-	local r = vo.tr.rules[k]
-	if not r or (side ~= "f" and side ~= "t") then return end
-	r[side] = PC.TR_LANGS[((i - 1) % #PC.TR_LANGS) + 1][1]
-	SetString(PC.cfg.save .. "vxtr" .. k, r.f .. ">" .. r.t)
-	if #PC.trRules() == 0 then vo.tr.reqs = {} end
-	vo.feedT = -1e9
-end
-
-function PC.stepTrLang(k, side, d)
-	local r = PC.voice().tr.rules[k]
-	if r then PC.setTrLang(k, side, PC.trLangIndex(r[side]) + d) end
-end
-
--- the rules that are on, "from>to" each (the same one twice: once)
-function PC.trRules()
-	local out, seen = {}, {}
-	for _, r in ipairs(PC.voice().tr.rules) do
-		local key = r.f .. ">" .. r.t
-		if r.f ~= "" and r.t ~= "" and r.f ~= r.t and not seen[key] then
-			seen[key] = true
-			out[#out + 1] = key
-		end
-	end
-	return out
+	return tostring(code or "")
 end
 
 -- text cut to at most cfg.trBytes bytes, between letters (a UTF-8 letter is never split)
@@ -850,19 +850,54 @@ function PC.trOld(vo)
 	return vo.h.outdated or (vo.h.alive and vo.h.hello ~= nil and not vo.h.hello.features.translate) or false
 end
 
--- (chat_core: a history entry e, and its bubble b, heard in full) another player's line: translated while a rule is on
--- and Koetama runs. Each entry is asked once (e.trId); the reply goes onto both (PC.trReply).
+-- lines go to Koetama: it translates, and its setting is not off (into "": off; nil: not said yet - sent anyway, Koetama
+-- answers "" while it is off)
+function PC.trSend(vo)
+	return PC.trOn(vo) and vo.tr.into ~= ""
+end
+
+-- (chat_core: a history entry e, and its bubble b, heard in full) another player's line: translated while Koetama runs
+-- and translates. Each entry is asked once (e.trId); the reply goes onto both (PC.trReply).
 function PC.trWant(e, b)
 	local c = PC.c
 	local vo = c and c.voice
-	if not PC.trOn(vo) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
-	if #PC.trRules() == 0 then return end
+	if not PC.trSend(vo) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
 	local text = PC.trCut(e.text or "")
 	if text == "" then return end
 	local tr = vo.tr
+	-- FLOODS (2026-10-09): each line costs every listener's Koetama CPU. A line already translated (the same text, into
+	-- the same language) reuses its translation; one asked in the last cfg.trSame s is not asked again; at most
+	-- cfg.trPerSpeaker lines a speaker per cfg.trWindow s; a speaker who is no player here (an id made up) none (the
+	-- local test dummies count)
+	local now, cfg = GetTime(), PC.cfg
+	tr.cache, tr.asked, tr.per = tr.cache or {}, tr.asked or {}, tr.per or {}
+	local ck = (tr.into or "?") .. "|" .. text
+	local hit = tr.cache[ck]
+	if hit then
+		e.trId = -1
+		if hit.text ~= "" then
+			e.tr, e.trT = hit.text, now
+			if b then b.tr, b.trT = hit.text, now end
+		end
+		return
+	end
+	if tr.asked[ck] and now - tr.asked[ck] < cfg.trSame then e.trId = -1; return end
+	local p = e.p
+	local local_ = PC.isDummy(p) or PC.isVoiceDummy(p)
+	if not local_ then
+		local real = false
+		for _, q in ipairs(PC.allPlayers()) do if q == p then real = true; break end end
+		if not real then return end
+	end
+	local per = tr.per[p] or {n = cfg.trPerSpeaker, t = now}
+	per.n, per.t = math.min(cfg.trPerSpeaker, per.n + (now - per.t) / cfg.trWindow), now
+	tr.per[p] = per
+	if per.n < 1 then return end
+	per.n = per.n - 1
+	tr.asked[ck] = now
 	tr.nextId = tr.nextId + 1
 	e.trId = tr.nextId
-	tr.reqs[#tr.reqs + 1] = {id = tr.nextId, text = text, t = GetTime(), e = e, b = b}
+	tr.reqs[#tr.reqs + 1] = {id = tr.nextId, text = text, t = GetTime(), e = e, b = b, ck = ck}
 	while #tr.reqs > PC.cfg.trMax do table.remove(tr.reqs, 1) end     -- (the oldest go first)
 	PC.voiceFeedNow(vo)                                                -- (Koetama gets it at once)
 end
@@ -878,17 +913,35 @@ function PC.trReply(id, text)
 	end
 	if not r then return end                                           -- (dropped meanwhile: too late)
 	text = PC.clean(text or "", PC.cfg.trLen)
-	if text == "" or text == r.text then return end
+	if text == r.text then text = "" end
+	local tr = vo.tr
+	if r.ck then                                                       -- (kept for the same line again: no second ask)
+		tr.cache = tr.cache or {}
+		tr.cacheN = (tr.cacheN or 0) + 1
+		if tr.cacheN > PC.cfg.trCacheMax then tr.cache, tr.cacheN = {}, 1 end
+		tr.cache[r.ck] = {text = text}
+	end
+	if text == "" then return end
 	local now = GetTime()
 	r.e.tr, r.e.trT = text, now
 	if r.b then r.b.tr, r.b.trT = text, now end
 end
 
--- (a "translations_status" object) the rules' state: a list of {from, to, state, progress}; state ready, downloading
--- (progress 0..1), loading, unavailable or error. Kept per rule (a rule not named keeps what it had); pct: 0..100.
-function PC.trStatus(list)
-	local st = PC.voice().tr.status
+-- (a "translations_status" object) Koetama's setting and the pairs in use: into (a language code; "" = off) and a list of
+-- {from, to, state, progress}; state ready, downloading (progress 0..1), loading, unavailable or error. The list replaces
+-- what was known (it names every pair in use); pct: 0..100. A list that is not one, or an into that is not a short code:
+-- left as it was. Turned off: the lines still waiting are dropped.
+function PC.trStatus(obj)
+	local tr = PC.voice().tr
+	if type(obj) ~= "table" then return end
+	local into = obj.into
+	if type(into) == "string" and (into == "" or into:find("^[%w%-]+$")) and #into <= 16 then
+		tr.into = into
+		if into == "" then tr.reqs = {} end
+	end
+	local list = obj.translations
 	if type(list) ~= "table" then return end
+	local st = {}
 	for _, it in ipairs(list) do
 		if type(it) == "table" and type(it.from) == "string" and type(it.to) == "string" and type(it.state) == "string"
 			and it.state:find("^%a+$") then
@@ -896,21 +949,15 @@ function PC.trStatus(list)
 			st[it.from .. ">" .. it.to] = {state = it.state:lower(), pct = n and math.max(0, math.min(100, n * 100)) or nil}
 		end
 	end
+	tr.status = st
 end
 
--- the feed's translations ({from, to} each) and to_translate ({id, text} each), or nil (Koetama doesn't translate, or
--- no rule is on)
+-- the feed's to_translate ({id, text} each), or nil (Koetama doesn't translate, its setting is off, or nothing waits)
 function PC.trFeed(vo)
-	if not PC.trOn(vo) then return nil end
-	local rules = PC.trRules()
-	if #rules == 0 then return nil end
-	local tl, reqs = PC.jsonArray({}), PC.jsonArray({})
-	for i, r in ipairs(rules) do
-		local f, t = r:match("^(.-)>(.*)$")
-		tl[i] = {from = f, to = t}
-	end
+	if not PC.trSend(vo) or #vo.tr.reqs == 0 then return nil end
+	local reqs = PC.jsonArray({})
 	for i, r in ipairs(vo.tr.reqs) do reqs[i] = {id = r.id, text = r.text} end
-	return tl, reqs
+	return reqs
 end
 
 -- (each tick) lines without a reply for cfg.trWait s are dropped
@@ -919,19 +966,28 @@ function PC.trTick(vo, now)
 	for i = #reqs, 1, -1 do
 		if now - reqs[i].t > PC.cfg.trWait then table.remove(reqs, i) end
 	end
+	if (vo.tr.askedT or 0) <= now - 5 then                             -- (old "asked" marks and idle speakers go, every 5 s)
+		vo.tr.askedT = now
+		for k, t in pairs(vo.tr.asked or {}) do if now - t > PC.cfg.trSame then vo.tr.asked[k] = nil end end
+		for p, per in pairs(vo.tr.per or {}) do if now - per.t > PC.cfg.trWindow * PC.cfg.trPerSpeaker then vo.tr.per[p] = nil end end
+	end
 end
 
--- rule k's state for the Translate tab: text, colour, download percent (or nil)
-local TR_GREY, TR_DIM, TR_OK, TR_BUSY, TR_BAD = {1, 1, 1, 0.45}, {1, 1, 1, 0.7}, {0.5, 0.95, 0.55, 0.95}, {1, 0.82, 0.3, 0.95}, {1, 0.5, 0.4, 0.95}
-function PC.trRuleState(k)
-	local vo = PC.voice()
-	local r = vo.tr.rules[k]
-	if r.f == "" or r.t == "" then return "Off: pick both languages", TR_GREY end
-	if r.f == r.t then return "Off: the two languages are the same", TR_GREY end
-	local names = PC.trName(r.f) .. " → " .. PC.trName(r.t)
-	if not PC.trOn(vo) then return names, TR_GREY end
-	local st = vo.tr.status[r.f .. ">" .. r.t]
-	if not st then return names .. ": starting...", TR_DIM end
+-- the pairs in use, "from>to" each, in order
+function PC.trPairs(vo)
+	local keys = {}
+	for k in pairs((vo or PC.voice()).tr.status) do keys[#keys + 1] = k end
+	table.sort(keys)
+	return keys
+end
+
+-- a pair's state for the Translate tab: text, colour, download percent (or nil)
+local TR_DIM, TR_OK, TR_BUSY, TR_BAD = {1, 1, 1, 0.7}, {0.5, 0.95, 0.55, 0.95}, {1, 0.82, 0.3, 0.95}, {1, 0.5, 0.4, 0.95}
+function PC.trPairState(key)
+	local st = PC.voice().tr.status[key]
+	local f, t = key:match("^(.-)>(.*)$")
+	local names = PC.trName(f) .. " → " .. PC.trName(t)
+	if not st then return names, TR_DIM end
 	if st.state == "ready" then return names .. ": ready", TR_OK end
 	if st.state == "downloading" then
 		local pct = math.floor((st.pct or 0) + 0.5)
@@ -942,78 +998,28 @@ function PC.trRuleState(k)
 	return names .. ": error (Koetama's window says more)", TR_BAD
 end
 
--- the Translate page: its own tab next to Voice. Without Koetama: the rules greyed out under the notice saying it is
--- needed (as the Voice page); an old Koetama (or one whose hello lacks "translate"): "too outdated".
-PC.TR_ROW_H, PC.TR_BTN_W, PC.TR_LABEL_W = 96, 260, 167   -- (TR_LABEL_W: room for "Translation 2:")
+-- the Translate page: its own tab next to Voice, a status page. Koetama translates: what into (its setting), each pair in
+-- use with its state (a bar while downloading), and where to change it; off: says so. Without Koetama: the notice saying
+-- it is needed (as the Voice page); an old Koetama (or one whose hello lacks "translate"): "too outdated".
+PC.TR_PAIR_H = 34
+PC.TR_HINT = "Choose the language in Koetama's window (Translate chat into)"
+PC.TR_OFF = "Translation is off: choose a language in Koetama's window"
 
 function PC.translatePageHeight(base)
 	local vo = PC.voice()
-	local box = PC.trOn(vo) and 34 or ((PC.trOld(vo) and PC.KOETAMA_OLD_H or PC.KOETAMA_BOX_H) + 16)
-	return math.max(base, 68 + box + 2 * PC.TR_ROW_H + 70)
+	local body
+	if PC.trOn(vo) then body = 34 + 44 + #PC.trPairs(vo) * PC.TR_PAIR_H + 40 + 60
+	else body = (PC.trOld(vo) and PC.KOETAMA_OLD_H or PC.KOETAMA_BOX_H) + 16 end
+	return math.max(base, 68 + body)
 end
 
--- one language of rule k at the cursor: a "<" button (back) and a cycling button with its name (a click: the next);
--- with a controller one item (left / right step, A the next). off: greyed out, no clicks.
-function PC.trLangButton(k, side, off)
-	local c = PC.C()
-	local r = PC.voice().tr.rules[k]
-	local id = "tr" .. k .. side
-	local focus = not off and PC.navFocus()
-	if focus then
-		PC.navMark(42 + PC.TR_BTN_W, 36)
-		local act = c.navAct
-		if act and (act.left or act.right or act.accept) then PC.stepTrLang(k, side, act.left and -1 or 1) end
-	end
+-- one pair's row at the cursor: its state, a small bar before it while downloading
+function PC.drawTrPair(key)
+	local text, col, pct = PC.trPairState(key)
 	UiPush()
-	local hv = c.typing and UiIsMouseInRect(36, 36)
-	if c.typing and PC.clicked(id .. "b", 36, 36, hv) then PC.stepTrLang(k, side, -1) end
-	UiColor(1, 0.82, 0.3, hv and 0.36 or 0.2)
-	UiRoundedRect(36, 36, 8)
-	UiColor(1, 0.82, 0.3, 0.9)
-	UiRoundedRectOutline(36, 36, 8, 2)
-	UiTranslate(18, 18)
-	UiAlign("center middle")
-	UiFont("bold.ttf", 22)
-	UiColor(1, 1, 1, 1)
-	UiText("<")
-	UiPop()
-	UiPush()
-	UiTranslate(42, 0)
-	if PC.cycle(id, PC.trName(r[side]), PC.TR_BTN_W) then PC.stepTrLang(k, side, 1) end
-	UiPop()
-end
-
--- translation k: "Translation k:  From [lang] → Into [lang]", its state under it (a bar while downloading); the row
--- is TR_LABEL_W + 58 + 2 x (42 + TR_BTN_W) + 96 - 42 = 925 px wide: within cfg.pageMinW
-function PC.drawTrRule(k, off)
-	local c = PC.C()
-	local typing = c.typing
-	UiPush()
-	if off then
-		c.typing = false                                                -- (the widgets take no clicks)
-		if UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end
-	end
-	local function label(x, text, bold)
+	if pct then
 		UiPush()
-		UiTranslate(x, 18)
-		UiAlign("left middle")
-		UiFont(bold and "bold.ttf" or "regular.ttf", 22)
-		UiColor(1, 1, 1, bold and 0.95 or 0.85)
-		UiText(text)
-		UiPop()
-	end
-	local L = PC.TR_LABEL_W
-	label(0, "Translation " .. k .. ":", true)
-	label(L, "From")
-	UiPush(); UiTranslate(L + 58, 0); PC.trLangButton(k, "f", off); UiPop()
-	label(L + 58 + 42 + PC.TR_BTN_W + 14, "→ Into")
-	UiPush(); UiTranslate(L + 58 + 42 + PC.TR_BTN_W + 96, 0); PC.trLangButton(k, "t", off); UiPop()
-	c.typing = typing
-	local text, col, pct = PC.trRuleState(k)
-	UiTranslate(L, 48)
-	if pct then                                                        -- (downloading: a small bar)
-		UiPush()
-		UiTranslate(0, 5)
+		UiTranslate(0, 7)
 		UiColor(1, 1, 1, 0.12)
 		UiRoundedRect(200, 10, 5)
 		UiColor(col[1], col[2], col[3], 0.9)
@@ -1031,28 +1037,45 @@ function PC.drawTranslatePage(W, H)
 	UiPush()
 	UiTranslate(16, 68)
 	UiAlign("left top")
-	local on = PC.trOn(vo)
-	if on then
+	if PC.trOn(vo) then
 		UiFont("regular.ttf", 20)
 		UiColor(1, 1, 1, 0.6)
 		UiText("Koetama is connected. What other players say is translated on your PC, under the original.")
 		UiTranslate(0, 34)
+		local into = vo.tr.into
+		if into == "" then
+			UiColor(1, 0.82, 0.3, 0.95)
+			UiFont("bold.ttf", 24)
+			UiText(PC.TR_OFF)
+		else
+			UiColor(1, 1, 1, 0.95)
+			if into then
+				PC.text("Koetama translates chat into " .. PC.trName(into), 24, true)
+			else
+				UiFont("bold.ttf", 24)
+				UiText("Waiting for Koetama to say what it translates chat into...")
+			end
+		end
+		UiTranslate(0, 44)
+		for _, key in ipairs(PC.trPairs(vo)) do
+			PC.drawTrPair(key)
+			UiTranslate(0, PC.TR_PAIR_H)
+		end
+		UiTranslate(0, 6)
+		UiFont("regular.ttf", 20)
+		UiColor(1, 1, 1, 0.75)
+		if into ~= "" then UiText(PC.TR_HINT) end
+		UiTranslate(0, 34)
+		UiFont("regular.ttf", 18)
+		UiColor(1, 1, 1, 0.5)
+		UiText("Lines in other languages (also within a line) are translated. Each language's models (about 35 MB a")
+		UiTranslate(0, 24)
+		UiText("direction; a pair without English needs two) download the first time Koetama sees that language.")
 	elseif PC.trOld(vo) then
 		PC.drawKoetamaOld(W - 32)
-		UiTranslate(0, PC.KOETAMA_OLD_H + 16)
 	else
 		PC.drawKoetamaNeeded(W - 32, "translation")
-		UiTranslate(0, PC.KOETAMA_BOX_H + 16)
 	end
-	for k = 1, 2 do
-		PC.drawTrRule(k, not on)
-		UiTranslate(0, PC.TR_ROW_H)
-	end
-	UiFont("regular.ttf", 18)
-	UiColor(1, 1, 1, 0.5)
-	UiText("Lines in a rule's first language (also within a line) are translated into its second. Each language pair's models")
-	UiTranslate(0, 24)
-	UiText("(about 35 MB a direction; a pair without English needs two) download the first time it is used.")
 	UiPop()
 end
 
@@ -1106,6 +1129,7 @@ function PC.setVoiceMode(m)
 	vo.vmode = m
 	vo.vmodeT = 0                                                      -- (the host hears of it at once: shared.pcVMode)
 	SetString(PC.cfg.save .. "vxmode", m)
+	PC.setMode(m)                                                      -- (and the input line's: one mode for both)
 end
 
 -- talk key + Tab: Whisper -> Speak -> Yell -> Global -> Whisper
@@ -1174,6 +1198,7 @@ function PC.talkTick(vo, now)
 	local held = (free and InputDown(vo.talkKey)) and true or false
 	if held ~= vo.held then
 		vo.held, vo.heldT = held, now
+		SetBool(PC.cfg.reg .. ".talking." .. GetLocalPlayer(), held)    -- (API 8: a game ignores the talk key meanwhile)
 		if vo.ptt then vo.feedT = -1e9 end                                 -- (the helper hears of it at once)
 	end
 	if held then
@@ -1280,7 +1305,7 @@ function PC.voiceLiveSend(now)
 	local mode = PC.voiceMode()
 	if mode == "g" or PC.dead() then return end                        -- (the lobby and the dead's channel: no bubbles)
 	local l = vo.live
-	ServerCall("server.pc_live", GetLocalPlayer(), l and l.u or 0, l and l.text or "", mode, l and l.w or "",
+	PC.call("pc_live", l and l.u or 0, l and l.text or "", mode, l and l.w or "",
 		(l and l.start) and (now - l.start) or -1)
 end
 
@@ -1291,15 +1316,20 @@ function PC.voiceTalk(on, utt)
 	if on then vo.talking = {u = utt, t = GetTime()} elseif not vo.talking then return else vo.talking = nil end
 	local mode = PC.voiceMode()
 	if mode == "g" or PC.dead() then return end
-	ServerCall("server.pc_talk", GetLocalPlayer(), on and true or false, mode)
+	PC.call("pc_talk", on and true or false, mode)
 end
 
 -- (server) p talks (on) or has stopped: to the players near enough for the mode (as live words go), remembered to
 -- tell the same ones when it stops; it also stops when p's line is said (PC.voiceLiveDone) or after 20 s
-function server.pc_talk(p, on, ch)
+function server.pc_talk(p, tok, on, ch)
+	p = PC.who(p, tok)
+	if not p or not PC.allow(p, "talk", 6, 6) then return end
+	PC.talkSet(p, on, ch)
+end
+
+-- (server) p talks now or not (server.pc_talk; the host itself: a line said, live words gone stale)
+function PC.talkSet(p, on, ch)
 	local s, cfg = PC.S(), PC.cfg
-	p = tonumber(p)
-	if not p then return end
 	s.talk = s.talk or {}
 	local old = s.talk[p]
 	if old then
@@ -1326,7 +1356,7 @@ end
 function client.pc_talk(p, on, ch)
 	local c = PC.C()
 	p = tonumber(p)
-	if not p then return end
+	if not p or p ~= p then return end
 	c.talking = c.talking or {}
 	c.talking[p] = on and {t = GetTime(), ch = PC.validMode(ch)} or nil
 end
@@ -1335,13 +1365,17 @@ end
 -- client.pc_live, as a whisper's line is): the mode's outer range + whisperSlack m, or everyone in the
 -- lobby. Never in shared (a whisper must stay private), and no traffic to players too far away. "" clears.
 -- The server remembers who got them, to clear them there when the line is said or the words go stale.
-function server.pc_live(p, utt, text, ch, w, ago)
+function server.pc_live(p, tok, utt, text, ch, w, ago)
 	local s, cfg = PC.S(), PC.cfg
-	p, utt = tonumber(p), tonumber(utt) or 0
-	if not p then return end
+	p, utt = PC.who(p, tok), PC.finite(utt) or 0
+	if not p or not PC.allow(p, "live", 8, 8) then return end
+	utt = math.floor(math.max(0, math.min(1e9, utt)))
+	ago = PC.finite(ago)
 	s.live = s.live or {}
 	ch = PC.validMode(ch)
-	text = PC.clean(tostring(text or ""), 4 * cfg.voiceLiveMax)       -- (live words: the whole line so far - its newest
+	-- (word times: 4 hex digits a unit, a unit at least a character: longer than the text could need - none)
+	if type(w) ~= "string" or #w > 4 * 4 * cfg.voiceLiveMax then w = "" end
+	text = PC.clean(PC.arg(text, 12 * 4 * cfg.voiceLiveMax + 16), 4 * cfg.voiceLiveMax)   -- (live words: the line so far - its newest
 	if text == "" or ch == "g" or (s.chan[p] and not PC.inLobby()) then  --  part is kept below, not its start)
 		PC.voiceLiveDone(p)
 		return
@@ -1361,13 +1395,15 @@ function server.pc_live(p, utt, text, ch, w, ago)
 	local to = {}
 	local lobby = PC.inLobby()
 	local _, outer = PC.rangeOf(ch)
+	local dv, dk, devQ = nil, nil, {}                                  -- (through a device: devices.lua)
+	if PC.devLine and not lobby then dv, dk, devQ = PC.devLine(p, ch, start or (s.time - 5)) end
 	local okT, tr = pcall(GetPlayerTransform, p)
 	for _, q in ipairs(PC.allPlayers()) do
 		if q ~= p then
 			local okQ, tq = pcall(GetPlayerTransform, q)
-			if lobby or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= outer + cfg.whisperSlack) then
+			if lobby or devQ[q] or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= outer + cfg.whisperSlack) then
 				to[q] = true
-				ClientCall(q, "client.pc_live", p, utt, text, ch, w, start)
+				ClientCall(q, "client.pc_live", p, utt, text, ch, w, start, dv, dk)
 			end
 		end
 	end
@@ -1384,7 +1420,7 @@ end
 function PC.voiceServerTick()
 	local s = PC.S()
 	for p, t in pairs(s.talk or {}) do                                 -- (talking without an end for 20 s: over)
-		if s.time - t.at > 20 then server.pc_talk(p, false) end
+		if s.time - t.at > 20 then PC.talkSet(p, false) end
 	end
 	if not s.live then return end
 	for p, l in pairs(s.live) do
@@ -1394,7 +1430,7 @@ end
 
 function PC.voiceLiveDone(p)
 	local s = PC.S()
-	if s.talk and s.talk[p] then server.pc_talk(p, false) end          -- (the line is said: talking is over)
+	if s.talk and s.talk[p] then PC.talkSet(p, false) end              -- (the line is said: talking is over)
 	local l = s.live and s.live[p]
 	if not l then return end
 	s.live[p] = nil
@@ -1403,17 +1439,17 @@ end
 
 -- (client) live words of player p from the server ("" clears them); they also go after cfg.voiceLiveLife s.
 -- w, start: the units' times and when the line began (server clock) - this player sees only what it was in reach for
-function client.pc_live(p, utt, text, ch, w, start)
+function client.pc_live(p, utt, text, ch, w, start, dv, dk)
 	local c = PC.C()
 	c.live = c.live or {}
 	p = tonumber(p)
-	if not p then return end
+	if not p or p ~= p then return end
 	if not text or text == "" then
 		c.live[p] = nil
 	else
 		local us, times = PC.voiceTimed(text, w)
 		c.live[p] = {u = tonumber(utt) or 0, text = text, ch = PC.validMode(ch), t = GetTime(), us = us,
-			times = tonumber(start) and times or nil, start = tonumber(start)}
+			times = tonumber(start) and times or nil, start = tonumber(start), dv = dv, dk = dk}
 		c.liveSeen = c.liveSeen or {}                                     -- (its finished line then goes soon: PC.bubbleLife)
 		c.liveSeen[p] = tonumber(utt) or 0
 	end
@@ -1482,8 +1518,12 @@ function PC.voiceLiveBubbles(add, me)
 					elseif d > inner then                                   -- (untimed words: by where you are now)
 						text, far = PC.garble(text, PC.fracAt(d, l.ch) or 0, PC.voiceSeed(p, l.u), math.floor(GetTime() * 3)), true
 					end
-					add(PC.bubbleLayout(p, text, l.ch == "y", 1, false, whisper, far, nil, true))
-				else
+					-- (one bubble between a talker and the megaphone they carry: the fuller one, the megaphone's when equal -
+					--  devices.lua's PC.devLiveWins)
+					if not (PC.devLiveWins and PC.devLiveWins(p, far and 1 or 2)) then
+						add(PC.bubbleLayout(p, text, l.ch == "y", 1, false, whisper, far, nil, true))
+					end
+				elseif not (PC.devLiveWins and PC.devLiveWins(p, 0.5)) then
 					add(PC.bubbleLayout(p, "...", l.ch == "y", 0.75, true, whisper))
 				end
 				done[p] = true
@@ -1545,7 +1585,10 @@ function PC.voiceDummyWords(d)
 			d.shown = n
 			local us, times = {}, {}
 			for k = 1, n do us[k], times[k] = d.us[k], d.times[k] end
-			c.live[d.p] = {u = d.utt, text = PC.voiceJoin(d.us, 1, n), ch = d.kind, us = us, times = times, start = d.start, t = GetTime()}
+			local dv, dk
+			if PC.txOf then dv, dk = PC.txOf(PC.devWorld(), d.p, d.kind) end   -- (through a device: devices.lua)
+			c.live[d.p] = {u = d.utt, text = PC.voiceJoin(d.us, 1, n), ch = d.kind, us = us, times = times, start = d.start, t = GetTime(),
+				dv = dv, dk = dk}
 			c.liveSeen = c.liveSeen or {}
 			c.liveSeen[d.p] = d.utt
 		elseif c.live[d.p] then
@@ -1556,8 +1599,10 @@ function PC.voiceDummyWords(d)
 		c.live[d.p] = nil
 		local line = PC.VDUMMY_LINES[d.idx]
 		c.vdN = (c.vdN or 0) + 1
+		local dv, dk
+		if PC.txOf then dv, dk = PC.txOf(PC.devWorld(), d.p, d.kind) end
 		PC.receive({id = 2000000 + c.vdN, p = d.p, name = d.name, ch = d.kind, text = line.text, v = true, vw = line.w,
-			vs = d.start, vu = d.utt, t = shared.pcNow})
+			vs = d.start, vu = d.utt, t = shared.pcNow, dv = dv, dk = dk})
 	end
 end
 
@@ -1574,12 +1619,14 @@ end
 
 function PC.voiceDummyClear()
 	local vo = PC.voice()
+	vo.testDevs, vo.testTx = nil, nil                                  -- (/dummy voice walkie / megaphone / pa: their devices)
 	local n = #vo.list
 	while vo.list[1] do PC.voiceDummyRemove(vo.list[1]) end
 	return n
 end
 
 -- voice dummy kind i (PC.DUMMY_KINDS) at pos, on the ground; one already there of that kind is replaced
+-- (it faces the local player: a megaphone dummy's horn points at them)
 function PC.voiceDummySpawn(i, pos)
 	local vo = PC.voice()
 	local kind = PC.DUMMY_KINDS[i]
@@ -1592,6 +1639,8 @@ function PC.voiceDummySpawn(i, pos)
 		.. '<voxbox tags="nocull" size="6 7 4" pos="-0.3 0.9 -0.2" color="' .. kind[3] .. '"/><voxbox tags="nocull" size="4 4 4" pos="-0.2 1.6 -0.2" color="0.45 0.85 0.5"/></body>'
 	local okS, ents = pcall(Spawn, xml, Transform(pos), true)
 	local d = {p = PC.VDUMMY + i - 1, idx = i, kind = kind[1], name = kind[2], pos = pos, ents = okS and ents or {}, talking = false}
+	local me = PC.speakerPos(GetLocalPlayer())
+	d.facing = me and VecNormalize(Vec(me[1] - pos[1], 0, me[3] - pos[3])) or Vec(0, 0, 1)   -- (a megaphone dummy's horn: at you)
 	vo.byP[d.p] = d
 	vo.list[#vo.list + 1] = d
 	vo.cur, vo.nextT = 0, 0                                           -- (a new set: the turns start over)
@@ -1613,7 +1662,37 @@ function PC.voiceDummyCommand(arg)
 	fwd = VecNormalize(Vec(fwd[1], 0, fwd[3]))
 	local me, right = PC.speakerPos(GetLocalPlayer()) or cam.pos, VecCross(fwd, Vec(0, 1, 0))
 	local i = tonumber(arg)
-	if arg == "" then
+	if PC.devParse and (arg == "walkie" or arg == "megaphone" or arg == "pa") then   -- (devices.lua: through a test device)
+		PC.voiceDummyClear()
+		local vo = PC.voice()
+		local far = arg == "megaphone" and 45 or 50
+		local d = PC.voiceDummySpawn(2, VecAdd(me, VecScale(fwd, far)))
+		local what
+		-- the devices, only on this machine (as a game's proxchat.device.*), and the dummy talking into them (proxchat.tx)
+		if arg == "walkie" then                                         -- (a walkie each, channel "test")
+			d.name = "Speaker (walkie)"
+			vo.testDevs = {["test walkie dummy"] = {kind = "radio", chan = "test", at = {t = "player", p = d.p}},
+				["test walkie you"] = {kind = "radio", chan = "test", at = {t = "player", p = GetLocalPlayer()}}}
+			vo.testTx = {[d.p] = "test"}
+			what = "talks into its walkie-talkie; you hear it from yours (channel \"test\")"
+		elseif arg == "megaphone" then                                  -- (a loudspeaker it holds, pointed at you)
+			d.name = "Speaker (megaphone)"
+			vo.testDevs = {["test megaphone"] = {kind = "loudspeaker", chan = "testmega", at = {t = "player", p = d.p}}}
+			vo.testTx = {[d.p] = "testmega"}
+			what = "talks through a megaphone pointed at you - walk behind it: quieter, and its words reach less far"
+		else                                                            -- (four PA speakers around you, 3 m up)
+			d.name = "Speaker (PA)"
+			local pts = {}
+			for k = 0, 3 do
+				local a = k * math.pi / 2
+				pts[#pts + 1] = VecAdd(me, Vec(8 * math.cos(a), 3, 8 * math.sin(a)))
+			end
+			vo.testDevs = {["test pa"] = {kind = "pa", chan = "testpa", at = {t = "pos", pts = pts}}}
+			vo.testTx = {[d.p] = "testpa"}
+			what = "talks on a PA whose four speakers stand around you"
+		end
+		PC.system("A voice dummy " .. far .. " m ahead " .. what .. ". Start Koetama first. /dummy voice clear removes it.")
+	elseif arg == "" then
 		PC.voiceDummyClear()
 		for k = 1, #PC.DUMMY_KINDS do
 			PC.voiceDummySpawn(k, VecAdd(VecAdd(me, VecScale(fwd, 3)), VecScale(right, (k - 2) * 2.5)))
@@ -1625,7 +1704,8 @@ function PC.voiceDummyCommand(arg)
 		PC.voiceDummySpawn(i, VecAdd(me, VecScale(fwd, 3)))
 		PC.system("The " .. PC.DUMMY_KINDS[i][2]:lower() .. " voice dummy stands in front of you (it talks through the voice helper). /dummy voice clear removes it.")
 	else
-		PC.system("/dummy voice: three voice dummies.  /dummy voice 1: whisperer, 2: speaker, 3: yeller.  /dummy voice clear: remove them.")
+		PC.system("/dummy voice: three voice dummies.  /dummy voice 1: whisperer, 2: speaker, 3: yeller.  /dummy voice walkie / megaphone / pa: "
+			.. "one far away, through that.  /dummy voice clear: remove them.")
 	end
 end
 
@@ -1647,7 +1727,9 @@ function PC.voiceHear(p, pos, mode)
 	if mode == "w" then gain = gain * cfg.voiceWhisper end
 	local x = math.max(0, math.min(1, (dEff - inner) / math.max(0.5, outer - inner)))
 	local muffle = math.max(wallM, x * cfg.voiceBufferMuffle)
-	local l = TransformToLocalPoint(GetCameraTransform(), head)
+	-- (the direction from the listener's HEAD - where every distance is measured from, and Koetama's listener position - in
+	--  the camera's axes: panning follows where the player looks; in third person the camera is not where they hear)
+	local l = TransformToLocalPoint(Transform(PC.listenerHead(), GetCameraTransform().rot), head)
 	local flat = math.sqrt(l[1] * l[1] + l[3] * l[3])
 	local az, el = 0, 0
 	if flat > 1e-6 or math.abs(l[2]) > 1e-6 then
@@ -1691,11 +1773,17 @@ function PC.validRoom(room, key)
 		and not room:find("[^0-9a-f]") and not key:find("[^0-9a-f]")
 end
 
--- (client) the helper's room for this session (a "room" object): offered to the host until shared shows a room (the
--- host keeps the first one any player offered; a room already there: nothing to do)
+-- (client) the helper's room for this session (a "room" object). The host's own game writes it into the host's registry
+-- (proxchat.hostroom: only scripts on the host can; its room always wins - PC.voiceHostSettingsTick); a guest's game
+-- offers it to the host until shared shows a room (taken only while the host has none: server.pc_room)
 function PC.voiceRoomOffer(room, key)
 	local vo = PC.voice()
-	if not PC.validRoom(room, key) or shared.pcVoiceRoom then return end
+	if not PC.validRoom(room, key) then return end
+	if PC.isHost() then
+		SetString(PC.cfg.reg .. ".hostroom", room .. ":" .. key)
+		return
+	end
+	if shared.pcVoiceRoom then return end
 	vo.roomWant = {id = room, key = key, tries = 0, t = -1e9}
 end
 
@@ -1718,18 +1806,34 @@ end
 
 -- (server) a new session: no room yet, nobody's voice mode known; the host's region as saved
 function PC.voiceServerInit()
-	PC.S().voiceRoom = nil
+	local s = PC.S()
+	s.voiceRoom = nil
 	shared.pcVoiceRoom = nil
 	shared.pcVMode = {}
-	shared.pcVoiceRegion = PC.VOICE_REGIONS[PC.voiceRegionIndex(GetString(PC.cfg.save .. "vxregion"))][1]
+	s.regionSeen = GetString(PC.cfg.save .. "vxregion")
+	shared.pcVoiceRegion = PC.VOICE_REGIONS[PC.voiceRegionIndex(s.regionSeen)][1]
 end
 
--- (server) the host picks the region (saved for the next session)
-function server.pc_region(p, code)
-	if not PC.isHostPlayer(p) then return end
-	code = PC.VOICE_REGIONS[PC.voiceRegionIndex(code)][1]
-	SetString(PC.cfg.save .. "vxregion", code)
-	shared.pcVoiceRegion = code
+-- (server, each tick: chat_core's PC.hostSettingsTick) the host's own choices from the host's registry (2026-10-09: not
+-- ServerCalls - any game could claim the host's id): the region (savegame.mod.pcvxregion, saved for the next session by
+-- the host's game) and the host's own Koetama room (proxchat.hostroom = "<room>:<key>"), which wins over a guest's
+function PC.voiceHostSettingsTick()
+	local s = PC.S()
+	local r = GetString(PC.cfg.save .. "vxregion")
+	if r ~= s.regionSeen then
+		s.regionSeen = r
+		shared.pcVoiceRegion = PC.VOICE_REGIONS[PC.voiceRegionIndex(r)][1]
+	end
+	local hr = GetString(PC.cfg.reg .. ".hostroom")
+	if hr ~= "" and hr ~= s.hostRoomSeen then
+		s.hostRoomSeen = hr
+		local room, key = hr:match("^(%x+):(%x+)$")
+		if PC.validRoom(room, key) and not (s.voiceRoom and s.voiceRoom.id == room and s.voiceRoom.key == key) then
+			s.voiceRoom = {id = room, key = key, host = true}
+			shared.pcVoiceRoom = {id = room, key = key}
+			PC.log("proxchat voice room from the host")
+		end
+	end
 end
 
 -- player p is the host (the server's own player, or IsPlayerHost)
@@ -1740,10 +1844,11 @@ function PC.isHostPlayer(p)
 	return p == 1
 end
 
--- (client, the host) the next / previous region (Settings)
+-- (client, the host) the next / previous region (Settings): into the host's own registry (PC.voiceHostSettingsTick)
 function PC.stepVoiceRegion(d)
+	if not PC.isHost() then return end
 	local i = PC.voiceRegionIndex(shared.pcVoiceRegion or "")
-	ServerCall("server.pc_region", GetLocalPlayer(), PC.VOICE_REGIONS[(i - 1 + d) % #PC.VOICE_REGIONS + 1][1])
+	SetString(PC.cfg.save .. "vxregion", PC.VOICE_REGIONS[(i - 1 + d) % #PC.VOICE_REGIONS + 1][1])
 end
 
 -- the Settings page's host row (chat_core's drawSettings)
@@ -1753,38 +1858,33 @@ function PC.voiceHostRows(rows)
 		step = PC.stepVoiceRegion}
 end
 
--- (server) player p's helper offers a room: the FIRST valid one of the session is kept, published to every player
-function server.pc_room(p, room, key)
+-- (server) a GUEST's helper offers a room (the host's own comes through its registry: PC.voiceHostSettingsTick, and
+-- always wins). Taken only from a real player with their token, only while the session has no room, and not in its
+-- first cfg.voiceRoomGrace s (the host's Koetama first); the first such one is kept, published to every player
+function server.pc_room(p, tok, room, key)
 	local s = PC.S()
-	if s.voiceRoom then return end
+	p = PC.who(p, tok)
+	if not p or not PC.allow(p, "room", 2, 3) then return end
+	if s.voiceRoom or s.time < PC.cfg.voiceRoomGrace then return end
 	if not PC.validRoom(room, key) then
 		PC.log("proxchat voice room refused p=" .. tostring(p))
 		return
 	end
-	s.voiceRoom = {id = room, key = key}
+	s.voiceRoom = {id = room, key = key, from = p}
 	shared.pcVoiceRoom = {id = room, key = key}
 	PC.log("proxchat voice room from p=" .. tostring(p))                -- (never the key in a log)
 end
 
 -- (server) player p's voice mode ("w" / "s" / "y" / "g", their choice: the lobby overrides it in every game)
-function server.pc_vmode(p, m)
-	p = tonumber(p)
-	if not p or not PC.TALK_MODE_I[m] then return end
-	local cur = shared.pcVMode or {}
-	if cur[p] == m then return end
-	local t = {}
-	for k, x in pairs(cur) do t[k] = x end
-	t[p] = m
-	shared.pcVMode = t
+function server.pc_vmode(p, tok, m)
+	p = PC.who(p, tok)
+	if not p or not PC.TALK_MODE_I[m] or not PC.allow(p, "vmode", 4, 6) then return end
+	if (shared.pcVMode or {})[p] ~= m then PC.setShared("pcVMode", p, m) end
 end
 
 -- (server, chat_core's serverTick) a player left: their voice mode goes
 function PC.voiceForget(p)
-	local cur = shared.pcVMode or {}
-	if cur[p] == nil then return end
-	local t = {}
-	for k, x in pairs(cur) do if k ~= p then t[k] = x end end
-	shared.pcVMode = t
+	if (shared.pcVMode or {})[p] ~= nil then PC.setShared("pcVMode", p, nil) end
 end
 
 -- (client) who gets my voice now, a list of player ids (PC.jsonArray): the players within my voice mode's whole range (its buffer too) +
@@ -1817,6 +1917,12 @@ function PC.voiceTo()
 	return out
 end
 
+-- x rounded to d decimals (the feed stays short)
+local function rnd(x, d)
+	local m = 10 ^ d
+	return math.floor(x * m + 0.5) / m
+end
+
 -- (client) every other real player whose voice I could hear, as feed speakers ({id = their player id, ...}): gain,
 -- direction and muffle as for the voice dummies (PC.voiceHear: their voice mode's ranges, the buffer, walls) at their
 -- head, from my camera (dead and spectating: where I watch from); not one in Global, muted (/mute) or out of earshot
@@ -1829,26 +1935,35 @@ function PC.voicePlayers(parts)
 	local chans = shared.pcChan or {}
 	local mine = chans[me] or ""
 	for _, q in ipairs(PC.allPlayers()) do
+		local n0 = #parts
 		if q ~= me and not c.muted[q] then
 			if lobby then
 				parts[#parts + 1] = PC.voiceSpeaker(q, 1, 0, 0, 0)
 			else
 				local m, chan, pos = vm[q], chans[q] or "", PC.speakerPos(q)
 				if chan ~= "" then
-					if chan == mine then parts[#parts + 1] = PC.voiceSpeaker(q, PC.cfg.voiceDeadGain, 0, 0, 0) end
+					if chan == mine then
+						local e = PC.voiceSpeaker(q, PC.cfg.voiceDeadGain, 0, 0, 0)
+						e.effects = PC.fxFor and PC.fxFor("d", q) or nil       -- (a game's "dead" effects: a ghost)
+						parts[#parts + 1] = e
+					end
 				elseif m and m ~= "g" and pos then
 					local gain, az, el, muffle = PC.voiceHear(q, pos, m)
-					if gain > 0 then parts[#parts + 1] = PC.voiceSpeaker(q, gain, az, el, muffle) end
+					local via = PC.devVia and PC.devVia(q, m) or nil      -- (through devices: devices.lua)
+					if gain > 0 or via then
+						local e = gain > 0 and PC.voiceSpeaker(q, gain, az, el, muffle) or {id = q}   -- (only via: no position, no gain)
+						if gain > 0 and PC.fxFor then e.effects = PC.fxFor(m, q) end
+						e.via = via
+						parts[#parts + 1] = e
+					end
 				end
 			end
 		end
+		if #parts > n0 then                                            -- (my own volume for this player, 0..2, only when
+			local v = rnd(PC.playerVolume(q), 2)                       --  not 1: Koetama multiplies it on everything,
+			if v ~= 1 then parts[#parts].volume = v end                --  their device voices too)
+		end
 	end
-end
-
--- x rounded to d decimals (the feed stays short)
-local function rnd(x, d)
-	local m = 10 ^ d
-	return math.floor(x * m + 0.5) / m
 end
 
 -- one feed speaker
@@ -1867,11 +1982,18 @@ function PC.voiceFeed(vo, off)
 	if not off then
 		for _, d in ipairs(vo.list) do
 			local gain, az, el, muffle = PC.voiceHear(d.p, d.pos, d.kind)
-			local e = PC.voiceSpeaker(d.p, gain, az, el, muffle)
+			local via = PC.devVia and PC.devVia(d.p, d.kind) or nil        -- (through devices: devices.lua)
+			local e = (via and gain <= 0) and {id = d.p} or PC.voiceSpeaker(d.p, gain, az, el, muffle)
+			if e.gain and PC.fxFor then e.effects = PC.fxFor(d.kind, d.p) end
+			e.via = via
 			e.test_voice, e.talking = d.idx, d.talking and true or false
 			sp[#sp + 1] = e
 		end
 		if room then PC.voicePlayers(sp) end                         -- (no room: no real voices)
+	end
+	local placed = false                                               -- (a device with a position: Koetama needs my ears)
+	for _, e in ipairs(sp) do
+		for _, v in ipairs(e.via or {}) do if v.position or v.positions then placed = true end end
 	end
 	vo.seq = vo.seq + 1
 	local listen = "off"
@@ -1880,7 +2002,9 @@ function PC.voiceFeed(vo, off)
 		listen = listen, talk_key = (listen == "push_to_talk" and vo.held) and true or false,
 		lang = PC.VOICE_LANGS[vo.lang][1], live = vo.liveOn and true or false, me = GetLocalPlayer(), speakers = sp}
 	if room then f.room, f.key, f.to, f.region = room.id, room.key, PC.voiceTo(), vo.region or "" end
-	if not off then f.translations, f.to_translate = PC.trFeed(vo) end   -- (translation: the rules and the lines waiting)
+	if room and PC.devTransmit then f.transmit = PC.devTransmit() end   -- (my voice into a device now: devices.lua)
+	if placed and PC.devListener then f.listener = PC.devListener() end
+	if not off then f.to_translate = PC.trFeed(vo) end                  -- (translation: the lines waiting)
 	SetString(PC.VOICE_FEED, PC.voiceFeedString(f))
 end
 
@@ -1900,10 +2024,17 @@ function PC.voiceFeedOff(s)
 	if type(f) ~= "table" or f.type ~= "feed" then return false end
 	local function none(x) return x == nil or x == PC.JSON_NULL or (type(x) == "table" and x[1] == nil) end
 	return (f.listen == nil or f.listen == "off") and (f.room == nil or f.room == PC.JSON_NULL) and none(f.speakers)
-		and none(f.translations) and none(f.to_translate)
+		and none(f.to_translate)
 end
 
 PC.KOETAMA_OLD = "Your Koetama is too outdated. Please update it from the app."
+-- Koetama speaks a NEWER protocol than this file (its hello's "protocol" > PC.PROTOCOL): this mod is the old one. Voice
+-- chat carries on (a newer protocol may still mostly fit), with a notice in the chat once and on the Voice page.
+PC.KOETAMA_NEWER = "This Proximity Comms is older than your Koetama: update the mod (restart the game to get Workshop updates)."
+function PC.koetamaNewer(vo)
+	local hello = vo and vo.h and vo.h.hello
+	return hello ~= nil and hello.protocol ~= nil and hello.protocol > PC.PROTOCOL
+end
 
 -- is the helper there? Its "on" file starts the feed (but "on" with pcvx_v5 / pcvx_v6: a Koetama before 0.4.0, which
 -- can't read protocol 2 - too old); then it must answer every ping (a file left by a crashed helper does not).
@@ -1936,8 +2067,8 @@ function PC.voiceHelper(vo, now)
 		if h.alive then PC.system("Koetama disconnected: voice chat is off.") end
 		h.on, h.alive, h.failed, h.checkT, h.hello = false, false, true, now, nil
 		vo.sayQ, vo.vstate = {}, nil
-		vo.tr.reqs, vo.tr.status = {}, {}                                -- (no translations will come; a new Koetama says
-	end                                                                  --  its rules' state again)
+		vo.tr.reqs, vo.tr.status, vo.tr.asked, vo.tr.into = {}, {}, {}, nil   -- (no translations will come; a new Koetama
+	end                                                                       --  says its setting again)
 end
 
 -- an object Koetama wrote (pcvx_t<n>.xml): Spawn the prefab, read its j tag (hex of JSON), delete what it made ->
@@ -1984,6 +2115,10 @@ function PC.voiceMessage(vo, obj)
 		end
 		vo.h.hello = {app = type(obj.app) == "string" and obj.app or "", version = type(obj.version) == "string" and obj.version or "",
 			protocol = tonumber(obj.protocol), features = feats}
+		if PC.koetamaNewer(vo) and vo.h.newerSaid ~= vo.h.hello.protocol then
+			vo.h.newerSaid = vo.h.hello.protocol                          -- (said once per protocol number, not per reconnect)
+			PC.system(PC.KOETAMA_NEWER)
+		end
 	elseif t == "speech" then
 		if not vo.textOn then return end
 		local kind, utt = obj.kind, tonumber(obj.utt) or 0
@@ -2007,7 +2142,7 @@ function PC.voiceMessage(vo, obj)
 		local id = tonumber(obj.id)
 		if id then PC.trReply(id, type(obj.text) == "string" and obj.text or "") end   -- (under its line, never said)
 	elseif t == "translations_status" then
-		PC.trStatus(obj.translations)                                    -- (the rules' state: the Translate tab)
+		PC.trStatus(obj)                                                 -- (into + the pairs' state: the Translate tab)
 	end
 end
 
@@ -2048,6 +2183,11 @@ function PC.voiceTick(now)
 		end
 	end
 	local vo = PC.voice()
+	-- a controller: the microphone always on unless the player chose push to talk (the user, 2026-10-12: open mic is
+	-- what controller players expect; a pad has no button to spare). Not saved: the Voice page's choice is.
+	if vo.ptt and PC.pad and PC.pad() and not HasKey(PC.cfg.save .. "vxalwayson") then
+		vo.ptt, vo.feedT = false, -1e9
+	end
 	PC.voiceHelper(vo, now)
 	PC.talkTick(vo, now)
 	-- the session's voice room and every player's voice mode, read once a tick (a client's shared read is a fresh copy)
@@ -2058,7 +2198,7 @@ function PC.voiceTick(now)
 	local me = GetLocalPlayer()
 	if c.vmodes[me] ~= vo.vmode and now >= (vo.vmodeT or 0) then    -- (my voice mode: to the host until shared shows it)
 		vo.vmodeT = now + cfg.voiceModeEvery
-		ServerCall("server.pc_vmode", me, vo.vmode)
+		PC.call("pc_vmode", vo.vmode)
 	end
 	local rw = vo.roomWant                                             -- (the helper's room: offered until a room is there)
 	if rw then
@@ -2066,7 +2206,8 @@ function PC.voiceTick(now)
 			vo.roomWant = nil
 		elseif now >= rw.t then
 			rw.tries, rw.t = rw.tries + 1, now + cfg.voiceRoomEvery
-			if rw.tries > cfg.voiceRoomTries then vo.roomWant = nil else ServerCall("server.pc_room", me, rw.id, rw.key) end
+			if rw.tries > cfg.voiceRoomTries then vo.roomWant = nil elseif PC.C().tok then PC.call("pc_room", rw.id, rw.key)
+			else rw.tries = rw.tries - 1 end                                 -- (no token yet: not a try)
 		end
 	end
 	-- an object from the helper: the next number, read once, then acked in the feed (unreadable or unknown: acked too)

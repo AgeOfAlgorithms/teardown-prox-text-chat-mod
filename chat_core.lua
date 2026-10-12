@@ -31,10 +31,11 @@
 --   mode; nothing else does. A bubble shows
 --   cfg.bubbleLines lines; a longer message scrolls down inside it (clipped, a thin bar on the right) and
 --   the bubble stays up that much longer (b.extra).
---   TRANSLATIONS (voice.lua's Translate tab, Koetama): a line's translation (b.tr / the history entry's e.tr) is drawn
---   under the original, after a thin rule in a bubble (dark rose, PC.TR_BUBBLE_COLOR; the bubble grows to hold it and
---   stays up long enough to read it from when it came) and in the history and feed (pink, PC.TR_COLOR; the line's height
---   counts it), in the font for its own script (PC.bubbleFont / PC.chatFont), wrapped like the original.
+--   TRANSLATIONS (Koetama, into the language set in its own window; voice.lua's Translate tab shows it): a line's
+--   translation (b.tr / the history entry's e.tr) is drawn under the original, after a thin rule in a bubble (dark
+--   rose, PC.TR_BUBBLE_COLOR; the bubble grows to hold it and stays up long enough to read it from when it came) and in
+--   the history and feed (pink, PC.TR_COLOR; the line's height counts it), in the font for its own script
+--   (PC.bubbleFont / PC.chatFont), wrapped like the original.
 --
 -- DISTANCES: the host sets them for everyone on the Settings page (PC.rangeBar: whisper, speak, yell;
 --   each buffer a share of its range: cfg.whisperBuf / speakBuf / shoutBuf), shared.pcRanges; a map may
@@ -59,8 +60,13 @@
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /y /g [text] (Speak / Whisper / Yell / Global: set the mode, or say one line
 --   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /mute [name], /unmute name|all, /dummy [1|2|3|clear]
---   (local test speakers), /help, //text sends "/text".
+--   (local test speakers), /volume [name [0-200]] (a player's voice and babble, only for you), /help, //text sends "/text".
 --
+-- TRUST (2026-10-09, after a security audit; see TRUST below the server's start): every server.pc_* call carries the
+--   caller's id and its session token (PC.call on the client; PC.who on the server checks both and that the id is a real
+--   player); tokens come from the host by ClientCall, each only to its player. The host's own settings (distances, walls,
+--   voice server, its Koetama room) go through the host's registry, never ServerCall. Player text can't hold UiText
+--   markup ("[[" -> "[ [") and the chat draws with UiText's wildcards off.
 -- (copy fonts/ too for the bubble font; without it the bubbles use the game fonts)
 -- API (every name lives in the PC table; ServerCall targets are server.pc_*; shared keys are pc*;
 -- registry keys proxchat.*; persistent settings savegame.mod.pc*)
@@ -77,8 +83,8 @@
 --                                     while it is true. Other scripts: GetBool("proxchat.typing." .. p)
 --                                     (host: every player; any machine: its own player)
 --   PC.say(text, mode[, voice])       client: say something as the local player (mode "w" / "s" / "y" / "g"; "p" = "s", the old id);
---                                     voice = true: spoken, not typed (no babble, the history tag says so)
---   PC.mode() / PC.setMode(m)         client: the input line's mode (setMode saves it)
+--                                     voice = true: spoken, not typed (no babble; the history tag is the mode's, as typed)
+--   PC.mode() / PC.setMode(m)         client: the input line's mode (setMode saves it; the voice's mode follows, voice.lua)
 --   PC.system(text)                   client: a local line in the history (only this player sees it)
 --   PC.history([mode])                client: the history (entries: name, text, p, ch = mode or "sys",
 --                                     shout, far, sys, t; tr = its translation, voice.lua); with a mode: only those
@@ -92,8 +98,10 @@
 --   PC.hooks.inLobby()                server: true = everyone hears everything (Global only)
 --   PC.hooks.everyoneHears(speaker)   client: true = the local player hears this speaker's NEARBY
 --                                     messages in full wherever they are (spectators, radios...);
---                                     whispers still need cfg.whisperR. While it is set the client asks
---                                     the server for every Speak / Yell line (server.pc_hearall)
+--                                     whispers still need cfg.whisperR. The host sends that player every
+--                                     Speak / Yell line only while the game's SERVER script sets
+--                                     proxchat.hearall.<p> = true on the host (2026-10-09: no longer the
+--                                     client's word, server.pc_hearall)
 --   PC.hooks.blockKeys()              client: true = Enter (and cfg.windowKey) do nothing
 --   PC.hooks.onMessage(msg, heard)    client: a message arrived; heard = what was heard or nil
 --   PC.hooks.log(line)                server: diagnostics
@@ -181,7 +189,8 @@ do
 		windowKey = "",          -- a hotkey that pins the chat window ("" = none; /window does it)
 		reg = "proxchat",        -- registry prefix
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pchideown, pcbubbles, pcvolume, pcnovoicebubbles,
-		                         --   pcdock, pcwinw, pcwinh, pctext (the chat's place, size and text size)
+		                         --   pcdock, pcwinw, pcwinh, pctext (the chat's place, size and text size),
+		                         --   pcpvol.<hex of a cleaned name> (a player's volume, 0..2; PC.playerVolume)
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
 		shoutVol = 0.8,          -- Yell (the shout clips, already a little louder than babble)
@@ -204,6 +213,14 @@ do
 		recallMax = 10,          -- lines you sent that Up / Down on the chat line bring back
 		feedLines = 6,
 		hintIntro = 15,          -- s the longer hint shows after loading
+		-- TRUST (2026-10-09, the security audit): a ServerCall carries no sender, so every server.pc_* call carries the
+		-- caller's id AND its session token (PC.who); the host sends each player its token by ClientCall, only to them
+		seqWindow = 32,          -- a message number is taken only within this many past the last one taken (no "1e15")
+		tokEvery = 1,            -- s between two sends of a player's token until their game confirms it
+		tokReqEvery = 2,         -- s between two asks for a token by a game that has none
+		tokWarm = 30,            -- server ticks of entropy before a guest gets a token (the host's own: at once)
+		pendingMax = 16,         -- calls a game keeps (the newest of each kind) until it has its token
+		argBytes = 4096,         -- bytes of any string argument the server looks at (longer: cut before any scan)
 	}
 	for k, v in pairs(defaults) do
 		if PC.cfg[k] == nil then PC.cfg[k] = v end
@@ -222,8 +239,9 @@ PC.VOICES = {
 -- the Settings levels for speech bubbles (opacity): Off, 25 %, 50 %, 75 %, 100 % (the babble volume is a slider)
 PC.LEVELS = {0, 0.25, 0.5, 0.75, 1}
 PC.LEVEL_NAMES = {"Off", "25%", "50%", "75%", "100%"}
-PC.BABBLE_SETS = {voice = 8, shout = 8, robot = 4, whisper = 8, rwhisper = 4}
-PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "whisper", rwhisper = "rwhisper"}
+PC.BABBLE_SETS = {voice = 8, shout = 8, robot = 4, whisper = 8, rwhisper = 4, radio = 8, horn = 8}
+PC.CLIP_FILE = {voice = "babble", shout = "shout", robot = "robot", whisper = "whisper", rwhisper = "rwhisper",
+	radio = "radio", horn = "horn"}                                  -- (radio / horn: the babble band-passed, tools/device_clips.py)
 
 -- the modes, in Tab / chip order: id, prompt on the input line, chip label, history tag, colour
 PC.MODES = {   -- {id, the prompt, the chip's name, the history tag, colour, the chip's short name (not selected)}
@@ -244,11 +262,6 @@ function PC.channelInfo(chan)
 	local label = chan:sub(1, 1):upper() .. chan:sub(2)
 	return {"d", label .. ": ", label, "[" .. chan .. "]", PC.DEAD[5]}
 end
--- the history tag of a SPOKEN line (voice.lua): [spoken] / [whispered] / [yelled], else "[..., spoken]"
-PC.SPOKEN = {["[speak]"] = "[spoken]", ["[whisper]"] = "[whispered]", ["[yell]"] = "[yelled]"}
-function PC.spokenTag(tag)
-	return PC.SPOKEN[tag] or (tag:gsub("%]$", ", spoken]"))
-end
 function PC.modeInfo(m)
 	if m == "d" then return PC.DEAD end
 	for _, x in ipairs(PC.MODES) do if x[1] == m then return x end end
@@ -258,7 +271,8 @@ end
 -- ============================================================================ text in any language
 -- Chat text is UTF-8: letters are counted, cased and cut as characters, not bytes (Lua's %a / upper()
 -- only know A-Z; a byte cut can split a letter in half).
-PC.UTF8_CHAR = "[%z\1-\127\194-\244][\128-\191]*"
+PC.UTF8_CHAR = "[%z\1-\127\194-\244][\128-\191]?[\128-\191]?[\128-\191]?"   -- (at most 3 continuation bytes: a lead
+                                                                      --  byte + 200 KB of them is not "one character")
 
 function PC.utf8Code(ch)
 	local b1 = ch:byte(1)
@@ -438,9 +452,30 @@ function PC.histText(b)
 end
 
 -- characters removed outright: zero-width ones, direction overrides / isolates, line and paragraph
--- separators, the BOM
+-- separators, the BOM; and invisible "letters" used for blank or look-alike names (2026-10-09): the soft hyphen, the
+-- grapheme joiner, the Arabic letter mark, Hangul fillers, Khmer inherent vowels, Mongolian selectors, the braille
+-- blank, variation selectors, interlinear annotation, musical formatting, tag characters
 local function pcStripped(c)
 	return (c >= 0x200B and c <= 0x200F) or (c >= 0x2028 and c <= 0x202E) or (c >= 0x2060 and c <= 0x206F) or c == 0xFEFF
+		or c == 0xAD or c == 0x34F or c == 0x61C or c == 0x115F or c == 0x1160 or c == 0x17B4 or c == 0x17B5
+		or (c >= 0x180B and c <= 0x180F) or c == 0x2800 or c == 0x3164 or c == 0xFFA0 or (c >= 0xFE00 and c <= 0xFE0F)
+		or (c >= 0xFFF9 and c <= 0xFFFB) or (c >= 0x1D173 and c <= 0x1D17A) or (c >= 0xE0000 and c <= 0xE0FFF)
+end
+PC.stripped = pcStripped
+-- whitespace of any script (a line or a name of nothing but these says nothing)
+local function pcSpace(c)
+	return c == 0x20 or c == 0xA0 or (c >= 0x2000 and c <= 0x200A) or c == 0x202F or c == 0x205F or c == 0x3000 or c == 0x1680
+end
+-- one character as UTF-8 should write it: the length its lead byte says, the shortest form, no surrogate, at most U+10FFFF
+function PC.utf8Valid(ch)
+	local n, b = #ch, ch:byte(1)
+	if not b then return false end
+	local want = b < 0x80 and 1 or (b < 0xE0 and 2 or (b < 0xF0 and 3 or 4))
+	if n ~= want then return false end
+	if n == 1 then return true end
+	local c = PC.utf8Code(ch)
+	if (n == 2 and c < 0x80) or (n == 3 and c < 0x800) or (n == 4 and (c < 0x10000 or c > 0x10FFFF)) then return false end
+	return not (c >= 0xD800 and c <= 0xDFFF)
 end
 -- generic combining marks (stacked into "zalgo" towers); the vowel marks of Arabic, Hebrew, Thai,
 -- Devanagari... are not in these ranges and are kept
@@ -451,32 +486,84 @@ end
 
 -- sanitize: ASCII control bytes (never %c: it would eat UTF-8), invisible / direction-changing
 -- characters, more than cfg.maxMarks accents on a letter; trimmed, cfg.maxLen characters
+-- Also (2026-10-09): bytes past what max characters can need are cut BEFORE any scan; a character that is not valid
+-- UTF-8 (a wrong length, an overlong form, a surrogate) is dropped; Teardown's UiText markup "[[...]]" (links that open
+-- the browser, icons of any size) can't be written ("[[" becomes "[ ["); a line with nothing visible (only spaces,
+-- accents, invisible characters) is "".
 function PC.clean(text, max)                                           -- (max: characters kept, else cfg.maxLen)
 	if type(text) ~= "string" then return "" end
-	local out, run = {}, 0
+	max = max or PC.cfg.maxLen
+	if #text > max * 12 + 16 then text = text:sub(1, max * 12 + 16) end  -- (a letter, its 2 accents: 12 bytes at most)
+	local out, run, visible = {}, 0, false
 	for ch in text:gmatch(PC.UTF8_CHAR) do
-		local c = PC.utf8Code(ch)
-		if pcStripped(c) then
-		elseif pcMark(c) then
-			run = run + 1
-			if run <= PC.cfg.maxMarks then out[#out + 1] = ch end
-		else
-			run = 0
-			out[#out + 1] = ch
+		if PC.utf8Valid(ch) then
+			local c = PC.utf8Code(ch)
+			if pcStripped(c) then
+			elseif pcMark(c) then
+				run = run + 1
+				if run <= PC.cfg.maxMarks then out[#out + 1] = ch end
+			else
+				run = 0
+				out[#out + 1] = ch
+				if c > 31 and c ~= 127 and not pcSpace(c) then visible = true end
+			end
 		end
 	end
+	if not visible then return "" end
 	text = table.concat(out)
 	text = text:gsub("[%z\1-\31\127]", " ")
 	text = text:gsub("^%s+", "")
 	text = text:gsub("%s+$", "")
-	return PC.utf8Head(text, max or PC.cfg.maxLen)
+	while text:find("[[", 1, true) do text = text:gsub("%[%[", "[ [") end
+	return PC.utf8Head(text, max)
 end
 
--- a player's name, cleaned like a message and at most cfg.nameLen characters
+-- a player's name, cleaned like a message and at most cfg.nameLen characters (nothing visible: "Player <p>")
 function PC.cleanName(name, p)
 	name = PC.utf8Head(PC.clean(name), PC.cfg.nameLen)
 	if name == "" then name = "Player " .. tostring(p) end
 	return name
+end
+
+-- look-alike letters folded for comparing names (Cyrillic / Greek letters that look Latin, full-width forms, 0 / 1):
+-- two players whose names fold the same are told apart by their numbers (PC.nameOf)
+PC.CONFUSE = {}
+for from, to in pairs({["а"] = "a", ["е"] = "e", ["о"] = "o", ["р"] = "p", ["с"] = "c", ["у"] = "y", ["х"] = "x", ["і"] = "i",
+	["ј"] = "j", ["ѕ"] = "s", ["һ"] = "h", ["ԁ"] = "d", ["ԛ"] = "q", ["ԝ"] = "w", ["ӏ"] = "l", ["в"] = "b", ["к"] = "k", ["м"] = "m",
+	["н"] = "h", ["т"] = "t", ["α"] = "a", ["β"] = "b", ["ε"] = "e", ["ζ"] = "z", ["η"] = "h", ["ι"] = "i", ["κ"] = "k", ["μ"] = "m",
+	["ν"] = "v", ["ο"] = "o", ["ρ"] = "p", ["τ"] = "t", ["υ"] = "u", ["χ"] = "x", ["0"] = "o", ["1"] = "l", ["i"] = "l", ["|"] = "l"}) do
+	PC.CONFUSE[from] = to
+end
+function PC.nameKey(name)
+	local out = {}
+	for ch in (name or ""):gmatch(PC.UTF8_CHAR) do
+		local c = PC.utf8Code(ch)
+		if c >= 0xFF01 and c <= 0xFF5E then ch = string.char(c - 0xFEE0) end
+		ch = PC.CONFUSE[ch] or ch
+		if #ch == 1 then ch = ch:lower() end
+		if (c >= 0x400 and c <= 0x42F) then ch = PC.utf8Char(c + 0x20) end            -- (Cyrillic capitals: lower case first)
+		if (c >= 0x391 and c <= 0x3A9) then ch = PC.utf8Char(c + 0x20) end            -- (Greek capitals)
+		ch = PC.CONFUSE[ch] or ch
+		if not ch:find("^[%s%p]$") then out[#out + 1] = ch end
+	end
+	return table.concat(out)
+end
+
+-- (server) the name everyone sees for player p: cleaned; when another player's folds the same ("Bob" / "Воb", two
+-- "Bob"s), " #<p>" after it, so each can be told apart and muted (/mute #p)
+function PC.nameOf(p)
+	local name = PC.cleanName(GetPlayerName(p), p)
+	local key = PC.nameKey(name)
+	for _, q in ipairs(PC.allPlayers()) do
+		if q ~= p and PC.nameKey(PC.cleanName(GetPlayerName(q), q)) == key then return name .. " #" .. p end
+	end
+	return name
+end
+
+-- UiText's "[[...]]" wildcards off for what follows (player text: messages, names, translations, live words, channel
+-- tags). PC.draw turns them off for all of the chat's drawing; the calls at each text are a second guard.
+function PC.noWild()
+	if UiTextDisableWildcards then UiTextDisableWildcards(true) end
 end
 
 -- ---- display: which of the game's fonts has this text's script
@@ -484,19 +571,32 @@ function PC.scriptOf(c)
 	if c < 0x250 or (c >= 0x1E00 and c <= 0x1EFF) or (c >= 0x370 and c <= 0x52F) then return "base" end
 	if c == 0x2B1A then return "cjk" end                                  -- (⬚, PC.GARBLE: only the CJK fonts have it)
 	if (c >= 0x3040 and c <= 0x30FF) or (c >= 0x31F0 and c <= 0x31FF) then return "kana" end
+	if (c >= 0xAC00 and c <= 0xD7AF) or (c >= 0x1100 and c <= 0x11FF) or (c >= 0x3130 and c <= 0x318F) then return "hangul" end
 	if (c >= 0x1100 and c <= 0x11FF) or (c >= 0x3000 and c <= 0x303F) or (c >= 0x3130 and c <= 0x318F) or (c >= 0x3400 and c <= 0x9FFF)
 		or (c >= 0xAC00 and c <= 0xD7AF) or (c >= 0xF900 and c <= 0xFAFF) or (c >= 0xFF00 and c <= 0xFFEF) then return "cjk" end
 	if c >= 0x2000 and c <= 0x2BFF then return "base" end
 	return "wide"                                                         -- Arabic, Hebrew, Thai, Devanagari...
 end
 
+-- Korean: the game has no font with Hangul (its _sc fonts drew "?", seen in-game 2026-10-09), so the mod brings one:
+-- Noto Sans KR (SIL Open Font License, fonts/NotoSansKR-OFL.txt), cut to Latin, Hangul and CJK punctuation
+PC.KO_FONT = {regular = "MOD/fonts/notosanskr-regular.ttf", bold = "MOD/fonts/notosanskr-bold.ttf"}
+
 function PC.chatFont(text, bold)
-	local kana, cjk, wide = false, false, false
+	local kana, cjk, wide, hangul = false, false, false, false
 	for ch in (text or ""):gmatch(PC.UTF8_CHAR) do
 		local s = PC.scriptOf(PC.utf8Code(ch))
-		if s == "kana" then kana = true elseif s == "cjk" then cjk = true elseif s == "wide" then wide = true end
+		if s == "kana" then kana = true elseif s == "cjk" then cjk = true elseif s == "wide" then wide = true
+		elseif s == "hangul" then hangul = true end
 	end
 	if wide then return "arial.ttf" end                                   -- (the game's widest font; no bold)
+	if hangul and not kana then
+		if PC.koFontOk == nil then
+			local ok, has = pcall(HasFile, PC.KO_FONT.regular)
+			PC.koFontOk = ok and has == true
+		end
+		if PC.koFontOk then return bold == false and PC.KO_FONT.regular or PC.KO_FONT.bold end
+	end
 	if kana then return bold == false and "regular_jp.ttf" or "bold_jp.ttf" end
 	if cjk then return bold == false and "regular_sc.ttf" or "bold_sc.ttf" end
 	return bold == false and "regular.ttf" or "bold.ttf"
@@ -635,11 +735,13 @@ end
 
 -- draw chat text: the right font, joined and in visual order
 function PC.text(text, size, bold)
+	PC.noWild()
 	UiFont(PC.chatFont(text, bold), size)
 	UiText(PC.chatVisual(text))
 end
 
 function PC.textWidth(text, size, bold)
+	PC.noWild()
 	UiFont(PC.chatFont(text, bold), size)
 	return UiGetTextSize(PC.chatVisual(text)) or 0
 end
@@ -647,17 +749,37 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 3                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles)
+PC.API_VERSION = 8                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+                                                                    --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
+                                                                    --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
+                                                                    --  7: proxchat.open, a game opens the chat - 2026-10-12;
+                                                                    --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
+                                                                    --     proxchat.typing.<me> also on a controller's pages)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
 	SetFloat(reg .. ".alive", GetTime())
 end
 
+-- (client, every tick; API 8) the chat's keys, for a game's hints and to keep off them: proxchat.key.open (the
+-- keyboard's, a name to show), proxchat.key.pad (a controller's), proxchat.key.talk (the talk key's input name, "" while
+-- Koetama isn't running) and proxchat.talking.<me> (it is held now; voice.lua writes it)
+PC.KEY_OPEN, PC.KEY_PAD = "Enter", "L3 twice"
+function PC.publishKeys()
+	local reg = PC.cfg.reg
+	SetString(reg .. ".key.open", PC.KEY_OPEN)
+	SetString(reg .. ".key.pad", PC.KEY_PAD)
+	local vo = PC.C().voice
+	SetString(reg .. ".key.talk", (vo and vo.h and vo.h.alive and vo.talkKey) or "")
+end
+
 function PC.serverInit()
+	if PC.s then return end                                          -- (once: a ServerCall("server.init") must not reset the session)
 	PC.s = {time = 0, typing = {}, last = {}, seq = {}, n = 0, pruneT = 0, lobby = false, chan = {}, walls = nil,
-		hearAll = {},                                                -- (players whose game hears everyone: server.pc_hearall)
-		wallsHost = GetBool(PC.cfg.save .. "wallson")}               -- (walls: off unless the host turned them on)
+		hearAll = {},                                                -- (players whose game hears everyone: proxchat.hearall.<p>, a game's)
+		wallsHost = GetBool(PC.cfg.save .. "wallson"),               -- (walls: off unless the host turned them on)
+		tok = {}, tokOk = {}, tokT = {}, tokN = 0, ticks = 0, bud = {}, ent1 = 7, ent2 = 11}   -- (TRUST, below)
+	PC.s.hostRanges = GetString(PC.cfg.save .. "ranges")             -- (the host's Settings: its own registry, read each tick)
 	ClearKey(PC.cfg.reg)
 	shared.pcMsgs = {}
 	shared.pcVoice = {}
@@ -678,6 +800,263 @@ end
 function PC.S()
 	if not PC.s then PC.serverInit() end
 	return PC.s
+end
+
+-- ============================================================================ TRUST (2026-10-09, the security audit)
+-- A ServerCall says nothing about who sent it (the game's own scripts pass GetLocalPlayer() too), so a modified game
+-- could claim any player id. So every server.pc_* call carries the caller's id AND a session token only that player
+-- has: the host makes one per player from host-only entropy and sends it by ClientCall to that player alone (as a
+-- whisper goes); PC.who(p, tok) checks both, and that p is a real player now (a whole number among GetAllPlayers(),
+-- IsPlayerValid). A game without its token yet keeps its calls (PC.call: the newest of each kind) and asks for one
+-- (server.pc_tokreq: that only makes the host send it again - to its owner).
+-- Host-only settings never come by ServerCall: the host's own game writes them into the host's registry (only scripts
+-- on the host can), and the server reads them there (PC.hostSettingsTick).
+-- Entropy: every server tick stirs the frame time, the clock, math.random and every player's exact position into two
+-- lanes (ent1, ent2: never sent anywhere); a token is SHA-256 of a secret kept in the host's own savegame (carried
+-- from session to session, ratcheted with each token), the lanes, the player and a counter - one-way, so a player's
+-- own token tells nothing about anyone else's. Guests get theirs after cfg.tokWarm ticks of stirring.
+do
+	local XOR4, AND4 = {}, {}
+	for a = 0, 15 do
+		for b = 0, 15 do
+			local x, y, r1, r2, m = a, b, 0, 0, 1
+			for _ = 1, 4 do
+				local u, v = x % 2, y % 2
+				if u ~= v then r1 = r1 + m end
+				if u == 1 and v == 1 then r2 = r2 + m end
+				x, y, m = (x - u) / 2, (y - v) / 2, m * 2
+			end
+			XOR4[a * 16 + b], AND4[a * 16 + b] = r1, r2
+		end
+	end
+	local function bop(T, a, b)                                      -- (32-bit bitwise, four bits at a time: PUC Lua 5.1)
+		local r, m = 0, 1
+		for _ = 1, 8 do
+			local x, y = a % 16, b % 16
+			r = r + T[x * 16 + y] * m
+			a, b, m = (a - x) / 16, (b - y) / 16, m * 16
+		end
+		return r
+	end
+	local function bxor(a, b) return bop(XOR4, a, b) end
+	local function band(a, b) return bop(AND4, a, b) end
+	local function rotr(x, n) local q = 2 ^ n; local lo = x % q; return (x - lo) / q + lo * 2 ^ (32 - n) end
+	local function shr(x, n) local q = 2 ^ n; return (x - x % q) / q end
+	local M32 = 4294967296
+	local K = {
+		0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+		0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+		0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+		0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+		0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+		0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+		0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+		0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+	}
+	-- SHA-256 of a string, as 64 lower-case hex digits (a few ms per 64 bytes in PUC Lua: only for tokens)
+	function PC.sha256(msg)
+		local H = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19}
+		local len = #msg
+		local bits, tail = len * 8, {}
+		for i = 7, 0, -1 do tail[#tail + 1] = string.char(math.floor(bits / 2 ^ (i * 8)) % 256) end
+		msg = msg .. "\128" .. string.rep("\0", (55 - len) % 64) .. table.concat(tail)
+		local w = {}
+		for blk = 1, #msg, 64 do
+			for i = 0, 15 do
+				local a, b, c, d = msg:byte(blk + i * 4, blk + i * 4 + 3)
+				w[i] = ((a * 256 + b) * 256 + c) * 256 + d
+			end
+			for i = 16, 63 do
+				local x, y = w[i - 15], w[i - 2]
+				local s0 = bxor(bxor(rotr(x, 7), rotr(x, 18)), shr(x, 3))
+				local s1 = bxor(bxor(rotr(y, 17), rotr(y, 19)), shr(y, 10))
+				w[i] = (w[i - 16] + s0 + w[i - 7] + s1) % M32
+			end
+			local a, b, c, d, e, f, g, h = H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8]
+			for i = 0, 63 do
+				local S1 = bxor(bxor(rotr(e, 6), rotr(e, 11)), rotr(e, 25))
+				local ch = bxor(band(e, f), band(M32 - 1 - e, g))
+				local t1 = (h + S1 + ch + K[i + 1] + w[i]) % M32
+				local S0 = bxor(bxor(rotr(a, 2), rotr(a, 13)), rotr(a, 22))
+				local maj = bxor(bxor(band(a, b), band(a, c)), band(b, c))
+				h, g, f, e, d, c, b, a = g, f, e, (d + t1) % M32, c, b, a, (t1 + S0 + maj) % M32
+			end
+			H[1], H[2], H[3], H[4] = (H[1] + a) % M32, (H[2] + b) % M32, (H[3] + c) % M32, (H[4] + d) % M32
+			H[5], H[6], H[7], H[8] = (H[5] + e) % M32, (H[6] + f) % M32, (H[7] + g) % M32, (H[8] + h) % M32
+		end
+		local out = {}
+		for i = 1, 8 do out[i] = string.format("%04x%04x", math.floor(H[i] / 65536), H[i] % 65536) end   -- (%x of a
+		return table.concat(out)                                                                           --  32-bit word overflows a C long on Windows)
+	end
+end
+
+-- (server) stir a string into the entropy lanes
+function PC.stir(str)
+	local s = PC.S()
+	local h1, h2 = s.ent1, s.ent2
+	for i = 1, #str do
+		local b = str:byte(i)
+		h1 = (h1 * 65599 + b) % 4294967291
+		h2 = (h2 * 69069 + b + h1 % 65536) % 4294967279
+	end
+	s.ent1, s.ent2 = h1, h2
+end
+
+-- (server, each tick) this frame's time, the clock, the host's random numbers, every player's exact place
+function PC.stirTick(dt)
+	local parts = {string.format("%.17g|%.17g|%.17g", dt, GetTime(), math.random())}
+	for _, q in ipairs(PC.allPlayers()) do
+		local ok, t = pcall(GetPlayerTransform, q)
+		if ok and t and t.pos then parts[#parts + 1] = string.format("%.17g,%.17g,%.17g", t.pos[1], t.pos[2], t.pos[3]) end
+		if ok and t and t.rot then parts[#parts + 1] = string.format("%.17g,%.17g", t.rot[1] or 0, t.rot[4] or 0) end
+	end
+	PC.stir(table.concat(parts, ";"))
+end
+
+-- (server) a new token for player p: 32 hex digits
+function PC.makeToken(p)
+	local s, cfg = PC.S(), PC.cfg
+	s.tokN = s.tokN + 1
+	local lanes = string.format("%.17g|%.17g|%.17g|%.17g", s.ent1, s.ent2, GetTime(), math.random())
+	if not s.secret then s.secret = PC.sha256("proxchat secret|" .. GetString(cfg.save .. "secret") .. "|" .. lanes) end
+	s.secret = PC.sha256("proxchat ratchet|" .. s.secret .. "|" .. lanes)
+	SetString(cfg.save .. "secret", PC.sha256("proxchat save|" .. s.secret))   -- (the next session starts from it)
+	return PC.sha256("proxchat token|" .. s.secret .. "|" .. tostring(p) .. "|" .. s.tokN .. "|" .. lanes):sub(1, 32)
+end
+
+-- (server) p as a real player now: a whole number among GetAllPlayers() that IsPlayerValid; else nil (NaN, 1e15, 2.5,
+-- a made-up id, a player who left)
+function PC.validId(p)
+	p = tonumber(p)
+	if not p or p ~= p or p ~= math.floor(p) or p < 0 or p > 1e6 then return nil end
+	for _, q in ipairs(PC.allPlayers()) do
+		if q == p then
+			if IsPlayerValid then
+				local ok, v = pcall(IsPlayerValid, p)
+				if ok and v == false then return nil end
+			end
+			return p
+		end
+	end
+	return nil
+end
+
+-- (server) the caller of a server.pc_* call: p when p is a real player and tok its token; else nil. A wrong token
+-- makes the host send p's own token again (to p's game alone: its game may have lost it)
+function PC.who(p, tok)
+	local s = PC.S()
+	p = PC.validId(p)
+	if not p then return nil end
+	if type(tok) ~= "string" or s.tok[p] == nil or tok ~= s.tok[p] then
+		if s.tok[p] then s.tokOk[p] = false end
+		return nil
+	end
+	s.tokOk[p] = true                                                 -- (its game has it: no more resends)
+	return p
+end
+
+-- (server) p may make another call of this kind now: rate per second, burst at once (a token bucket per player)
+function PC.allow(p, kind, rate, burst)
+	local s = PC.S()
+	s.bud[p] = s.bud[p] or {}
+	local b = s.bud[p][kind]
+	if not b then b = {n = burst, t = s.time}; s.bud[p][kind] = b end
+	b.n, b.t = math.min(burst, b.n + (s.time - b.t) * rate), s.time
+	if b.n < 1 then return false end
+	b.n = b.n - 1
+	return true
+end
+
+-- (server) a string argument as the server will look at it: a string, at most n bytes (else "")
+function PC.arg(x, n)
+	if type(x) ~= "string" then return "" end
+	n = n or PC.cfg.argBytes
+	if #x > n then return x:sub(1, n) end
+	return x
+end
+
+-- (server, each tick) every player has a token; until their game confirms it (a call carrying it), sent again
+-- every cfg.tokEvery s, by ClientCall to that player alone. The host's own at once; a guest's after cfg.tokWarm ticks.
+function PC.tokTick()
+	local s, cfg = PC.S(), PC.cfg
+	for _, p in ipairs(PC.allPlayers()) do
+		if not s.tok[p] then
+			local okH, host = pcall(IsPlayerHost, p)
+			if (okH and host == true) or s.ticks >= cfg.tokWarm then
+				s.tok[p], s.tokOk[p], s.tokT[p] = PC.makeToken(p), false, -1e9
+			end
+		end
+		if s.tok[p] and not s.tokOk[p] and s.time >= (s.tokT[p] or -1e9) then
+			s.tokT[p] = s.time + cfg.tokEvery
+			ClientCall(p, "client.pc_token", p, s.tok[p])
+		end
+	end
+end
+
+-- a game without its token asks again (its game restarted, or a send was lost): the host sends it - to p alone
+function server.pc_tokreq(p)
+	local s = PC.S()
+	p = PC.validId(p)
+	if p and s.tok[p] then s.tokOk[p], s.tokT[p] = false, -1e9 end   -- (sent on the next tick: at most one send a tick)
+end
+
+-- a game confirms its token (any call carrying it does)
+function server.pc_hello(p, tok)
+	PC.who(p, tok)
+end
+
+-- (client) a server.pc_* call as this player, with its token; before the token came: kept (the newest of each kind,
+-- at most cfg.pendingMax kinds) and sent when it comes. True if sent now.
+-- Each call written out: the game accepts a ServerCall only with its function name as a string LITERAL in the source
+-- ("function server.pc_vmode not recognized. function name must be passed as a string literal" - seen in-game
+-- 2026-10-10: "server." .. name was refused, so nothing but the token's own reply ever reached the host)
+PC.SEND = {
+	pc_say = function(...) ServerCall("server.pc_say", ...) end,
+	pc_typing = function(...) ServerCall("server.pc_typing", ...) end,
+	pc_voice = function(...) ServerCall("server.pc_voice", ...) end,
+	pc_vmode = function(...) ServerCall("server.pc_vmode", ...) end,
+	pc_live = function(...) ServerCall("server.pc_live", ...) end,
+	pc_talk = function(...) ServerCall("server.pc_talk", ...) end,
+	pc_room = function(...) ServerCall("server.pc_room", ...) end,
+}
+
+function PC.call(name, ...)
+	local c = PC.C()
+	local send = PC.SEND[name]
+	if not send then error("PC.call: no literal ServerCall for " .. tostring(name)) end
+	if c.tok then
+		send(GetLocalPlayer(), c.tok, ...)
+		return true
+	end
+	c.pending = c.pending or {}
+	local e = {name = name, args = {n = select("#", ...), ...}}
+	for i, x in ipairs(c.pending) do
+		if x.name == name then c.pending[i] = e; return false end
+	end
+	c.pending[#c.pending + 1] = e
+	while #c.pending > PC.cfg.pendingMax do table.remove(c.pending, 1) end
+	return false
+end
+
+-- (client) the host sends this player its token (only to this machine). A new one: what waited goes now, the outbox is
+-- resent (renumbered past what the host already confirmed for this id: a game that rejoined starts over at 1)
+function client.pc_token(p, tok)
+	local c = PC.C()
+	local me = GetLocalPlayer()
+	if tonumber(p) ~= me or type(tok) ~= "string" or #tok ~= 32 or tok:find("[^0-9a-f]") then return end
+	local fresh = c.tok ~= tok
+	c.tok = tok
+	ServerCall("server.pc_hello", me, tok)
+	if not fresh then return end
+	local ack = (shared.pcAck or {})[me] or 0
+	if c.outbox[1] and c.outbox[1].seq <= ack or c.seq < ack then
+		for i, m in ipairs(c.outbox) do m.seq = ack + i end
+		c.seq = ack + #c.outbox
+	end
+	for _, m in ipairs(c.outbox) do m.sentT = -1e9 end
+	local pend = c.pending or {}
+	c.pending = {}
+	for _, e in ipairs(pend) do PC.SEND[e.name](me, tok, unpack(e.args, 1, e.args.n)) end
 end
 
 function PC.inLobby()
@@ -716,33 +1095,89 @@ function PC.cleanRanges(w, sp, sh)
 	return w, sp, sh
 end
 
+-- server: every distance to every game (shared.pcRanges: whisper, speak, yell; devices.lua's device ranges - private
+-- for walkies, megaphone for loudspeakers, pa - and Private's reach), numbered
+function PC.publishRanges()
+	local s, cfg = PC.S(), PC.cfg
+	s.rangeN = (s.rangeN or 0) + 1
+	shared.pcRanges = {w = cfg.whisperR, p = cfg.chatR, s = cfg.shoutR, pr = cfg.privateR, mg = cfg.megaR, pa = cfg.paR,
+		reach = cfg.privateReach, n = s.rangeN}
+end
+
+-- proxchat.ranges: "whisper,speak,yell" (the old form), "whisper,speak,yell,private,megaphone,pa", or key=value pairs in
+-- any order and any subset ("private=10 megaphone=90"; keys: whisper, speak, yell, private / radio (walkies), megaphone /
+-- loudspeaker, pa, and reach = Private's reach, 0: any) ->
+-- {w, s, y, pr, m, pa, reach} (only those given), or nil; and what was wrong (nil: nothing), for PC.problem
+PC.RANGE_NAMES = "whisper, speak, yell, private, megaphone, pa, reach"
+function PC.parseRanges(str)
+	str = tostring(str or "")
+	if str:find("=") then
+		str = str:gsub("%s*=%s*", "=")                                  -- ("private = 10" too)
+		local t, any, bad = {}, false, {}
+		for pair in str:gmatch("[^%s,;]+") do
+			local k, v = pair:match("^(%a+)=(.*)$")
+			if not k then
+				bad[#bad + 1] = '"' .. pair .. '" is not name=number'
+			else
+				local n = tonumber(v)
+				k = k:lower()
+				local id = (k == "reach" or k == "privatereach") and "reach"
+					or ({whisper = "w", speak = "s", yell = "y", shout = "y", private = "pr", radio = "pr", walkie = "pr",
+						megaphone = "m", loudspeaker = "m", pa = "pa"})[k]
+				if not id then bad[#bad + 1] = '"' .. k .. '" is not a range (' .. PC.RANGE_NAMES .. ')'
+				elseif not n then bad[#bad + 1] = k .. '="' .. v .. '" is not a number'
+				else t[id], any = n, true end
+			end
+		end
+		return any and t or nil, bad[1] and table.concat(bad, "; ") or nil
+	end
+	local nums = {}
+	for x in str:gmatch("[^,%s]+") do
+		nums[#nums + 1] = tonumber(x)
+		if not nums[#nums] then return nil, '"' .. x .. '" is not a number (the form: "whisper,speak,yell" in metres, or name=number pairs)' end
+	end
+	if #nums ~= 3 and #nums ~= 6 then
+		return nil, #nums .. " numbers: give 3 (whisper,speak,yell) or 6 (and private,megaphone,pa), or name=number pairs"
+	end
+	return {w = nums[1], s = nums[2], y = nums[3], pr = nums[4], m = nums[5], pa = nums[6]}
+end
+
 -- server: set the distances for everyone (shared.pcRanges); save: the host's choice for next time
 function PC.setRanges(w, sp, sh, save)
 	local s, cfg = PC.S(), PC.cfg
 	w, sp, sh = PC.cleanRanges(w, sp, sh)
 	if not w then return end
 	PC.applyRanges(w, sp, sh)
-	s.rangeN = (s.rangeN or 0) + 1
-	shared.pcRanges = {w = w, p = sp, s = sh, n = s.rangeN}
+	PC.publishRanges()
 	if save then SetString(cfg.save .. "ranges", w .. "," .. sp .. "," .. sh) end
 	PC.log(string.format("proxchat ranges whisper=%d speak=%d yell=%d", w, sp, sh))
 end
 
--- the host switched walls on / off in Settings (saved; a game that sets proxchat.walls decides instead)
-function server.pc_walls(p, on)
-	p = tonumber(p)
-	local okH, host = pcall(IsPlayerHost, p)
-	if not (p and okH and host) then return end
-	PC.S().wallsHost = on and true or false
-	SetBool(PC.cfg.save .. "wallson", on and true or false)
+-- THE HOST'S SETTINGS (2026-10-09: no longer ServerCalls - any game could claim the host's id): the host's own game
+-- writes them into the host's registry, which only scripts on the host can write - savegame.mod.pcwallson (walls on /
+-- off), savegame.mod.pcranges ("whisper,speak,yell": the distance bar, Reset), savegame.mod.pcvxregion (voice.lua) -
+-- and the server reads them every tick (a change applies; a game's proxchat.walls / proxchat.ranges still win as before)
+function PC.hostSettingsTick()
+	local s, cfg = PC.S(), PC.cfg
+	s.wallsHost = GetBool(cfg.save .. "wallson")
+	local r = GetString(cfg.save .. "ranges")
+	if r ~= s.hostRanges then
+		s.hostRanges = r
+		local w, sp, sh = r:match("^([%d%.]+),([%d%.]+),([%d%.]+)$")
+		if w then PC.setRanges(w, sp, sh, false) end
+	end
+	if PC.voiceHostSettingsTick then PC.voiceHostSettingsTick() end   -- (voice.lua: the voice server's region, the host's room)
 end
 
--- the host moved the distance bar (or pressed Reset)
-function server.pc_ranges(p, w, sp, sh)
-	p = tonumber(p)
-	local okH, host = pcall(IsPlayerHost, p)
-	if not (p and okH and host) then return end
-	PC.setRanges(w, sp, sh, true)
+-- (client, the host's game only) the host's own Settings, into its own registry (PC.hostSettingsTick reads them)
+function PC.setHostWalls(on)
+	if not PC.isHost() then return end
+	SetBool(PC.cfg.save .. "wallson", on and true or false)
+end
+function PC.setHostRanges(w, sp, sh)
+	if not PC.isHost() then return end
+	w, sp, sh = PC.cleanRanges(w, sp, sh)
+	if w then SetString(PC.cfg.save .. "ranges", w .. "," .. sp .. "," .. sh) end
 end
 
 -- every player (server)
@@ -758,36 +1193,69 @@ function PC.allPlayers()
 	return out
 end
 
+-- (server) shared[name][key] = value, the table copied, changed and given back whole - as this mod always published
+-- shared (a read of `shared` hands out a copy on clients; whether writing one key of it on the server reaches the
+-- clients is not known, so it is not relied on). Its size is the players (validId).
+function PC.setShared(name, key, value)
+	local t = {}
+	for k, v in pairs(shared[name] or {}) do t[k] = v end
+	t[key] = value
+	shared[name] = t
+end
+
 -- confirm player p's message seq (the client resends until shared.pcAck shows it)
 local function pcAck(p, seq)
 	PC.S().seq[p] = seq
-	local t = {}
-	for k, v in pairs(shared.pcAck or {}) do t[k] = v end
-	t[p] = seq
-	shared.pcAck = t
+	PC.setShared("pcAck", p, seq)
 end
 
+-- a number from the network: finite, else nil
+local function finite(x)
+	x = tonumber(x)
+	if not x or x ~= x or x == math.huge or x == -math.huge then return nil end
+	return x
+end
+PC.finite = finite
+
 -- a player says something: sanitized, rate-limited, then delivered. seq: the client's number for it - a resend
--- of one already taken is ignored, a taken one is confirmed in shared.pcAck. Only Global lines are published
--- (shared.pcMsgs, whole table: one sync; a joiner's history comes from it); Whisper, Speak and Yell go only to
--- the players near enough (ClientCall), so nobody else's game ever has the text.
-function server.pc_say(p, ch, text, seq, voice, vw, vago, vu)
+-- of one already taken is ignored, a taken one is confirmed in shared.pcAck; taken only within cfg.seqWindow of the
+-- last (a first one of this id: any). Only Global lines are published (shared.pcMsgs, whole table: one sync; a
+-- joiner's history comes from it); Whisper, Speak and Yell go only to the players near enough (ClientCall), so nobody
+-- else's game ever has the text. p, tok: the caller and its token (PC.who: nobody can speak as another player).
+function server.pc_say(p, tok, ch, text, seq, voice, vt)
 	local s = PC.S()
+	p = PC.who(p, tok)
+	if not p then return end
+	-- (a spoken line's word times come as one string "vw;ago;vu")
+	local vw, vago, vu
+	if type(vt) == "string" and #vt <= 4 * 400 + 64 then
+		vw, vago, vu = vt:match("^(%x*);([%d%.%-eE]+);(%d+)$")
+	end
+	local dv, dk                                                       -- (the channel it went out on, devices.lua)
+	local pad = voice == "pad"                                         -- (typed on a controller: its mark, 2026-10-12)
 	voice = voice == true                                              -- (spoken: the voice helper's transcript, voice.lua)
+	local vflag = voice or (pad and "pad") or false                    -- (what the games get in that place)
 	-- a spoken line's word times (vw: 4 hex digits a unit, 1/100 s after the line began; vago: s since it began, as
 	-- the speaker sent it): its start on the server's clock (shared.pcNow), for each listener's cut
 	local vs
-	if voice and type(vw) == "string" and #vw % 4 == 0 and #vw <= 4 * 400 and not vw:find("[^%x]") and tonumber(vago) then
-		vs = s.time - math.max(0, math.min(120, tonumber(vago)))
+	local ago = finite(vago)
+	if voice and type(vw) == "string" and #vw % 4 == 0 and #vw <= 4 * 400 and not vw:find("[^%x]") and ago then
+		vs = s.time - math.max(0, math.min(120, ago))
 	else
 		vw, vu = nil, nil
 	end
-	vu = tonumber(vu)
+	vu = finite(vu)
+	if vu then vu = math.floor(math.max(0, math.min(1e9, vu))) end
 	local cfg = PC.cfg
-	p, seq = tonumber(p), tonumber(seq)
-	if not p then return end
-	if seq and seq <= (s.seq[p] or 0) then return end                     -- (a resend of one already taken)
-	text = PC.clean(text)
+	seq = finite(seq)
+	if seq then
+		seq = math.floor(seq)
+		local last = s.seq[p]
+		if seq < 1 or (last and seq <= last) then return end              -- (a resend of one already taken)
+		if last and seq > last + cfg.seqWindow then return end             -- (not a number this game could have reached)
+		if not last and seq > 2 ^ 31 then return end
+	end
+	text = PC.clean(PC.arg(text))
 	if text == "" then
 		if seq then pcAck(p, seq) end
 		return
@@ -797,32 +1265,36 @@ function server.pc_say(p, ch, text, seq, voice, vw, vago, vu)
 	s.last[p] = s.time
 	if seq then pcAck(p, seq) end
 	s.n = s.n + 1
-	local name = PC.cleanName(GetPlayerName(p), p)
+	local name = PC.nameOf(p)
 	local chan = not PC.inLobby() and s.chan[p] or nil
 	if chan then
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
 		for _, q in ipairs(PC.allPlayers()) do
-			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, voice) end
+			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, vflag) end
 		end
 	elseif ch ~= "g" then
 		-- Whisper, Speak and Yell: sent only to the players within reach, never in shared (a whisper stays private; Speak /
 		-- Yell no longer reach every game to be garbled there). Reach: the mode's buffer + a slack - whisperSlack, or for
 		-- Speak / Yell speakSlack / shoutSlack, room to walk into range while the bubble is up. The speaker, every channel
-		-- (the dead hear everyone) and, for Speak / Yell, a game that hears everyone (server.pc_hearall) get it anywhere.
+		-- (the dead hear everyone) and, for Speak / Yell, a game that hears everyone (proxchat.hearall.<p>) get it anywhere.
 		local _, outer = PC.rangeOf(ch)
 		local reach = outer + (ch == "w" and cfg.whisperSlack or (ch == "y" and cfg.shoutSlack or cfg.speakSlack))
+		-- (talking into a device - proxchat.tx.<p>: devices.lua - also to the players near that channel's devices; dv, dk:
+		--  the channel and its kind, for their games to show it at the devices)
+		local devQ = {}
+		if PC.devLine then dv, dk, devQ = PC.devLine(p, ch, vs) end
 		if vs and ch ~= "w" then                                          -- (a spoken Speak / Yell line with word times: who was
 			reach = reach + cfg.walkSpeed * math.min(30, s.time - vs)   --  near when it began may have walked off since; their
 		end                                                              --  game shows only the words they were in reach for)
 		local okT, tr = pcall(GetPlayerTransform, p)
 		for _, q in ipairs(PC.allPlayers()) do
 			local okQ, tq = pcall(GetPlayerTransform, q)
-			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= reach) then
+			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= reach) then
 				if ch == "w" then
-					ClientCall(q, "client.pc_whisper", s.n, p, name, text, voice, vw, vs, vu)
-				else                                                     -- (t: when it was said - a late one is timed from it;
-					ClientCall(q, "client.pc_near", s.n, p, name, ch, text, s.time, voice, vw, vs, vw and vu or nil)   --  the maybe-nil last)
+					ClientCall(q, "client.pc_whisper", s.n, p, name, text, vflag, vw, vs, vu, dv, dk)
+				else                                                     -- (t: when it was said - a late one is timed from it)
+					ClientCall(q, "client.pc_near", s.n, p, name, ch, text, s.time, vflag, vw, vs, vw and vu or nil, dv, dk)
 				end
 			end
 		end
@@ -831,11 +1303,11 @@ function server.pc_say(p, ch, text, seq, voice, vw, vago, vu)
 		for _, m in ipairs(shared.pcMsgs or {}) do
 			if s.time - m.t < cfg.sharedLife then list[#list + 1] = m end
 		end
-		list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time, v = voice or nil, vw = vw, vs = vs, vu = vw and vu or nil}
+		list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time, v = vflag or nil, vw = vw, vs = vs, vu = vw and vu or nil}
 		while #list > cfg.keepShared do table.remove(list, 1) end
 		shared.pcMsgs = list
 	end
-	PC.publishSaid(p, ch, text, chan or "", voice)
+	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk)
 	if voice and PC.voiceLiveDone then PC.voiceLiveDone(p) end           -- (voice.lua: the line replaces the live words)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d%s", p, ch, #text, chan and (" channel=" .. chan) or ""))
 end
@@ -854,7 +1326,7 @@ end
 --   ... .voice    bool: spoken, not typed (the voice helper's transcript of what the player said)
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
-function PC.publishSaid(p, ch, text, channel, voice)
+function PC.publishSaid(p, ch, text, channel, voice, tx, device)
 	local s, cfg = PC.S(), PC.cfg
 	local base = cfg.reg .. ".said."
 	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
@@ -868,8 +1340,11 @@ function PC.publishSaid(p, ch, text, channel, voice)
 	SetBool(k .. "yell", shout)
 	SetString(k .. "text", text)
 	SetFloat(k .. "x", pos[1]); SetFloat(k .. "y", pos[2]); SetFloat(k .. "z", pos[3])
-	SetFloat(k .. "radius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperMumbleR or (shout and cfg.shoutMumbleR or cfg.mumbleR)))
-	SetFloat(k .. "wordsRadius", mode == "global" and 0 or (mode == "whisper" and cfg.whisperR or (shout and cfg.shoutR or cfg.chatR)))
+	local inner, outer = PC.rangeOf(ch)
+	SetFloat(k .. "radius", mode == "global" and 0 or outer)
+	SetFloat(k .. "wordsRadius", mode == "global" and 0 or inner)
+	SetString(k .. "tx", tx or "")                                     -- (the channel it also went out on: devices.lua)
+	SetString(k .. "device", device or "")
 	SetBool(k .. "lobby", PC.hooks.inLobby and PC.hooks.inLobby() or false)
 	SetString(k .. "channel", channel or "")
 	SetBool(k .. "voice", voice == true)
@@ -877,37 +1352,38 @@ function PC.publishSaid(p, ch, text, channel, voice)
 	SetInt(base .. "last", s.said)                                    -- (last: the event is complete)
 end
 
-function PC.publishTyping()
-	local t = {}
-	for p, ch in pairs(PC.S().typing) do t[p] = ch end
-	shared.pcTyping = t
+-- player p's typing state into shared
+function PC.publishTyping(p)
+	PC.setShared("pcTyping", p, PC.S().typing[p])
 end
 
 -- typing state (the server ignores your mod keys meanwhile; the "..." over your head nearby / whisper)
-function server.pc_typing(p, on, ch)
+function server.pc_typing(p, tok, on, ch)
 	local s = PC.S()
-	p = tonumber(p)
-	if not p then return end
+	p = PC.who(p, tok)
+	if not p or not PC.allow(p, "typing", 10, 10) then return end
 	s.typing[p] = on and PC.validMode(ch) or nil
 	SetBool(PC.cfg.reg .. ".typing." .. p, on and true or false)
-	PC.publishTyping()
+	PC.publishTyping(p)
 end
 
-function server.pc_voice(p, v)
-	p, v = tonumber(p), tonumber(v)
-	if not p or not v or not PC.VOICES[v] then return end
+function server.pc_voice(p, tok, v)
+	p, v = PC.who(p, tok), type(v) == "number" and v or nil
+	if not p or not v or not PC.VOICES[v] or not PC.allow(p, "voice", 4, 6) then return end
+	PC.setShared("pcVoice", p, v)
+end
+
+-- (server, each tick) whose game hears everyone - a GAME's choice on the host (2026-10-09; it was a client's claim,
+-- server.pc_hearall, so any modified game could read every Speak / Yell on the map): proxchat.hearall.<p> = true, set
+-- by the game's server script every tick, for its spectators or radios. Every Speak / Yell line then goes to p's game,
+-- whose PC.hooks.everyoneHears decides what it shows (whispers still need whisperR).
+function PC.hearAllTick()
+	local s = PC.S()
 	local t = {}
-	for k, x in pairs(shared.pcVoice or {}) do t[k] = x end
-	t[p] = v
-	shared.pcVoice = t
-end
-
--- player p's game hears everyone (PC.hooks.everyoneHears, a game's spectators or radios): every Speak / Yell line goes
--- to it, not only the near ones - its own hook then decides what it hears (whispers still need whisperR)
-function server.pc_hearall(p, on)
-	p = tonumber(p)
-	if not p then return end
-	PC.S().hearAll[p] = on and true or nil
+	for _, q in ipairs(PC.allPlayers()) do
+		if GetBool(PC.cfg.reg .. ".hearall." .. q) then t[q] = true end
+	end
+	s.hearAll = t
 end
 
 function PC.removedPlayers()
@@ -922,8 +1398,17 @@ end
 
 function PC.serverTick(dt)
 	local s = PC.S()
-	dt = dt or 0
+	dt = finite(dt) or 0
+	dt = math.max(0, math.min(1 / 15, dt))                           -- (the engine's is at most 1/30: a forged "server.tick"
+	local now = GetTime()                                            --  can't jump the clock; a second tick in one frame
+	if s.tickAt == now then dt = 0 end                               --  adds no time)
+	s.tickAt = now
 	s.time = s.time + dt
+	s.ticks = s.ticks + 1
+	PC.stirTick(dt)                                                  -- (TRUST: entropy, then every player's token)
+	PC.tokTick()
+	PC.hostSettingsTick()                                            -- (the host's own Settings, from its registry)
+	PC.hearAllTick()
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
 	PC.heartbeat()
@@ -952,28 +1437,27 @@ function PC.serverTick(dt)
 		for q, v in pairs(chan) do t[q] = v end
 		shared.pcChan = t
 	end
+	if PC.devServerTick then PC.devServerTick() end                   -- (devices.lua: devices, tx, effects)
 	-- a map or game mode may set its distances: SetString("proxchat.ranges", "whisper,speak,yell")
 	local reg = GetString(PC.cfg.reg .. ".ranges")
 	if reg ~= "" and reg ~= s.regRanges then
 		s.regRanges = reg
-		local w, sp, sh = reg:match("^%s*([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)%s*$")
-		if w then PC.setRanges(w, sp, sh, false) end
+		local t, why = PC.parseRanges(reg)
+		if why and PC.problem then PC.problem(PC.cfg.reg .. ".ranges", why .. (t and " (the rest is used)" or " - ignored")) end
+		local cfg = PC.cfg
+		if t and (t.w or t.s or t.y) then PC.setRanges(t.w or cfg.whisperR, t.s or cfg.chatR, t.y or cfg.shoutR, false) end
+		if t and (t.pr or t.m or t.pa or t.reach) and PC.setDevRanges then PC.setDevRanges(t.pr, t.m, t.pa, t.reach, false) end
 	end
 	for _, p in ipairs(PC.removedPlayers()) do
-		s.last[p], s.seq[p], s.hearAll[p] = nil, nil, nil
-		if PC.voiceForget then PC.voiceForget(p) end                     -- (voice.lua: their voice mode)
-		if (shared.pcAck or {})[p] then
-			local t = {}
-			for k, v in pairs(shared.pcAck) do if k ~= p then t[k] = v end end
-			shared.pcAck = t
-		end
-		SetBool(PC.cfg.reg .. ".typing." .. p, false)
-		if s.typing[p] then s.typing[p] = nil; PC.publishTyping() end
-		local vs = shared.pcVoice or {}
-		if vs[p] then
-			local t = {}
-			for k, x in pairs(vs) do if k ~= p then t[k] = x end end
-			shared.pcVoice = t
+		p = tonumber(p)
+		if p and p == p then
+			s.last[p], s.seq[p], s.hearAll[p] = nil, nil, nil
+			s.tok[p], s.tokOk[p], s.tokT[p], s.bud[p] = nil, nil, nil, nil   -- (one who comes back gets a new token)
+			if PC.voiceForget then PC.voiceForget(p) end                 -- (voice.lua: their voice mode)
+			if (shared.pcAck or {})[p] then PC.setShared("pcAck", p, nil) end
+			SetBool(PC.cfg.reg .. ".typing." .. p, false)
+			if s.typing[p] then s.typing[p] = nil; PC.publishTyping(p) end
+			if (shared.pcVoice or {})[p] then PC.setShared("pcVoice", p, nil) end
 		end
 	end
 	-- old messages leave the shared table once a second (clients copied them on arrival)
@@ -1028,7 +1512,7 @@ function PC.clientInit()
 	-- joining: recent Global lines go into the history; Speak / Whisper from before you came is not heard
 	for _, msg in ipairs(shared.pcMsgs or {}) do
 		if msg.id > c.seen then c.seen = msg.id end
-		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text}) end
+		if msg.ch == "g" then PC.addHist({ch = "g", p = msg.p, name = msg.name, text = msg.text, pad = msg.v == "pad" or nil}) end
 	end
 end
 
@@ -1118,7 +1602,8 @@ function PC.setMode(m)
 	if c.mode == m then return end
 	c.mode = m
 	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
-	if c.typing then ServerCall("server.pc_typing", GetLocalPlayer(), true, m) end
+	if c.typing and c.dots then PC.call("pc_typing", true, m) end
+	if PC.setVoiceMode then PC.setVoiceMode(m) end                  -- (one mode: typing and talking whisper alike - the user 2026-10-11)
 end
 
 -- Tab: Whisper -> Speak -> Yell -> Global -> Whisper
@@ -1145,9 +1630,10 @@ function PC.windowOpen()
 end
 
 -- ---- CONTROLLERS. A script reads only the game's actions, not a pad's buttons, and in play every button has one; so:
--- both sticks clicked (L3 + R3: zoom + scoreboard) open the window on its settings (the Voice page with the helper),
--- moved through with the D-pad ("nav": a highlight; up / down a row, left / right change it, A presses it), Y goes to
--- the chat line (the field: Steam's keyboard types into it) and back, B closes. The menu actions (menu_up, ...)
+-- L3 clicked twice (zoom, twice: bothSticks below) is ENTER (the user, 2026-10-12: "should do the same action as Enter"):
+-- closed - the chat opens on its line; typing - the line is said (nothing typed: it closes); the settings - closed.
+-- Y goes from the chat line to the settings and back: moved through with the D-pad ("nav": a highlight; up / down a
+-- row, left / right change it, A presses it), B closes. The menu actions (menu_up, ...)
 -- and the play ones (D-pad: scroll / tool groups, A jump, B crouch, Y flashlight) are both read: which set the
 -- game uses while a script's UI is interactive is not known.
 function PC.pad()
@@ -1161,17 +1647,26 @@ local function anyPressed(...)
 	return false
 end
 
--- both sticks clicked this frame (either one first)
+-- the controller's chat button: L3 clicked TWICE (within PC.L3_DOUBLE s). L3 is the game's zoom, a hold, so a quick
+-- double click is never one by accident (a split-second zoom at most). Was L3 + R3 until 2026-10-12: the user - R3 is
+-- "some kind of menu" in most games, so the two clash; and the two rarely landed in one frame.
+PC.L3_DOUBLE = 0.35
 local function bothSticks()
-	return (InputDown("zoom") and anyPressed("scoreboard", "extra0"))
-		or (InputPressed("zoom") and (InputDown("scoreboard") or InputDown("extra0")))
+	local c, now = PC.C(), GetTime()
+	if not InputPressed("zoom") then return false end
+	if c.l3T and now - c.l3T <= PC.L3_DOUBLE then c.l3T = nil; return true end
+	c.l3T = now
+	return false
 end
+PC.bothSticks = bothSticks                                            -- (padui.lua)
 
 function PC.setNav(on)
 	local c = PC.C()
 	if on then
 		if c.typing then PC.setTyping(false) end
 		c.nav, c.navRow, c.scroll = true, 1, 0
+		c.regTyping = true                                            -- (the chat has the keys: a game's at once, not next tick)
+		SetBool(PC.cfg.reg .. ".typing." .. GetLocalPlayer(), true)
 		c.page = PC.drawVoicePage and "voice" or "settings"
 		if c.voice then c.voice.picking = false end
 	else
@@ -1204,6 +1699,7 @@ end
 function PC.navKeys()
 	local c = PC.C()
 	c.navAct, c.navK = nil, 0
+	if PC.padKeys and PC.padKeys() then return true end                -- (padui.lua: the controller's chat, its wheel)
 	if c.nav then
 		if anyPressed("menu_cancel", "crouch", "esc", "pause") or bothSticks() then
 			PC.setNav(false)
@@ -1223,8 +1719,9 @@ function PC.navKeys()
 	end
 	if c.typing then
 		if PC.pad() and anyPressed("mmb", "flashlight") then PC.setNav(true); return true end   -- (Y: the settings)
+		if PC.pad() and bothSticks() then c.send = true end               -- (as Enter: PC.keys says the line, or closes)
 	elseif PC.pad() and not (PC.hooks.blockKeys and PC.hooks.blockKeys()) and bothSticks() then
-		PC.setNav(true)
+		if PC.padOpen then PC.padOpen() else PC.setTyping(true); UiMakeInteractive() end   -- (as Enter, and the wheel)
 		return true
 	end
 	return false
@@ -1361,14 +1858,19 @@ end
 -- now (PC.speakerReach) nothing is checked; the way round is searched no longer than that
 function PC.wallState(p)
 	if not shared.pcWalls or p == GetLocalPlayer() or PC.isDummy(p) then return nil end
-	local c = PC.C()
 	local feet = PC.speakerPos(p)
 	if not feet then return nil end
-	local w = c.walls[p]
-	if not w then w = {t = -1e9}; c.walls[p] = w end
+	return PC.wallStateAt(p, VecAdd(feet, Vec(0, 1.7, 0)), PC.speakerReach(p))
+end
+
+-- the same for any point b heard from here (key: its own entry in c.walls; a device: "dev:<name>"), no farther than reach
+function PC.wallStateAt(key, b, reach)
+	if not shared.pcWalls then return nil end
+	local c = PC.C()
+	local w = c.walls[key]
+	if not w then w = {t = -1e9}; c.walls[key] = w end
 	local now = GetTime()
-	local a, b = PC.listenerHead(), VecAdd(feet, Vec(0, 1.7, 0))
-	local reach = PC.speakerReach(p)
+	local a = PC.listenerHead()
 	if VecLength(VecSub(b, a)) > reach then                          -- (too far to hear anyway: no rays, no search)
 		w.blocked, w.around = false, nil
 		return w
@@ -1425,9 +1927,12 @@ end
 function PC.receive(m)
 	local c = PC.C()
 	local me = GetLocalPlayer()
+	local pad = m.v == "pad"                                            -- (typed on a controller: the mark in the history)
+	if m.v ~= true then m.v = nil end
 	local heard, far
 	if m.p and m.name then
-		if c.muted[m.p] and c.muted[m.p] ~= m.name then c.muted[m.p] = nil end   -- (another player with that number now)
+		local function bare(n) return (tostring(n):gsub(" #%d+$", "")) end         -- (the " #p" a same-name clash adds comes and goes)
+		if c.muted[m.p] and bare(c.muted[m.p]) ~= bare(m.name) then c.muted[m.p] = nil end   -- (another player with that number now)
 		c.names[m.p] = m.name
 		if c.muted[m.p] then return end                                       -- (/mute: nothing of theirs)
 	end
@@ -1436,21 +1941,22 @@ function PC.receive(m)
 	local late = age > PC.cfg.lateAge
 	if m.ch == "g" or m.ch == "d" then
 		heard = m.text
-		local e = {ch = m.ch, chan = m.chan, p = m.p, name = m.name, text = m.text, me = m.p == me, voice = m.v == true}
+		local e = {ch = m.ch, chan = m.chan, p = m.p, name = m.name, text = m.text, me = m.p == me, voice = m.v == true, pad = pad or nil}
 		PC.addHist(e)
-		if PC.trWant then PC.trWant(e) end                               -- (voice.lua: translated, if a rule is on)
+		if PC.trWant then PC.trWant(e) end                               -- (voice.lua: translated, if Koetama translates)
 		-- (Global, and the dead to the dead: a chat line only - no bubble, no babble)
 	else
 		local mode = (m.ch == "w" or m.ch == "y") and m.ch or "s"
 		local whisper = mode == "w"
-		local level, d
+		local level, d, b
 		-- a spoken line with each word's time (voice.lua): this player gets only the words said while they were in
 		-- reach ("..." for the rest), garbled as far as they were; none of it heard: nothing at all
 		local cutText, cutClear, cutFracs
 		if m.v and m.vw and PC.voiceCut then
 			cutText, cutClear, cutFracs = PC.voiceCut(m, mode)
-			if not cutText then
-				if PC.hooks.onMessage and not PC.isDummy(m.p) and not (PC.isVoiceDummy and PC.isVoiceDummy(m.p)) then PC.hooks.onMessage(m, nil) end
+			if not cutText then                                          -- (none of it from the talker - maybe through a device)
+				local via = m.dv and PC.devReceive and PC.devReceive(m, mode, nil)
+				if PC.hooks.onMessage and not PC.isDummy(m.p) and not (PC.isVoiceDummy and PC.isVoiceDummy(m.p)) then PC.hooks.onMessage(m, via and m.text or nil) end
 				return
 			end
 		end
@@ -1458,8 +1964,8 @@ function PC.receive(m)
 		-- kept for its bubble's life even out of earshot (hidden): walking in while it is up shows it.
 		-- Not a whisper: it is private - only who was within whisperMumbleR when it was said gets it.
 		if heard or not whisper or cutText then
-			local b = {t = GetTime() - (late and age or 0), full = cutText or m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
-				level = "none", hidden = true, bestF = -1, voice = m.v == true, seed = m.vu and PC.voiceSeed and PC.voiceSeed(m.p, m.vu) or nil,
+			b = {t = GetTime() - (late and age or 0), full = cutText or m.text, mode = mode, name = m.name, id = m.id, whisper = whisper,
+				level = "none", hidden = true, bestF = -1, voice = m.v == true, pad = pad or nil, seed = m.vu and PC.voiceSeed and PC.voiceSeed(m.p, m.vu) or nil,
 				liveHold = m.v == true and m.vu ~= nil and c.liveSeen ~= nil and c.liveSeen[m.p] == m.vu or nil}   -- (voice.lua)
 			b.scrollT = b.t                                                  -- (the scroll's clock: fixed, a reveal never restarts it)
 			if not (late and age >= PC.bubbleLife(b)) then                  -- (so late its bubble is over: the history only)
@@ -1478,11 +1984,12 @@ function PC.receive(m)
 				PC.addHist(b.entry)
 				if b.level == "full" then
 					heard = cutText
-					if PC.trWant then PC.trWant(b.entry, b) end                 -- (heard clear: translated, if a rule is on)
+					if PC.trWant then PC.trWant(b.entry, b) end                 -- (heard clear: translated, if Koetama translates)
 				end
 			end
 			PC.updateBubble(m.p, b, b.t, true)
 		end
+		if m.dv and PC.devReceive and not late then PC.devReceive(m, mode, b) end   -- (devices.lua: at the devices too)
 		-- the babble: also cfg.soundGrace m past the bubble's reach (the bubble goes a little before the sound)
 		local dd = d or PC.hearDist(m.p)
 		local _, outer = PC.rangeOf(mode)
@@ -1524,10 +2031,12 @@ function PC.updateBubble(p, b, now, fresh)
 	end
 	if changed and not b.hidden then
 		local htext, far = PC.histText(b), b.level ~= "full"
-		if b.entry then
+		if b.entry and b.entry.via and not b.entry.far and far then      -- (a device gave all of it: devices.lua)
+		elseif b.entry then
 			b.entry.text, b.entry.far, b.entry.shout = htext, far, b.shout
 		else
-			b.entry = {ch = b.mode, p = p, name = b.name, text = htext, shout = b.shout, far = far, me = p == GetLocalPlayer(), voice = b.voice}
+			b.entry = {ch = b.mode, p = p, name = b.name, text = htext, shout = b.shout, far = far, me = p == GetLocalPlayer(), voice = b.voice,
+				pad = b.pad}
 			PC.addHist(b.entry)
 		end
 		if b.level == "full" and PC.trWant then PC.trWant(b.entry, b) end   -- (every word made out now: translated, voice.lua)
@@ -1548,34 +2057,38 @@ function PC.clientTick(dt)
 	local me = GetLocalPlayer()
 	local now = GetTime()
 	-- your typing state in THIS game's registry too: the server's copy (every player) is only in the
-	-- host's, so a game's client script on a guest's machine reads its own player's here
-	if c.typing ~= c.regTyping then
-		c.regTyping = c.typing
-		SetBool(PC.cfg.reg .. ".typing." .. me, c.typing and true or false)
+	-- host's, so a game's client script on a guest's machine reads its own player's here. Here it means "the chat
+	-- has this player's keys": the line, or its pages on a controller (the D-pad, A, B are the chat's then - a game
+	-- must ignore them; 2026-10-12). The "..." over the head is the server's (pc_typing), not this.
+	local busy = (c.typing or c.nav) and true or false
+	if busy ~= c.regTyping then
+		c.regTyping = busy
+		SetBool(PC.cfg.reg .. ".typing." .. me, busy)
 	end
 	PC.heartbeat()
+	PC.publishKeys()
 	-- the chosen voice reaches the server (re-sent until shared shows it, 6 s at most)
 	if c.voiceWant then
 		local vs = shared.pcVoice or {}
 		if vs[me] == c.voiceWant then
 			c.voiceWant = nil
-		elseif now >= c.voiceT then
+		elseif c.tok and now >= c.voiceT then                          -- (no token yet: nothing is counted)
 			c.voiceTries = c.voiceTries + 1
 			if c.voiceTries > 12 then
 				c.voiceWant = nil
 			else
 				c.voiceT = now + 0.5
-				ServerCall("server.pc_voice", me, c.voiceWant)
+				PC.call("pc_voice", c.voiceWant)
 			end
 		end
 	end
-	-- a game's everyoneHears hook: Speak / Yell go only to the near players now, so the server must send this one all of
-	-- them (told on a change, and every 2 s while it holds)
-	local all = PC.hooks.everyoneHears ~= nil
-	if all ~= (c.hearAll or false) or (all and now >= (c.hearAllT or 0)) then
-		c.hearAll, c.hearAllT = all, now + 2
-		ServerCall("server.pc_hearall", me, all)
+	-- no token yet (TRUST): ask the host to send it again, every cfg.tokReqEvery s (it goes to this game alone)
+	if not c.tok and now >= (c.tokReqT or 0) then
+		c.tokReqT = now + PC.cfg.tokReqEvery
+		ServerCall("server.pc_tokreq", me)
 	end
+	-- (a game's everyoneHears hook: since 2026-10-09 the host learns it from the game's own server script -
+	--  proxchat.hearall.<p>, PC.hearAllTick - not from this game: a modified game claimed it to read every line)
 	-- new messages (by id: shared hands out fresh copies on clients)
 	local msgs = shared.pcMsgs or {}
 	for _, m in ipairs(msgs) do
@@ -1593,10 +2106,12 @@ function PC.clientTick(dt)
 	if rg and rg.n and rg.n ~= c.rangesN then                         -- (the host's distances)
 		c.rangesN = rg.n
 		PC.applyRanges(rg.w, rg.p, rg.s)
+		if PC.applyDevRanges then PC.applyDevRanges(rg.pr, rg.mg, rg.pa, rg.reach) end   -- (devices.lua)
 		c.rangesWant = nil
 	end
 	PC.pump(now)
 	PC.dummyTick(now)
+	if PC.devClientTick then PC.devClientTick(now) end                 -- (devices.lua: devices, tx, effects; device bubbles)
 	PC.revealBubbles(now)
 	PC.babbleTick()
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
@@ -1802,15 +2317,18 @@ end
 -- start babbling text for player p. how: nil = Speak, in the world at the speaker (echo with distance);
 -- "shout" = the same with the raised-voice clips, a little louder, farther; "whisper" = breathy clips at
 -- the speaker, quiet, no echo; "flat" = at the listener (the voice preview in Settings), short and quiet
-function PC.babbleSay(p, text, voice, how)
+-- (key: the queue's own key - a device's babble, devices.lua - else p; "radio" / "horn": the band-passed device clips)
+function PC.babbleSay(p, text, voice, how, key)
 	local c = PC.C()
 	local B = c.babble
 	local cfg = PC.cfg
-	local lv = how == "flat" and 1 or c.babbleVolume                    -- (Settings: babble volume; the preview always plays)
+	local lv = how == "flat" and 1 or c.babbleVolume * PC.playerVolume(p)   -- (Settings: babble volume, and that player's
+	                                                                         --  own (PC.playerVolume); the preview always plays)
 	if lv == 0 then return end
 	local v = PC.VOICES[voice or PC.voiceOf(p)] or PC.VOICES[3]
 	local syl = PC.babbleSyllables(text)
-	local q = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], how = how}
+	local q = {syl = syl, k = 1, nextT = GetTime(), pitch = v[2], step = v[3], set = v[4], how = how, p = p}
+	if how == "radio" or how == "horn" then q.set, q.near, q.far = how, 1, 30 end   -- (a device's: PC.devBabble sets them)
 	local vol = cfg.babbleVol * v[5]
 	local shoutVol = cfg.shoutVol * v[5]
 	if how == "flat" then
@@ -1825,7 +2343,7 @@ function PC.babbleSay(p, text, voice, how)
 	end
 	for _, s in ipairs(syl) do s[4] = how == "shout" end          -- (Shout: every syllable raised)
 	q.vol, q.shoutVol = vol * lv, shoutVol * lv
-	B.queue[p] = q
+	B.queue[key or p] = q
 end
 
 -- how long p's babble of text lasts (s), in mode: the same syllables and gaps PC.babbleSay plays (whether or not it
@@ -1910,7 +2428,8 @@ function PC.babbleTick()
 			table.remove(B.echoes, i)
 		end
 	end
-	for p, q in pairs(B.queue) do
+	for key, q in pairs(B.queue) do
+		local p = q.p or key
 		if now >= q.nextT then
 			local function gap(x) return q.step * (x[4] and 0.85 or 1) + x[2] end
 			-- a slow frame can be past several syllables: skip to the last one due (the babble keeps time
@@ -1921,11 +2440,13 @@ function PC.babbleTick()
 			end
 			local s = q.syl[q.k]
 			if not s then
-				B.queue[p] = nil
+				B.queue[key] = nil
 			else
 				local pos
 				if q.how == "flat" then
 					pos = GetCameraTransform().pos
+				elseif q.at then
+					pos = q.at()                                             -- (a device: devices.lua)
 				else
 					local feet = PC.speakerPos(p)
 					if feet then pos = VecAdd(feet, Vec(0, 1.7, 0)) end
@@ -1940,6 +2461,11 @@ function PC.babbleTick()
 					local cam = GetCameraTransform().pos
 					if q.how == "flat" then
 						PlaySound(clip, pos, base, false, pitch)            -- (the preview: at the listener)
+					elseif q.how == "radio" or q.how == "horn" then         -- (from a device: loud by its own range)
+						local d = VecLength(VecSub(pos, PC.listenerHead())) * (q.dist and q.dist() or 1)
+						local x = math.max(0, math.min(1, (q.far - d) / math.max(0.5, q.far - q.near)))
+						local v = base * (d <= q.near and 1 or x * x)
+						if v > 0 then PlaySound(clip, PC.soundPos(pos, cam), v, false, pitch) end
 					elseif q.how == "whisper" then                          -- (no echo; quiet toward its reach)
 						local d = VecLength(VecSub(pos, PC.listenerHead())) * PC.wallMul(p)
 						local v = base * PC.loudness(d, PC.cfg.whisperMumbleR + PC.cfg.soundGrace, PC.cfg.whisperR)
@@ -1960,7 +2486,9 @@ function PC.babbleTick()
 end
 
 -- ---- typing, modes, commands
-function PC.setTyping(on)
+-- quiet: open without the "..." over the head yet (a controller: it shows once the stick aims or a letter is typed -
+-- the user, 2026-10-12; PC.typingDots)
+function PC.setTyping(on, quiet)
 	local c = PC.C()
 	c.typing = on and true or false
 	c.text, c.send, c.tab, c.scroll = "", nil, nil, 0
@@ -1968,7 +2496,17 @@ function PC.setTyping(on)
 	c.page = "chat"                                               -- (opens / closes on the history)
 	c.regTyping = c.typing                                        -- (this game's registry at once: no key of the first
 	SetBool(PC.cfg.reg .. ".typing." .. GetLocalPlayer(), c.typing)  --  letter slips through to a game; see clientTick)
-	ServerCall("server.pc_typing", GetLocalPlayer(), c.typing, PC.mode())
+	c.dots = c.typing and not quiet
+	if c.dots or not c.typing then PC.call("pc_typing", c.typing, PC.mode()) end
+end
+
+-- the "..." over the head, once (a quiet open: when the player starts saying something)
+function PC.typingDots()
+	local c = PC.C()
+	if c.typing and not c.dots then
+		c.dots = true
+		PC.call("pc_typing", true, PC.mode())
+	end
 end
 
 function PC.scrollBy(n)
@@ -1989,6 +2527,7 @@ function PC.say(text, mode, voice, vt)
 	end
 	c.seq = c.seq + 1
 	c.outbox[#c.outbox + 1] = {seq = c.seq, ch = mode or PC.mode(), text = text, t0 = GetTime(), sentT = -1e9, voice = voice == true,
+		pad = voice == "pad" or nil,                                   -- (voice "pad": sent from a controller - its mark)
 		vw = vt and vt.w, vstart = vt and vt.start, vu = vt and vt.u}           -- (vt: a spoken line's word times, voice.lua)
 	PC.pump(GetTime())
 end
@@ -1996,6 +2535,10 @@ end
 -- the oldest unconfirmed message: (re)sent every cfg.resendT, given up after cfg.resendFor
 function PC.pump(now)
 	local c, cfg = PC.C(), PC.cfg
+	if not c.tok then                                              -- (no token yet: it waits, its time not counted; the
+		if c.outbox[1] then c.outbox[1].t0 = now end               --  host's ack is read once the token came - client.pc_token
+		return                                                     --  renumbers a rejoined game's lines past it)
+	end
 	local ack = (shared.pcAck or {})[GetLocalPlayer()] or 0
 	while c.outbox[1] and c.outbox[1].seq <= ack do table.remove(c.outbox, 1) end
 	local m = c.outbox[1]
@@ -2008,22 +2551,25 @@ function PC.pump(now)
 	if now - m.sentT >= cfg.resendT then
 		m.sentT = now
 		if m.vw and m.vstart then                                          -- (word times: sent with how long ago the line began)
-			ServerCall("server.pc_say", GetLocalPlayer(), m.ch, m.text, m.seq, m.voice == true, m.vw, GetTime() - m.vstart, m.vu or 0)
+			-- (a spoken line's word times in ONE argument, "vw;ago;vu": fewer arguments per call)
+			PC.call("pc_say", m.ch, m.text, m.seq, true, string.format("%s;%.3f;%d", m.vw, GetTime() - m.vstart, m.vu or 0))
 		else
-			ServerCall("server.pc_say", GetLocalPlayer(), m.ch, m.text, m.seq, m.voice == true)
+			PC.call("pc_say", m.ch, m.text, m.seq, m.voice == true or (m.pad and "pad") or false)
 		end
 	end
 end
 
 -- a whisper from the server: only the players near enough get one (it is never in shared)
-function client.pc_whisper(id, p, name, text, voice, vw, vs, vu)
-	PC.receive({id = id, p = p, name = name, ch = "w", text = text, v = voice, vw = vw, vs = vs, vu = vu})
+function client.pc_whisper(id, p, name, text, voice, vw, vs, vu, dv, dk)
+	PC.receive({id = id, p = p, name = name, ch = "w", text = text, v = voice, vw = vw, vs = vs, vu = vu, dv = dv, dk = dk})
 end
 
 -- a Speak / Yell line from the server: only the players within its reach + speakSlack / shoutSlack get one (never in
 -- shared); t: the server's time when it was said (a late arrival is timed from it, PC.receive)
-function client.pc_near(id, p, name, ch, text, t, voice, vw, vs, vu)
-	PC.receive({id = id, p = p, name = name, ch = ch == "y" and "y" or "s", text = text, t = t, v = voice, vw = vw, vs = vs, vu = vu})
+-- dv, dk: the channel (and its kind) it also went out on, through devices (devices.lua)
+function client.pc_near(id, p, name, ch, text, t, voice, vw, vs, vu, dv, dk)
+	PC.receive({id = id, p = p, name = name, ch = ch == "y" and "y" or "s", text = text, t = t, v = voice, vw = vw, vs = vs, vu = vu,
+		dv = dv, dk = dk})
 end
 
 -- what a dead player said: only the dead get it (never in shared)
@@ -2148,18 +2694,25 @@ function PC.muteCommand(on, arg)
 		return
 	end
 	local want, exact, part = arg:lower(), {}, {}
-	for q, n in pairs(c.names) do
-		if q ~= me then
-			local l = n:lower()
-			if l == want then exact[#exact + 1] = q elseif l:sub(1, #want) == want then part[#part + 1] = q end
+	local byId = tonumber(arg:match("^#(%d+)$"))                      -- (/mute #3: player 3, whatever their name)
+	if byId then
+		if byId ~= me and c.names[byId] then exact[1] = byId end
+	else
+		for q, n in pairs(c.names) do
+			if q ~= me then
+				local l = n:lower()
+				if l == want then exact[#exact + 1] = q elseif l:sub(1, #want) == want then part[#part + 1] = q end
+			end
 		end
 	end
 	local hits = #exact > 0 and exact or part
 	if #hits == 0 then PC.system("No player called \"" .. arg .. "\" has said anything yet."); return end
-	if #hits > 1 then
-		local names = {}
-		for _, q in ipairs(hits) do names[#names + 1] = c.names[q] end
-		PC.system("\"" .. arg .. "\" could be: " .. table.concat(names, ", ") .. ". Type more of the name.")
+	if #hits > 1 then                                                 -- (the same name twice, or a start of several:
+		local names = {}                                              --  each with its number, /mute #<number> picks one)
+		table.sort(hits)
+		for _, q in ipairs(hits) do names[#names + 1] = c.names[q] .. " (#" .. q .. ")" end
+		PC.system("\"" .. arg .. "\" could be: " .. table.concat(names, ", ") .. ". Type more of the name, or "
+			.. (on and "/mute" or "/unmute") .. " #<number>.")
 		return
 	end
 	local q = hits[1]
@@ -2171,6 +2724,105 @@ function PC.muteCommand(on, arg)
 		c.muted[q] = nil
 		PC.system(c.names[q] .. " is not muted any more.")
 	end
+end
+
+-- ---- PER-PLAYER VOLUME (2026-10-10): each other player's voice, 0..2 (0-200 %), only for you: Koetama multiplies it on
+-- top of distance, walls and devices (the feed's speaker "volume", voice.lua), and their typed lines' babble is scaled by
+-- it too (PC.babbleSay). Saved in this player's own registry by the player's name as the chat cleans it (there is no
+-- Steam id for a script), so a friend's level carries over between sessions: savegame.mod.pcpvol.<hex of the name>.
+-- (Two players with the same name share it.) Set on the Voice page (a slider per player) or by /volume.
+
+-- the registry key of player p's volume (nil: not a real other player - the local test speakers, yourself)
+function PC.playerVolKey(p)
+	if type(p) ~= "number" or p == GetLocalPlayer() or PC.isDummy(p) or (PC.isVoiceDummy and PC.isVoiceDummy(p)) then return nil end
+	local name = PC.cleanName(GetPlayerName(p), p)
+	return PC.cfg.save .. "pvol." .. name:gsub(".", function(ch) return string.format("%02x", ch:byte()) end), name
+end
+
+-- player p's volume, 0..2 (1: as everyone else; anyone without a key: 1)
+function PC.playerVolume(p)
+	local key = PC.playerVolKey(p)
+	if not key then return 1 end
+	local c = PC.C()
+	c.pvol = c.pvol or {}
+	local v = c.pvol[key]
+	if v == nil then
+		v = HasKey(key) and math.max(0, math.min(2, GetFloat(key))) or 1
+		c.pvol[key] = v
+	end
+	return v
+end
+
+-- set player p's volume (0..2, to 5 %); save ~= false: saved (the slider saves when let go). 1 clears the key.
+function PC.setPlayerVolume(p, v, save)
+	local key = PC.playerVolKey(p)
+	if not key then return end
+	v = math.floor(math.max(0, math.min(2, tonumber(v) or 1)) * 20 + 0.5) / 20
+	local c = PC.C()
+	c.pvol = c.pvol or {}
+	c.pvol[key] = v
+	if save ~= false then
+		if v == 1 then ClearKey(key) else SetFloat(key, v) end
+	end
+end
+
+-- the other players in the session, sorted by number, with the names everyone sees ({p, name})
+function PC.otherPlayers()
+	local out, me = {}, GetLocalPlayer()
+	for _, q in ipairs(PC.allPlayers()) do
+		if q ~= me then out[#out + 1] = {p = q, name = PC.nameOf(q)} end
+	end
+	table.sort(out, function(a, b) return a.p < b.p end)
+	return out
+end
+
+-- /volume [name [0-200]]: a player's volume (only for you). The start of a name is enough (as /mute), #<number> picks
+-- one; alone: the players whose volume is not 100 %.
+function PC.volumeCommand(arg)
+	local c = PC.C()
+	local others = PC.otherPlayers()
+	local function pct(v) return math.floor(v * 100 + 0.5) .. "%" end
+	local function muted(q) return c.muted[q] and " (muted: /unmute to hear them)" or "" end
+	if arg == "" then
+		local set = {}
+		for _, o in ipairs(others) do
+			local v = PC.playerVolume(o.p)
+			if v ~= 1 then set[#set + 1] = o.name .. " " .. pct(v) end
+		end
+		PC.system("/volume <name> <0-200>: a player's voice and babble, only for you (100 = normal; also on the Voice page)."
+			.. (#set > 0 and (" Now: " .. table.concat(set, ", ") .. ".") or ""))
+		return
+	end
+	local name, num = arg:match("^(.-)%s+(%-?[%d%.]+)%%?$")
+	if not name or name == "" then name, num = arg, nil end
+	local val
+	if num then
+		val = tonumber(num)
+		if not val or val < 0 or val > 200 then PC.system("The volume is a number from 0 to 200 (100 = normal)."); return end
+	end
+	local want, exact, part = name:lower(), {}, {}
+	local byId = tonumber(name:match("^#(%d+)$"))
+	for _, o in ipairs(others) do
+		if byId then
+			if o.p == byId then exact[1] = o end
+		else
+			local l = PC.cleanName(GetPlayerName(o.p), o.p):lower()
+			if l == want or o.name:lower() == want then exact[#exact + 1] = o elseif l:sub(1, #want) == want then part[#part + 1] = o end
+		end
+	end
+	local hits = #exact > 0 and exact or part
+	if #hits == 0 then PC.system("No player called \"" .. name .. "\" is here."); return end
+	if #hits > 1 then
+		local names = {}
+		for _, o in ipairs(hits) do names[#names + 1] = o.name .. " (#" .. o.p .. ")" end
+		PC.system("\"" .. name .. "\" could be: " .. table.concat(names, ", ") .. ". Type more of the name, or /volume #<number>"
+			.. (num and (" " .. num) or "") .. ".")
+		return
+	end
+	local o = hits[1]
+	if val then PC.setPlayerVolume(o.p, val / 100) end
+	PC.system(o.name .. ": " .. pct(PC.playerVolume(o.p)) .. (val and " (only for you, saved)" or " (only for you; /volume "
+		.. o.name .. " <0-200> changes it)") .. muted(o.p) .. ".")
 end
 
 function PC.command(text)
@@ -2202,6 +2854,10 @@ function PC.command(text)
 	elseif cmd == "settings" or cmd == "options" then
 		PC.setTyping(true)                                        -- (the window is interactive while typing)
 		PC.setPage("settings")
+	elseif cmd == "wheel" and PC.wheelCommand then
+		PC.wheelCommand(rest)
+	elseif cmd == "padtest" and PC.padTestToggle then
+		PC.padTestToggle()
 	elseif cmd == "hint" then
 		PC.setHideHint(not c.hideHint)
 		PC.system(c.hideHint and "Hint hidden. /hint shows it again." or "Hint shown.")
@@ -2210,6 +2866,8 @@ function PC.command(text)
 		PC.system(c.pinned and "The chat window stays open (Enter to use it). /window again to close it." or "The chat window closes when you stop typing.")
 	elseif cmd == "mute" or cmd == "unmute" then
 		PC.muteCommand(cmd == "mute", rest)
+	elseif cmd == "volume" or cmd == "vol" then
+		PC.volumeCommand(rest)
 	elseif cmd == "dummy" then
 		PC.dummyCommand(rest)
 	elseif cmd == "bob" and PC.bobCommand then                       -- (heads.lua)
@@ -2220,18 +2878,19 @@ function PC.command(text)
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Whisper / Speak / Yell / Global. Settings (window header): voice and more. " .. key)
-		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /dummy [1|2|3|clear] (test speakers)")
+		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /volume <name> <0-200>   /wheel (the quick-chat wheel)   /dummy [1|2|3|clear] (test speakers)")
 		if PC.voiceHelperAlive and PC.voiceHelperAlive() then
 			PC.system("Voice: hold " .. PC.talkKeyName() .. " to talk; " .. PC.talkKeyName() .. " + Tab: Whisper / Speak / Yell / Global (Voice page: the key, Always on).")
 		end
-		PC.system("Controller: click both sticks for the settings (D-pad, A, Y: the chat line, B: close).")
+		PC.system("Controller: click L3 twice to chat, like Enter (the quick-chat wheel: left stick aims, A adds, A on nothing sends; R1: the pages; hold B: close).")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
 end
 
 -- a line from the input: a command (local), "//..." (a line starting with "/"), or a message
-function PC.submit(text)
+-- pad: said from a controller's chat (padui.lua) - the line carries the controller mark (four dots, the face buttons)
+function PC.submit(text, pad)
 	text = PC.clean(text)
 	if text == "" then return end
 	if text:sub(1, 2) == "//" then
@@ -2240,7 +2899,7 @@ function PC.submit(text)
 		PC.command(text)
 		return
 	end
-	PC.say(text, PC.mode())
+	PC.say(text, PC.mode(), pad and "pad" or nil)
 end
 
 -- the text field (cursor at the box's top left; font and colour set before). The game's UiTextInput as
@@ -2249,7 +2908,8 @@ end
 function PC.field(w, h)
 	local c = PC.C()
 	if not c.typing or not UiTextInput then return end
-	local t, active = UiTextInput(c.text, w, h, c.focus or false)
+	local want = c.focus and not (c.padUI and c.padFocus ~= "chat")   -- (the controller on a page: not the field)
+	local t, active = UiTextInput(c.text, w, h, want or false)
 	c.focus = (active == false)
 	if type(t) == "string" then
 		if t:find("[\r\n]") then c.send = true end                   -- (Enter taken by the field)
@@ -2285,8 +2945,44 @@ end
 -- keys that change what is drawn (before drawing, so this frame already shows it): Tab (the mode),
 -- Up / Down (your sent lines back), scrolling, the optional window hotkey (never while typing: then letters go
 -- into the line)
+-- proxchat.open (client, bool; API 7, 2026-10-12): a game asks the chat to open on this machine - as Enter would, with
+-- the quick-chat wheel when the player is on a controller (padui.lua). For a game whose own UI holds the input (an
+-- interactive lobby: the chat doesn't see its keys then) or that offers a "Chat" button. Read and cleared every frame,
+-- whoever has the input; an open chat stays as it is. Not stopped by proxchat.block (the game asked for it).
+function PC.openRequested()
+	local key = PC.cfg.reg .. ".open"
+	if not GetBool(key) then
+		if GetString(key) ~= "" then ClearKey(key) end              -- (a text: apicheck tells; never left to pile up)
+		return false
+	end
+	ClearKey(key)
+	if PC.windowOpen() then return false end
+	if PC.pad() and PC.padOpen then PC.padOpen() else PC.setTyping(true); UiMakeInteractive() end
+	return true
+end
+
+-- proxchat.close (client, bool; API 8): a game closes the chat on this machine (a match starts, a cutscene): the line,
+-- the wheel, the pages - an unsent line is dropped. Read and cleared every frame; a closed chat stays closed.
+function PC.closeRequested()
+	local key = PC.cfg.reg .. ".close"
+	if not GetBool(key) then
+		if GetString(key) ~= "" then ClearKey(key) end
+		return false
+	end
+	ClearKey(key)
+	if not PC.windowOpen() then return false end
+	local c = PC.C()
+	c.padUI = false
+	if c.nav then PC.setNav(false) end
+	if c.typing then PC.setTyping(false) end
+	c.pinned = false
+	return true
+end
+
 function PC.preKeys()
 	local c = PC.C()
+	if PC.closeRequested() then return end
+	if PC.openRequested() then return end
 	if PC.navKeys() then return end
 	if PC.keyCaptured and PC.keyCaptured() then UiMakeInteractive(); return end   -- (voice.lua: a talk key being bound)
 	if c.typing then
@@ -2322,10 +3018,10 @@ function PC.keys()
 		if c.tab and not InputPressed("tab") then PC.nextMode() end   -- (once: preKeys took a Tab key press)
 		c.tab = nil
 		if InputPressed("return") or c.send then
-			local text = c.text
+			local text, pad = c.text, c.padUI and PC.pad()
 			PC.setTyping(false)
 			PC.remember(text)
-			PC.submit(text)
+			PC.submit(text, pad)
 		elseif InputPressed("esc") or InputPressed("pause") then
 			PC.setTyping(false)
 		end
@@ -2338,13 +3034,37 @@ function PC.keys()
 end
 
 -- ---- drawing
--- one history line at the cursor (align left top): [tag] Name: text. Returns its height.
+-- the controller mark at the cursor (left top, a line of text size tall): four dots in a diamond, as a pad's face buttons
+-- (the user, 2026-10-12: lines said from a controller begin with it). Drawn, not a character: the game's fonts have none.
+function PC.padMark(size, col, a)
+	local r = math.max(2, size * 0.1)
+	local d = size * 0.22
+	local cx, cy = size * 0.4, size * 0.42                              -- (level with the name's letters: 0.58 sat low in-game)
+	UiPush()
+	UiAlign("center middle")
+	UiColor(col[1], col[2], col[3], 0.9 * (a or 1))
+	for _, o in ipairs({{0, -d}, {d, 0}, {0, d}, {-d, 0}}) do
+		UiPush()
+		UiTranslate(cx + o[1], cy + o[2])
+		UiRoundedRect(2 * r, 2 * r, r)
+		UiPop()
+	end
+	UiPop()
+end
+
+-- one history line at the cursor (align left top): [tag] (the controller mark) Name: text. Returns its height.
 function PC.drawLine(e, w, size, a, measureOnly)
 	UiPush()
+	PC.noWild()                                                       -- (names, text, translations, channel tags: player text)
 	UiWordWrap(w)
 	local info = (not e.sys) and (e.ch == "d" and PC.channelInfo(e.chan) or PC.modeInfo(e.ch)) or nil
 	local whisper = e.ch == "w"
-	local tag = info and ((e.voice and PC.spokenTag(info[4]) or info[4]) .. " ") or ""
+	local tag = info and info[4] or ""                                -- (spoken or typed: the same tag - "[spoken]" said nothing
+	                                                                  --  a player needed, the user 2026-10-11)
+	if tag ~= "" and e.via and PC.KIND_LABEL then                     -- (heard through a device: devices.lua)
+		tag = tag:gsub("%]$", " via " .. (PC.KIND_LABEL[e.via] or e.via) .. "]")
+	end
+	if tag ~= "" then tag = tag .. " " end
 	local tagSize = size - 6
 	local tagW = 0
 	if tag ~= "" then
@@ -2353,7 +3073,8 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	end
 	local prefix = e.sys and "" or ((e.name or "?") .. ": ")
 	local pw = prefix ~= "" and PC.textWidth(prefix, size) or 0
-	local tw = math.max(120, w - tagW - pw)
+	local iw = e.pad and math.floor(size * 0.95) or 0                  -- (the controller mark's room)
+	local tw = math.max(120, w - tagW - iw - pw)
 	UiFont(PC.chatFont(e.text), size)
 	UiWordWrap(tw)
 	local vis = PC.chatVisual(e.text)
@@ -2378,6 +3099,11 @@ function PC.drawLine(e, w, size, a, measureOnly)
 			UiText(tag)
 			UiPop()
 			UiTranslate(tagW, 0)
+		end
+		if iw > 0 then
+			local col = info and info[5] or {1, 1, 1}
+			PC.padMark(size, col, fa)
+			UiTranslate(iw, 0)
 		end
 		if prefix ~= "" then
 			local col = info[5]
@@ -2437,6 +3163,7 @@ function PC.measure(text)
 	local font, size = PC.bubbleFont(text)
 	local vis = PC.chatVisual(text)
 	UiPush()
+	PC.noWild()
 	UiFont(font, size)
 	UiWordWrap(cfg.bubbleW)
 	local tw, th = UiGetTextSize(vis)
@@ -2450,12 +3177,14 @@ end
 
 -- tr: the line's translation (voice.lua), under the text in PC.TR_BUBBLE_COLOR (the bubble grows to hold it; a long one
 -- scrolls like the text, from trT: when it came)
-function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, tr, trT)
-	local feet = PC.speakerPos(p)
+-- at (devices.lua): not over the speaker but over a device: {pos = where it is (its distance), top = where the bubble
+-- points (over a carried one: its carrier's head)}
+function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, tr, trT, at)
+	local feet = at and at.pos or PC.speakerPos(p)
 	if not feet then return nil end
-	local head = VecAdd(feet, Vec(0, 2.25, 0))
+	local head = at and (at.top or VecAdd(at.pos, Vec(0, 0.35, 0))) or VecAdd(feet, Vec(0, 2.25, 0))
 	local x, y, d = UiWorldToPixel(head)
-	local dist = VecLength(VecSub(VecAdd(feet, Vec(0, 1.7, 0)), PC.listenerHead()))   -- (from your character, not the camera)
+	local dist = VecLength(VecSub(at and at.pos or VecAdd(feet, Vec(0, 1.7, 0)), PC.listenerHead()))   -- (from your character, not the camera)
 	-- sized by the real distance between you and the speaker, the same on screen and docked: UiWorldToPixel's
 	-- depth (along the view) shrinks toward the screen edges, and the camera (third person) swings around
 	-- as you turn - both changed the size when turning on the spot
@@ -2530,6 +3259,7 @@ function PC.bubbleDraw(L)
 		UiPop()
 	end
 	UiPush()
+	PC.noWild()
 	UiTranslate(L.x, L.y - L.lift)
 	if L.shake then UiTranslate(math.random(-2, 2), math.random(-2, 2)) end    -- (ALL CAPS: shaking)
 	UiScale(s)
@@ -2538,13 +3268,61 @@ function PC.bubbleDraw(L)
 	local k = 2                                                              -- (the outline)
 	UiAlign("left top")
 	UiTranslate(-w / 2, -h - 14)
+	local dev = L.dev                                                    -- (a device's bubble: its own look, devices.lua)
+	if dev == "loudspeaker" then                                         -- (a megaphone / loudspeaker: jagged, bold)
+		UiColor(0.75, 0.12, 0.08, 0.95 * ab)
+		for xx = 6, w - 6, 26 do
+			for _, yy in ipairs({0, h}) do UiPush(); UiTranslate(xx, yy); UiRotate(45); UiTranslate(-7, -7); UiRect(14, 14); UiPop() end
+		end
+		for yy = 6, h - 6, 26 do
+			for _, xx in ipairs({0, w}) do UiPush(); UiTranslate(xx, yy); UiRotate(45); UiTranslate(-7, -7); UiRect(14, 14); UiPop() end
+		end
+	elseif dev == "pa" then                                              -- (a PA: a second, outer ring)
+		UiColor(0.5, 0.25, 0.75, 0.85 * ab)
+		UiPush(); UiTranslate(-6, -6); UiRoundedRectOutline(w + 12, h + 12, 16, 2); UiPop()
+	end
 	UiColor(0, 0, 0, 0.9 * ab)
-	UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop()
+	if dev ~= "radio" then UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop() end
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
-	if L.whisper then UiColor(0.86, 0.87, 1, ab) else UiColor(1, 1, 1, ab) end
+	if dev == "radio" then UiColor(0.9, 0.97, 0.87, ab)
+	elseif dev == "loudspeaker" then UiColor(1, 0.97, 0.82, ab)
+	elseif dev == "pa" then UiColor(0.95, 0.92, 1, ab)
+	elseif L.whisper then UiColor(0.86, 0.87, 1, ab) else UiColor(1, 1, 1, ab) end
 	UiRoundedRect(w, h, 10)
 	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
-	if L.shout then UiColor(0.96, 0.45, 0.12, ab); UiRoundedRectOutline(w, h, 10, 4) end
+	if dev == "radio" then                                               -- (a walkie: a dotted, crackly outline and a small walkie)
+		UiColor(0.12, 0.38, 0.12, 0.9 * ab)
+		for xx = 4, w - 10, 14 do
+			UiPush(); UiTranslate(xx, -2); UiRect(8, 3); UiPop()
+			UiPush(); UiTranslate(xx + 4, h - 1); UiRect(8, 3); UiPop()
+		end
+		for yy = 6, h - 10, 14 do
+			UiPush(); UiTranslate(-2, yy); UiRect(3, 8); UiPop()
+			UiPush(); UiTranslate(w - 1, yy + 4); UiRect(3, 8); UiPop()
+		end
+		UiPush()                                                         -- (the walkie: a body, its antenna, a grille)
+		UiTranslate(-12, -16)
+		UiColor(0.15, 0.2, 0.15, ab)
+		UiRoundedRect(14, 24, 3)
+		UiPush(); UiTranslate(9, -9); UiRect(3, 10); UiPop()
+		UiTranslate(3, 5); UiColor(0.55, 0.75, 0.55, ab); UiRect(8, 2); UiTranslate(0, 4); UiRect(8, 2)
+		UiPop()
+	elseif dev == "loudspeaker" then
+		UiColor(0.75, 0.12, 0.08, ab); UiRoundedRectOutline(w, h, 10, 4)
+	elseif dev == "pa" then
+		UiPush()                                                         -- (a small "PA" tag)
+		UiTranslate(-10, -14)
+		UiColor(0.5, 0.25, 0.75, ab)
+		UiRoundedRect(34, 20, 5)
+		UiTranslate(17, 10)
+		UiAlign("center middle")
+		UiFont("bold.ttf", 16)
+		UiColor(1, 1, 1, ab)
+		UiText("PA")
+		UiPop()
+		UiFont(L.font, L.size)
+	end
+	if L.shout and not dev then UiColor(0.96, 0.45, 0.12, ab); UiRoundedRectOutline(w, h, 10, 4) end
 	UiTranslate(15, 11)
 	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
 		UiPush()
@@ -2556,7 +3334,10 @@ function PC.bubbleDraw(L)
 		UiRect(3, L.vh * L.vh / L.th)
 		UiPop()
 	end
-	if L.whisper then UiColor(0.2, 0.2, 0.38, L.mumble and 0.85 * a or a)
+	if dev == "radio" then UiColor(0.08, 0.28, 0.08, L.mumble and 0.85 * a or a)
+	elseif dev == "loudspeaker" then UiColor(0.55, 0.08, 0.04, L.mumble and 0.85 * a or a)
+	elseif dev == "pa" then UiColor(0.3, 0.12, 0.45, L.mumble and 0.85 * a or a)
+	elseif L.whisper then UiColor(0.2, 0.2, 0.38, L.mumble and 0.85 * a or a)
 	else UiColor(L.shout and 0.62 or 0.08, L.shout and 0.24 or 0.05, L.shout and 0.04 or 0.1, L.mumble and 0.85 * a or a) end
 	if L.th > L.vh + 1 then
 		UiPush()
@@ -2643,6 +3424,8 @@ function PC.avoidRects()
 		if x then
 			x, y, w, h = tonumber(x), tonumber(y), tonumber(w), tonumber(h)
 			if x and y and w and h and w > 0 and h > 0 then out[#out + 1] = {left = x, top = y, right = x + w, bottom = y + h} end
+		elseif PC.problem then
+			PC.problem(key, PC.problemValue(GetString(key)) .. ' is not "x y width height" (UI units from the screen\'s top left) - ignored')
 		end
 		ClearKey(key)
 	end
@@ -2670,7 +3453,8 @@ function PC.drawBubbles()
 	local function add(L) if L then list[#list + 1] = L end end
 	for age, tbl in ipairs({c.bubbles, c.prevBubbles}) do              -- (the newest, then the one before it)
 		for p, b in pairs(tbl) do
-			if (p ~= me or (third and not c.hideOwn)) and not b.hidden and PC.inReach(p, b) and not (b.voice and c.hideVoiceBubbles) then
+			if (p ~= me or (third and not c.hideOwn)) and not b.hidden and PC.inReach(p, b) and not (b.voice and c.hideVoiceBubbles)
+				and not (PC.devCovers and PC.devCovers(p, b)) then                  -- (its holder's megaphone shows it: devices.lua)
 				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t, b.liveHold,
 					b.level == "full" and b.tr or nil, b.trT)                       -- (its translation, voice.lua)
 				if L then
@@ -2682,7 +3466,10 @@ function PC.drawBubbles()
 			end
 		end
 	end
-	local live = PC.voiceLiveBubbles and PC.voiceLiveBubbles(add, me) or {}   -- (voice.lua: words while they are said)
+	if PC.devLiveBubbles then PC.devLiveBubbles(add) end                -- (devices.lua: live words over the devices - a
+	local live = PC.voiceLiveBubbles and PC.voiceLiveBubbles(add, me) or {}   --  talker's own megaphone's held back for the
+	if PC.devLiveFlush then PC.devLiveFlush(add) end                    --  talker's live bubble to compare; voice.lua: words
+	if PC.devDrawBubbles then PC.devDrawBubbles(add, now) end           --  while they are said; the finished lines)
 	for p, mode in pairs(shared.pcTyping or {}) do
 		if (mode == "s" or mode == "w" or mode == "y") and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden)
 			and not live[p]
@@ -2837,7 +3624,7 @@ function PC.drawSettings(W, H)
 	if PC.isHost() then                                               -- (the host: walls, for everyone)
 		local byGame = shared.pcWallsBy == "game"
 		rows[#rows + 1] = {"set_m", byGame and "Walls muffle voices (by the game)" or "Walls muffle voices (host)",
-			shared.pcWalls == true, "On", "Off", function(v) if not byGame then ServerCall("server.pc_walls", GetLocalPlayer(), v) end end}
+			shared.pcWalls == true, "On", "Off", function(v) if not byGame then PC.setHostWalls(v) end end}
 		if PC.voiceHostRows then PC.voiceHostRows(rows) end            -- (voice.lua: where the voice room lives)
 	end
 	rows[#rows + 1] = {"set_vb", "Bubbles for spoken lines", not c.hideVoiceBubbles, "Show", "Hide", function(v) PC.setHideVoiceBubbles(not v) end}
@@ -2853,7 +3640,9 @@ end
 -- (the Settings page; voice.lua's Voice page)
 -- Named extras: w (a toggle's button width), labels (a level row's own names: then 1..#labels), step (a cycling row:
 -- fn(-1 / 1) for a controller's left / right instead of fn()), off (greyed out: shown, not usable - the Voice page
--- without Koetama). With a controller (PC.navFocus) each usable row is an item.
+-- without Koetama), sw (a slider's width, 400 unless given), reset (a slider row: a "Reset" button after the slider's
+-- value, calling reset()), size (the label's font size, 22 unless given). With a controller (PC.navFocus) each usable
+-- row is an item.
 function PC.drawRows(rows)
 	local c = PC.C()
 	local typing = c.typing
@@ -2885,14 +3674,20 @@ function PC.drawRows(rows)
 		UiPush()
 		UiTranslate(0, 20)
 		UiAlign("left middle")
-		UiFont("regular.ttf", 22)
+		UiFont("regular.ttf", r.size or 22)
 		UiColor(1, 1, 1, 0.85)
 		UiText(r[2])
 		UiPop()
 		UiTranslate(400, 0)
 		if r[3] == "slider" then                                          -- (0 .. 1, live while dragged, saved when let go;
-			local v, done = PC.slider(r[1], r[4], 400, r[6])                  --  r[6]: its value as text, else Off / n %)
+			local v, done = PC.slider(r[1], r[4], r.sw or 400, r[6])         --  r[6]: its value as text, else Off / n %)
 			if v then r[5](v, done) end
+			if r.reset then
+				UiPush()
+				UiTranslate((r.sw or 400) + 90, 0)
+				if PC.smallButton(r[1] .. "_reset", "Reset", PC.RESET_W) then r.reset() end
+				UiPop()
+			end
 		elseif r[3] == "cycle" then                                       -- (one button showing the value; a click: the next)
 			if PC.cycle(r[1], r[4]) then r[5]() end
 		elseif type(r[3]) == "number" then                                -- (a level: Off .. 100 %, or its labels)
@@ -2905,6 +3700,24 @@ function PC.drawRows(rows)
 		c.typing = typing
 		UiPop()
 	end
+end
+
+-- a small button (w x 36) labelled text at the cursor: true when clicked
+PC.RESET_W = 100
+function PC.smallButton(id, text, w)
+	local c = PC.C()
+	local hover = c.typing and UiIsMouseInRect(w, 36)
+	local clicked = c.typing and PC.clicked(id, w, 36, hover)
+	UiPush()
+	UiColor(1, 1, 1, hover and 0.16 or 0.07)
+	UiRoundedRect(w, 36, 8)
+	UiTranslate(w / 2, 18)
+	UiAlign("center middle")
+	UiFont("regular.ttf", 20)
+	UiColor(1, 1, 1, 0.8)
+	UiText(text)
+	UiPop()
+	return clicked
 end
 
 -- a 0..1 slider w px wide (a 36 px tall row): press anywhere on it and drag; snaps to 5 %. Returns
@@ -3007,7 +3820,7 @@ function PC.rangeBar(W, readOnly)
 		if c.typing and PC.clicked("rangeReset", 110, 30, hoverR) then
 			local d = PC.defaultRanges or {8, 25, 40}
 			c.rangesWant = {d[1], d[2], d[3]}
-			ServerCall("server.pc_ranges", GetLocalPlayer(), d[1], d[2], d[3])
+			PC.setHostRanges(d[1], d[2], d[3])
 		end
 		UiColor(1, 1, 1, hoverR and 0.2 or 0.1)
 		UiRoundedRect(110, 30, 8)
@@ -3068,7 +3881,7 @@ function PC.rangeBar(W, readOnly)
 			local v = c.dragVals
 			c.rangesWant = {v[1], v[2], v[3]}
 			c.drag, c.dragVals = nil, nil
-			ServerCall("server.pc_ranges", GetLocalPlayer(), v[1], v[2], v[3])
+			PC.setHostRanges(v[1], v[2], v[3])
 		end
 	end
 	UiTranslate(0, 30)                                                -- (what they are)
@@ -3297,7 +4110,8 @@ function PC.drawTyping(L)
 	UiAlign("left top")
 	UiFont("regular.ttf", 18)
 	UiColor(1, 1, 1, 0.5)
-	UiText(PC.dead() and "Enter: say it (only the dead hear you)   Esc: close   Settings: your voice and more   /help"
+	UiText(c.padUI and PC.padHintText and PC.padHintText()
+		or PC.dead() and "Enter: say it (only the dead hear you)   Esc: close   Settings: your voice and more   /help"
 		or PC.lobby() and "Enter: say it   Esc: close   Settings: your voice and more   /help"
 		or "Enter: say it   Tab / chips: Whisper, Speak, Yell, Global   Esc: close   Settings: your voice and more   /help")
 	UiPop()
@@ -3323,33 +4137,41 @@ function PC.drawHint(L)
 	UiTranslate(L.x + 6, L.inY + 10)
 	UiAlign("left top")
 	UiTextShadow(0, 0, 0, 0.6, 1)
+	local pad = PC.pad()                                              -- (a controller: its button, not Enter - 2026-10-12)
 	if intro then
 		UiFont("regular.ttf", 22)
 		UiColor(1, 1, 1, 0.8)
-		UiText("Proximity Babble Chat - Enter: talk to players near you (Tab: Whisper / Speak / Yell / Global)" .. key .. "   /help   (hide: /hint)")
+		UiText(pad and "Proximity Comms - L3 twice (click the left stick twice): chat and the quick-chat wheel   /help   (hide: /hint)"
+			or ("Proximity Comms - Enter: talk to players near you (Tab: Whisper / Speak / Yell / Global)" .. key .. "   /help   (hide: /hint)"))
 	else
 		UiFont("regular.ttf", 18)
 		UiColor(1, 1, 1, 0.35)
-		UiText("Enter: chat" .. key)
+		UiText(pad and "L3 twice: chat" or ("Enter: chat" .. key))
 	end
 	UiPop()
 end
 
 function PC.draw()
 	local c = PC.C()
+	if PC.padTestSample then PC.padTestSample() end                    -- (padtest.lua: /padtest, before the chat takes keys)
 	PC.preKeys()
 	UiPush()
-	PC.drawBubbles()
+	PC.noWild()                                                         -- (no UiText "[[...]]" markup in anything the chat draws:
+	PC.drawBubbles()                                                    --  player text could hold a browser link; voice.lua's own
+	                                                                    --  Koetama link turns them on for itself)
 	if PC.voiceDraw then PC.voiceDraw() end
 	local L = PC.layout()
 	c.L = L                                                             -- (voice.lua's own live words sit by the input line)
 	UiPush()
 	UiScale(L.s)                                                        -- (the chat UI in its own units: PC.layout)
 	if PC.windowOpen() then PC.drawWindow(L) else PC.drawFeed(L) end
+	if PC.drawWheel then PC.drawWheel(L) end                           -- (padui.lua: the controller's quick-chat wheel)
 	if c.typing then PC.drawTyping(L) else PC.drawHint(L) end
 	if PC.voiceDrawOwn then PC.voiceDrawOwn(L) end                     -- (voice.lua: what the helper hears you say)
 	UiPop()
 	if PC.drawTalk then PC.drawTalk() end                              -- (voice.lua: the talk key's mode strip)
+	if UiTextDisableWildcards then UiTextDisableWildcards(false) end   -- (as it was, should the state outlive the UiPop)
+	if PC.padTestDraw then PC.padTestDraw() end
 	UiPop()
 	PC.keys()
 end
