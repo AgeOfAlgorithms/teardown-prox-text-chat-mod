@@ -2060,11 +2060,13 @@ function PC.clientTick(dt)
 	-- host's, so a game's client script on a guest's machine reads its own player's here. Here it means "the chat
 	-- has this player's keys": the line, or its pages on a controller (the D-pad, A, B are the chat's then - a game
 	-- must ignore them; 2026-10-12). The "..." over the head is the server's (pc_typing), not this.
+	-- (against the registry itself, not a cached value: on the HOST the server's pc_typing handler writes the same key -
+	--  setNav's setTyping(false) made it write false after the client's true, and the false stuck; found by the Tall
+	--  Order Random agent, 2026-10-12: its lobby showed through a controller player's settings page)
 	local busy = (c.typing or c.nav) and true or false
-	if busy ~= c.regTyping then
-		c.regTyping = busy
-		SetBool(PC.cfg.reg .. ".typing." .. me, busy)
-	end
+	local tkey = PC.cfg.reg .. ".typing." .. me
+	if GetBool(tkey) ~= busy then SetBool(tkey, busy) end
+	c.regTyping = busy
 	PC.heartbeat()
 	PC.publishKeys()
 	-- the chosen voice reaches the server (re-sent until shared shows it, 6 s at most)
