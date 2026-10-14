@@ -27,11 +27,11 @@
 PC.WHEEL_TREE = {
 	{"Callouts", {"Over here!", "Follow me", "Run!", "Look!", "Help!", "Be quiet", "Wait!", "Watch out!"}},
 	{"Questions", {"Who?", "What?", "Where?", "When?", "Why?", "How?", "Correct?", "Ready?"}, "words"},
-	{"Replies", {"OK", "Thanks!", "Yes", "Sorry!", "Maybe", "My bad", "No", "What?"}},
+	{"Replies", {"OK", "Thanks!", "Yes", "Sorry!", "Dunno", "My bad", "No", "No problem"}},
 	{"Objects", {"Gun", "Furniture", "Wall", "Ground", "Vehicle", "Tree", "Enemy", "Friend"}, "words"},
 	{"Players", "players"},
 	{"Insults", {"You suck", "You stink", "Noob", "Loser", "Get good", "Skill issue", "Clown", "Bruh"}},
-	{"Social", {"Hi!", "Bye!", "I'm cooking!", "LOL", "Oops", "Wow!", "Well played", "Let's go!"}},
+	{"Social", {"Hi!", "Bye!", "I'm the best", "LOL", "Oops", "Wow!", "Well played", "Let's go!"}},
 	{"Teardown", {"Blow it up!", "Get a vehicle", "Grab this", "I need tools", "Check the map", "It will break",
 		"Through the wall", "Time's up!"}},
 }
