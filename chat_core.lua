@@ -60,7 +60,7 @@
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /y /g [text] (Speak / Whisper / Yell / Global: set the mode, or say one line
 --   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /mute [name], /unmute name|all, /dummy [1|2|3|clear]
---   (local test speakers), /volume [name [0-200]] (a player's voice and babble, only for you), /help, //text sends "/text".
+--   (local test speakers), /volume [name [0-150]] (a player's voice and babble, only for you), /help, //text sends "/text".
 --
 -- TRUST (2026-10-09, after a security audit; see TRUST below the server's start): every server.pc_* call carries the
 --   caller's id and its session token (PC.call on the client; PC.who on the server checks both and that the id is a real
@@ -190,7 +190,7 @@ do
 		reg = "proxchat",        -- registry prefix
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pchideown, pcbubbles, pcvolume, pcnovoicebubbles,
 		                         --   pcdock, pcwinw, pcwinh, pctext (the chat's place, size and text size),
-		                         --   pcpvol.<hex of a cleaned name> (a player's volume, 0..2; PC.playerVolume)
+		                         --   pcpvol.<hex of a cleaned name> (a player's volume, 0..1.5; PC.playerVolume)
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
 		shoutVol = 0.8,          -- Yell (the shout clips, already a little louder than babble)
@@ -2728,7 +2728,7 @@ function PC.muteCommand(on, arg)
 	end
 end
 
--- ---- PER-PLAYER VOLUME (2026-10-10): each other player's voice, 0..2 (0-200 %), only for you: Koetama multiplies it on
+-- ---- PER-PLAYER VOLUME (2026-10-10): each other player's voice, 0..1.5 (0-150 %; was 0-200 until 2026-10-15), only for you: Koetama multiplies it on
 -- top of distance, walls and devices (the feed's speaker "volume", voice.lua), and their typed lines' babble is scaled by
 -- it too (PC.babbleSay). Saved in this player's own registry by the player's name as the chat cleans it (there is no
 -- Steam id for a script), so a friend's level carries over between sessions: savegame.mod.pcpvol.<hex of the name>.
@@ -2741,7 +2741,8 @@ function PC.playerVolKey(p)
 	return PC.cfg.save .. "pvol." .. name:gsub(".", function(ch) return string.format("%02x", ch:byte()) end), name
 end
 
--- player p's volume, 0..2 (1: as everyone else; anyone without a key: 1)
+-- player p's volume, 0..PC.PVOL_MAX (1: as everyone else; anyone without a key: 1)
+PC.PVOL_MAX = 1.5                                                    -- (a player's volume: 0..150 %, the user 2026-10-15; was 200)
 function PC.playerVolume(p)
 	local key = PC.playerVolKey(p)
 	if not key then return 1 end
@@ -2749,17 +2750,17 @@ function PC.playerVolume(p)
 	c.pvol = c.pvol or {}
 	local v = c.pvol[key]
 	if v == nil then
-		v = HasKey(key) and math.max(0, math.min(2, GetFloat(key))) or 1
+		v = HasKey(key) and math.max(0, math.min(PC.PVOL_MAX, GetFloat(key))) or 1
 		c.pvol[key] = v
 	end
 	return v
 end
 
--- set player p's volume (0..2, to 5 %); save ~= false: saved (the slider saves when let go). 1 clears the key.
+-- set player p's volume (0..PC.PVOL_MAX, to 5 %); save ~= false: saved (the slider saves when let go). 1 clears the key.
 function PC.setPlayerVolume(p, v, save)
 	local key = PC.playerVolKey(p)
 	if not key then return end
-	v = math.floor(math.max(0, math.min(2, tonumber(v) or 1)) * 20 + 0.5) / 20
+	v = math.floor(math.max(0, math.min(PC.PVOL_MAX, tonumber(v) or 1)) * 20 + 0.5) / 20
 	local c = PC.C()
 	c.pvol = c.pvol or {}
 	c.pvol[key] = v
@@ -2778,7 +2779,7 @@ function PC.otherPlayers()
 	return out
 end
 
--- /volume [name [0-200]]: a player's volume (only for you). The start of a name is enough (as /mute), #<number> picks
+-- /volume [name [0-150]]: a player's volume (only for you). The start of a name is enough (as /mute), #<number> picks
 -- one; alone: the players whose volume is not 100 %.
 function PC.volumeCommand(arg)
 	local c = PC.C()
@@ -2791,7 +2792,7 @@ function PC.volumeCommand(arg)
 			local v = PC.playerVolume(o.p)
 			if v ~= 1 then set[#set + 1] = o.name .. " " .. pct(v) end
 		end
-		PC.system("/volume <name> <0-200>: a player's voice and babble, only for you (100 = normal; also on the Voice page)."
+		PC.system("/volume <name> <0-150>: a player's voice and babble, only for you (100 = normal; also on the Voice page)."
 			.. (#set > 0 and (" Now: " .. table.concat(set, ", ") .. ".") or ""))
 		return
 	end
@@ -2800,7 +2801,7 @@ function PC.volumeCommand(arg)
 	local val
 	if num then
 		val = tonumber(num)
-		if not val or val < 0 or val > 200 then PC.system("The volume is a number from 0 to 200 (100 = normal)."); return end
+		if not val or val < 0 or val > PC.PVOL_MAX * 100 then PC.system("The volume is a number from 0 to 150 (100 = normal)."); return end
 	end
 	local want, exact, part = name:lower(), {}, {}
 	local byId = tonumber(name:match("^#(%d+)$"))
@@ -2824,7 +2825,7 @@ function PC.volumeCommand(arg)
 	local o = hits[1]
 	if val then PC.setPlayerVolume(o.p, val / 100) end
 	PC.system(o.name .. ": " .. pct(PC.playerVolume(o.p)) .. (val and " (only for you, saved)" or " (only for you; /volume "
-		.. o.name .. " <0-200> changes it)") .. muted(o.p) .. ".")
+		.. o.name .. " <0-150> changes it)") .. muted(o.p) .. ".")
 end
 
 function PC.command(text)
@@ -2880,7 +2881,7 @@ function PC.command(text)
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Whisper / Speak / Yell / Global. Settings (window header): voice and more. " .. key)
-		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /volume <name> <0-200>   /wheel (the quick-chat wheel)   /dummy [1|2|3|clear] (test speakers)")
+		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /volume <name> <0-150>   /wheel (the quick-chat wheel)   /dummy [1|2|3|clear] (test speakers)")
 		if PC.voiceHelperAlive and PC.voiceHelperAlive() then
 			PC.system("Voice: hold " .. PC.talkKeyName() .. " to talk; " .. PC.talkKeyName() .. " + Tab: Whisper / Speak / Yell / Global (Voice page: the key, Always on).")
 		end
@@ -3708,7 +3709,10 @@ function PC.drawRows(rows)
 	for k, r in ipairs(rows) do
 		UiPush()
 		UiTranslate(0, (k - 1) * 40)
-		if r[3] == "heading" or r[3] == "note" then PC.drawRowText(r) else
+		if r[3] == "heading" or r[3] == "note" then
+			if r.off and UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end   -- (greyed with its page)
+			PC.drawRowText(r)
+		else
 		if r.off then
 			c.typing = false                                              -- (the widgets take no clicks)
 			if UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end
@@ -3719,7 +3723,8 @@ function PC.drawRows(rows)
 		if act and (act.left or act.right or act.accept) then
 			local d = act.left and -1 or 1
 			if r[3] == "slider" then
-				r[5](math.max(0, math.min(1, math.floor(r[4] * 20 + 0.5) / 20 + d * 0.05)), true)
+				local n = r.steps or 20                                -- (one snap step: 5 %)
+				r[5](math.max(0, math.min(1, math.floor(r[4] * n + 0.5) / n + d / n)), true)
 			elseif r[3] == "cycle" then
 				if r.step then r.step(d) else r[5]() end
 			elseif type(r[3]) == "number" then
@@ -3740,7 +3745,7 @@ function PC.drawRows(rows)
 		UiPop()
 		UiTranslate(400, 0)
 		if r[3] == "slider" then                                          -- (0 .. 1, live while dragged, saved when let go;
-			local v, done = PC.slider(r[1], r[4], r.sw or 400, r[6])         --  r[6]: its value as text, else Off / n %)
+			local v, done = PC.slider(r[1], r[4], r.sw or 400, r[6], r.mark, r.steps)         --  r[6]: its value as text, else Off / n %)
 			if v then r[5](v, done) end
 			if r.reset then
 				UiPush()
@@ -3783,14 +3788,17 @@ end
 
 -- a 0..1 slider w px wide (a 36 px tall row): press anywhere on it and drag; snaps to 5 %. Returns
 -- the new value while dragging (nil when untouched) and true once let go.
-function PC.slider(id, value, w, fmt)
+-- mark: where 100 % is on the track (0..1; a tick - the players' sliders go to 150 %, the user 2026-10-15); steps: the
+-- positions it snaps to (20: 5 % of a 0-100 % slider; 30: 5 % of a 0-150 % one)
+function PC.slider(id, value, w, fmt, mark, steps)
 	local c = PC.C()
 	local out, done = nil, false
+	local n = steps or 20
 	local hover = c.typing and UiIsMouseInRect(w, 36)
 	if c.typing and not c.sdrag and PC.clicked(id, w, 36, hover) then c.sdrag = id end
 	if c.sdrag == id then
 		local mx = UiGetMousePos()
-		out = math.floor(math.max(0, math.min(1, mx / w)) * 20 + 0.5) / 20
+		out = math.floor(math.max(0, math.min(1, mx / w)) * n + 0.5) / n
 		if not (c.typing and InputDown("lmb")) then c.sdrag, done = nil, true end
 	end
 	local v = out or value
@@ -3801,6 +3809,13 @@ function PC.slider(id, value, w, fmt)
 	UiRoundedRect(w, 12, 6)
 	UiColor(1, 0.82, 0.3, 0.6)
 	if v > 0 then UiRoundedRect(math.max(12, w * v), 12, 6) end
+	if mark and mark > 0 and mark < 1 then                               -- (100 %: a tick across the track, under the knob)
+		UiPush()
+		UiTranslate(w * mark - 1.5, -6)
+		UiColor(1, 1, 1, 0.75)
+		UiRect(3, 24)
+		UiPop()
+	end
 	UiTranslate(w * v - 8, -10)
 	UiColor(0, 0, 0, 0.8)
 	UiRoundedRect(16, 32, 5)

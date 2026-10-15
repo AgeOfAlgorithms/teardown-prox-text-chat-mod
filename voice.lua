@@ -797,20 +797,22 @@ function PC.voiceRows()
 			step = function(d) PC.setVoiceLang(vo.lang + d) end}                                    -- (a controller: steps through it)
 		rows[#rows + 1] = {"set_v2", "Live words while I talk", vo.liveOn, "On", "Off", PC.setVoiceLiveOn}
 	end
-	-- PLAYERS: each other player's volume, 0-200 %, only for you (PC.playerVolume) - its own subsection (the user,
-	-- 2026-10-15); it works without Koetama too (their babble)
+	-- PLAYERS: each other player's volume, 0-150 % (a tick at 100 %), only for you (PC.playerVolume) - its own subsection (the user,
+	-- 2026-10-15); greyed out with the rest without Koetama (/volume still sets it: their babble)
 	local others = PC.otherPlayers()
 	rows[#rows + 1] = {"set_ph", "Players", "heading", "their volume, only for you", player = true}
 	if #others == 0 then rows[#rows + 1] = {"set_pn", "No one else here yet.", "note", player = true} end
 	for _, o in ipairs(others) do
 		local q = o.p
-		rows[#rows + 1] = {"set_pv" .. q, o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / 2,
-			function(v, done) PC.setPlayerVolume(q, v * 2, done) end,
-			function(v) return string.format("%d%%", math.floor(v * 200 + 0.5)) end,
-			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true}
+		local top = PC.PVOL_MAX
+		rows[#rows + 1] = {"set_pv" .. q, o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / top,
+			function(v, done) PC.setPlayerVolume(q, v * top, done) end,
+			function(v) return string.format("%d%%", math.floor(v * top * 100 + 0.5)) end,
+			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true,
+			mark = 1 / top, steps = math.floor(top * 20 + 0.5)}
 	end
-	if not vo.h.alive then
-		for _, r in ipairs(rows) do if not r.player then r.off = true end end
+	if not vo.h.alive then                                             -- (no Koetama: the whole page grey, the players too -
+		for _, r in ipairs(rows) do r.off = true end                   --  the user, 2026-10-15; /volume still sets them)
 	end
 	return rows
 end
