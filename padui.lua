@@ -14,10 +14,11 @@
 -- FOLDERS (the user, 2026-10-12: "so users can express more things"): a slot is a line or a folder of 8 more; the main
 -- wheel is 8 folders (the user's choice, 2026-10-12: two flicks to any line, 8-way aiming stays precise). A on a folder
 -- opens it, B goes back up. A slot by its path: "3" (the main wheel's 3rd), "3.5" (the 5th line of folder 3).
--- WORDS: every pick adds its words to the line (the user, 2026-10-12: "all the words should add words"), back on the
--- main wheel for the next: "Where?" + "Vehicle" -> the line "Where? Vehicle"; A with nothing picked (or L3 twice) says
--- the line; B on the main wheel takes the last word back, then closes; B held closes. Players: a LIST of the others in
--- the session (up to 11), the stick or the D-pad up / down, A adds the name.
+-- THE BUTTONS (the DST port's layout, matched 2026-10-15): X opens a folder or adds the line to the message, back on the
+-- main wheel for the next ("Where?" + "Vehicle" -> "Where? Vehicle": a sentence spans folders); Y takes the last added
+-- line back; A sends and closes (L3 twice too); B (a tap, on release) goes back one level, on the main wheel cancels;
+-- B held 0.5 s cancels from anywhere, dropping the message (its release swallowed); L2 / R2 the mode. Players: a LIST
+-- of the others in the session (up to 11), the stick or the D-pad up / down, X adds the name.
 -- Saved per player: savegame.mod.pcwheel.<path> = the text, or "<name>/" for a folder (its lines under it); unset: the
 -- default (PC.WHEEL_TREE). /wheel lists, /wheel <path> <text> sets (a text ending in "/" makes a folder),
 -- /wheel <path> reset, /wheel reset.
@@ -43,8 +44,7 @@ PC.WHEEL_PICK = 12                                                     -- (px of
 PC.WHEEL_KEEP = 0.6                                                    -- (how much of the recent movement each frame keeps)
 PC.WHEEL_JUMP = 120                                                    -- (px in one frame: the game placing the cursor, not the stick)
 PC.PAD_REPEAT = 0.15                                                   -- (s between scroll steps while the stick is held)
-PC.PAD_HOLD = 0.5                                                      -- (s B is held to close the chat, whatever is on the line;
-                                                                       --  A held this long sends the line)
+PC.PAD_HOLD = 0.5                                                      -- (s B is held to cancel the chat, whatever is on the line)
 
 function PC.padFocusOrder()
 	local t = {"chat"}
@@ -108,6 +108,7 @@ function PC.padOpen()
 	local c = PC.C()
 	if not c.typing then PC.setTyping(true, true) end                -- (quiet: the "..." once the stick aims)
 	c.padUI, c.padFocus, c.wheelSel, c.wheelLast, c.wheelVec, c.wheelPath, c.listSel = true, "chat", nil, nil, nil, {}, 1
+	c.wheelUndo, c.bDownT, c.bSwallow = {}, nil, nil
 	UiMakeInteractive()
 end
 
@@ -209,38 +210,23 @@ function PC.padKeys()
 	if c.typing and c.padFocus ~= "chat" then c.padFocus = "chat" end   -- (Y from a page)
 	if c.nav and c.padFocus == "chat" then c.padFocus = c.page end
 	local now = GetTime()
-	-- B HELD closes the chat from anywhere - a folder, the players, words on the line (the user, 2026-10-12); a tap still
-	-- goes back / takes the last word back (it happens first: closing drops the line anyway)
+	-- B: a TAP acts when it is let go (back one level; on the main wheel, cancel); HELD PC.PAD_HOLD s it cancels from
+	-- anywhere, the line dropped, and the release after it is swallowed (the DST port's layout, the user 2026-10-15)
 	local okB, bDown = pcall(InputDown, "menu_cancel")
+	local bTap = false
 	if okB and bDown then
 		c.bDownT = c.bDownT or now
-		if now - c.bDownT >= PC.PAD_HOLD then
-			c.bDownT = nil
+		if not c.bSwallow and now - c.bDownT >= PC.PAD_HOLD then
+			c.bSwallow = true
 			PC.padClose()
 			return true
 		end
-	else
-		c.bDownT = nil
+	elseif c.bDownT then
+		bTap = not c.bSwallow
+		c.bDownT, c.bSwallow = nil, nil
 	end
-	-- A HELD sends the line (the user, 2026-10-12) - the tap that started it has already added its word / opened its folder
-	local okA, aDown = pcall(InputDown, "menu_accept")
-	if okA and aDown and c.padFocus == "chat" then
-		c.aDownT = c.aDownT or now
-		if now - c.aDownT >= PC.PAD_HOLD and not c.aSent then
-			c.aSent = true
-			if PC.clean(c.text or "") ~= "" then c.send = true end
-			return true
-		end
-	else
-		c.aDownT, c.aSent = nil, nil
-	end
-	if PC.bothSticks and PC.bothSticks() then                          -- (L3 + R3: as Enter - says a typed line, else closes)
+	if PC.bothSticks and PC.bothSticks() then                          -- (L3 twice: as Enter - says a typed line, else closes)
 		if c.typing and PC.clean(c.text or "") ~= "" then c.send = true else PC.padClose() end
-		return true
-	end
-	if c.padFocus == "chat" and pressed("mmb", "flashlight") then      -- (Y: the settings, as before)
-		PC.padSetFocus(PC.drawVoicePage and "voice" or "settings")
-		c.navRow = 1
 		return true
 	end
 	if pressed("menu_next") then PC.padCycle(1); return true end
@@ -256,15 +242,39 @@ function PC.padKeys()
 		end
 	end
 	if c.padFocus == "chat" then
+		-- X opens a folder or adds the line (then the main wheel again: a sentence spans folders), Y takes the last added
+		-- line back, A sends and closes, B (a tap) goes back / cancels
 		UiMakeInteractive()
 		PC.wheelAim()
 		if c.wheelVec or PC.clean(c.text or "") ~= "" then PC.typingDots() end   -- (the stick aims / a letter: "...")
 		local path = c.wheelPath or {}
 		local kind = PC.wheelKind(path)
 		local typed = PC.clean(c.text or "") ~= ""
-		local function addWord(w)                                      -- (a word on the line; back on the main wheel)
+		local function addWord(w)                                      -- (on the line; back on the main wheel)
+			c.wheelUndo = c.wheelUndo or {}
+			c.wheelUndo[#c.wheelUndo + 1] = c.text or ""
 			c.text = PC.utf8Head((typed and (c.text .. " ") or "") .. w, PC.cfg.maxLen)
 			c.wheelPath, c.wheelSel, c.wheelVec, c.listSel = {}, nil, nil, 1
+		end
+		if pressed("menu_accept") then                                 -- (A: send and close)
+			if typed then c.send = true else PC.padClose() end
+			return true
+		end
+		if pressed("mmb", "flashlight") then                           -- (Y: the last added line back)
+			if c.wheelUndo and #c.wheelUndo > 0 then
+				c.text = table.remove(c.wheelUndo)
+			elseif typed then
+				c.text = (c.text:gsub("%s*%S+%s*$", ""))               -- (typed by keyboard: the last word)
+			end
+			return true
+		end
+		local back = function()                                        -- (B: back one level; the main wheel: cancel)
+			if #path > 0 then
+				c.wheelSel = table.remove(c.wheelPath)
+				c.wheelVec = nil
+			else
+				PC.padClose()
+			end
 		end
 		if kind == "players" then                                     -- (a list: the stick or the D-pad up / down)
 			local list = PC.otherPlayers()
@@ -275,15 +285,14 @@ function PC.padKeys()
 				step, c.wheelVec = (v[2] > 0 and 1 or -1), nil
 			end
 			c.listSel = math.max(1, math.min(math.max(1, n), (c.listSel or 1) + step))
-			if pressed("menu_accept") then
+			if pressed("interact") then
 				if list[c.listSel] then addWord(list[c.listSel].name) end
-			elseif pressed("menu_cancel") then
-				c.wheelSel = table.remove(c.wheelPath)
-				c.wheelVec = nil
+			elseif bTap then
+				back()
 			end
 			return true
 		end
-		if pressed("menu_accept") then
+		if pressed("interact") then                                    -- (X: open / add)
 			local text, folder = nil, false
 			if c.wheelSel then text, folder = PC.wheelItem(PC.wheelHere(c.wheelSel)) end
 			if text and folder then
@@ -292,19 +301,10 @@ function PC.padKeys()
 					c.wheelSel, c.wheelVec, c.listSel = nil, nil, 1
 				end
 			elseif text then
-				addWord(text)                                          -- (every line adds: A on nothing says them)
-			elseif typed then
-				c.send = true                                          -- (nothing picked: the line as it is)
+				addWord(text)
 			end
-		elseif pressed("menu_cancel") then
-			if #path > 0 then                                          -- (in a folder: back up, on the folder)
-				c.wheelSel = table.remove(c.wheelPath)
-				c.wheelVec = nil
-			elseif typed then                                          -- (the main wheel: the last word back)
-				c.text = (c.text:gsub("%s*%S+%s*$", ""))
-			else
-				PC.padClose()
-			end
+		elseif bTap then
+			back()
 		end
 		return true
 	end
@@ -430,8 +430,8 @@ function PC.drawWheel(L)
 	UiFont("regular.ttf", 19)
 	UiColor(1, 1, 1, 0.6)
 	local typed = PC.clean(c.text or "") ~= ""
-	UiText(not on and "R1: here" or (selText and (selFolder and "A: open" or "A: add")
-		or (inFolder and "B: back" or (typed and "A: say the line" or "Left stick: aim"))))
+	UiText(not on and "R1: here" or (selText and (selFolder and "X: open" or "X: add")
+		or (inFolder and "B: back" or (typed and "A: send" or "Left stick: aim"))))
 	UiTranslate(0, -14)
 	if c.padTest and c.wheelRaw then                                    -- (/padtest: this frame's movement, and from where)
 		UiTranslate(0, R * 0.32)
@@ -470,7 +470,7 @@ end
 function PC.padHintText()
 	local c = PC.C()
 	local inFolder = c.wheelPath and #c.wheelPath > 0
-	local where = c.padFocus == "chat" and ("Left stick: aim   A: add / open   Hold A (or A on nothing): send" .. (inFolder and "   B: back"
-		or (PC.clean(c.text or "") ~= "" and "   B: last word back" or ""))) or "D-pad: move   A: press"
-	return where .. "   R1 / L1: chat, pages   L2 / R2: mode   Right stick: scroll   Hold B: close"
+	local where = c.padFocus == "chat" and ("Left stick: aim   X: add / open   Y: remove   A: send   B: "
+		.. (inFolder and "back" or "cancel")) or "D-pad: move   A: press   B: close"
+	return where .. "   Hold B: cancel   R1 / L1: chat, pages   L2 / R2: mode   Right stick: scroll"
 end

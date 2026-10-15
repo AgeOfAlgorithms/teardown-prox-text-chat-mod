@@ -2884,7 +2884,7 @@ function PC.command(text)
 		if PC.voiceHelperAlive and PC.voiceHelperAlive() then
 			PC.system("Voice: hold " .. PC.talkKeyName() .. " to talk; " .. PC.talkKeyName() .. " + Tab: Whisper / Speak / Yell / Global (Voice page: the key, Always on).")
 		end
-		PC.system("Controller: click L3 twice to chat, like Enter (the quick-chat wheel: left stick aims, A adds, A on nothing sends; R1: the pages; hold B: close).")
+		PC.system("Controller: click L3 twice to chat, like Enter (the quick-chat wheel: left stick aims, X adds, Y takes back, A sends; B back; hold B: cancel; R1: the pages).")
 	else
 		PC.system("Unknown command /" .. cmd .. ". Type /help.")
 	end
@@ -3997,7 +3997,7 @@ function PC.drawWindow(L)
 			local mi = PC.modeInfo(vo.vmode)
 			UiColor(mi[5][1], mi[5][2], mi[5][3], 0.95)
 			tip = "Voice: " .. mi[3] .. "   (" .. PC.talkKeyName() .. " + Tab)"
-		elseif c.typing and PC.pad() then tip = "Y: settings"
+		elseif c.typing and PC.pad() then tip = "R1: pages   Right stick: scroll"   -- (Y is the wheel's "take back" now)
 		elseif c.typing then tip = "Wheel / PgUp: scroll"
 		elseif PC.keyName() ~= "" then tip = PC.keyName() .. ": close"
 		else tip = "Enter: chat" end
