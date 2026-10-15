@@ -3672,13 +3672,43 @@ end
 -- fn(-1 / 1) for a controller's left / right instead of fn()), off (greyed out: shown, not usable - the Voice page
 -- without Koetama), sw (a slider's width, 400 unless given), reset (a slider row: a "Reset" button after the slider's
 -- value, calling reset()), size (the label's font size, 22 unless given). With a controller (PC.navFocus) each usable
--- row is an item.
+-- row is an item. A heading {id, label, "heading", [note]}: a subsection's title (and a quiet note after it) over a thin
+-- rule; a note {id, label, "note"}: a quiet line. Neither is an item.
+function PC.drawRowText(r)
+	UiPush()
+	UiAlign("left middle")
+	if r[3] == "heading" then
+		UiTranslate(0, 22)
+		UiFont("bold.ttf", 20)
+		UiColor(1, 0.82, 0.3, 0.9)
+		UiText(r[2])
+		if r[4] then
+			UiTranslate((UiGetTextSize(r[2]) or 0) + 14, 1)
+			UiFont("regular.ttf", 18)
+			UiColor(1, 1, 1, 0.5)
+			UiText(r[4])
+		end
+		UiPop()
+		UiPush()
+		UiTranslate(0, 37)
+		UiColor(1, 1, 1, 0.15)
+		UiRect(820, 1)
+	else
+		UiTranslate(0, 20)
+		UiFont("regular.ttf", 20)
+		UiColor(1, 1, 1, 0.5)
+		UiText(r[2])
+	end
+	UiPop()
+end
+
 function PC.drawRows(rows)
 	local c = PC.C()
 	local typing = c.typing
 	for k, r in ipairs(rows) do
 		UiPush()
 		UiTranslate(0, (k - 1) * 40)
+		if r[3] == "heading" or r[3] == "note" then PC.drawRowText(r) else
 		if r.off then
 			c.typing = false                                              -- (the widgets take no clicks)
 			if UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end
@@ -3728,6 +3758,7 @@ function PC.drawRows(rows)
 			if v ~= nil then r[6](v) end
 		end
 		c.typing = typing
+		end
 		UiPop()
 	end
 end

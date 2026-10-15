@@ -786,13 +786,6 @@ function PC.voiceRows()
 	local rows = {}
 	local vo, c = PC.voice(), PC.C()
 	rows[#rows + 1] = {"set_x", "Voice volume", "slider", vo.volume, PC.setVoiceVolume}
-	for _, o in ipairs(PC.otherPlayers()) do                          -- (each other player's volume, 0-200 %: PC.playerVolume)
-		local q = o.p
-		rows[#rows + 1] = {"set_pv" .. q, "      " .. o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / 2,
-			function(v, done) PC.setPlayerVolume(q, v * 2, done) end,
-			function(v) return string.format("%d%%", math.floor(v * 200 + 0.5)) end,
-			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true}
-	end
 	do
 		rows[#rows + 1] = {"set_pt", "Microphone", vo.ptt, "Push to talk", "Always on", PC.setVoicePtt, w = 170}
 		rows[#rows + 1] = {"set_tk", vo.ptt and "Talk key (hold it to talk)" or "Talk key (+ Tab: mode)", "cycle",
@@ -803,6 +796,18 @@ function PC.voiceRows()
 			function() vo.picking, vo.pickT, vo.pickArmed = true, GetTime(), false end,              -- (opens the list: PC.drawVoiceLangs)
 			step = function(d) PC.setVoiceLang(vo.lang + d) end}                                    -- (a controller: steps through it)
 		rows[#rows + 1] = {"set_v2", "Live words while I talk", vo.liveOn, "On", "Off", PC.setVoiceLiveOn}
+	end
+	-- PLAYERS: each other player's volume, 0-200 %, only for you (PC.playerVolume) - its own subsection (the user,
+	-- 2026-10-15); it works without Koetama too (their babble)
+	local others = PC.otherPlayers()
+	rows[#rows + 1] = {"set_ph", "Players", "heading", "their volume, only for you", player = true}
+	if #others == 0 then rows[#rows + 1] = {"set_pn", "No one else here yet.", "note", player = true} end
+	for _, o in ipairs(others) do
+		local q = o.p
+		rows[#rows + 1] = {"set_pv" .. q, o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / 2,
+			function(v, done) PC.setPlayerVolume(q, v * 2, done) end,
+			function(v) return string.format("%d%%", math.floor(v * 200 + 0.5)) end,
+			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true}
 	end
 	if not vo.h.alive then
 		for _, r in ipairs(rows) do if not r.player then r.off = true end end
