@@ -3136,8 +3136,27 @@ function PC.drawLine(e, w, size, a, measureOnly)
 end
 
 -- where a bubble goes for a speaker off screen: on the screen edge, in the speaker's direction
+-- -> x, y on the screen's edge, and a cue: "below" when the speaker is more than 45 degrees below you (your head; in
+-- front or behind - the user, 2026-10-15: behind you and below you both dock at the bottom, the cue tells them apart),
+-- else nil
+function PC.belowCue(pos)
+	local head = PC.listenerHead()
+	local v = VecSub(pos, head)
+	local flat = math.sqrt(v[1] * v[1] + v[3] * v[3])
+	return (v[2] < 0 and -v[2] >= flat) and "below" or nil
+end
+
 function PC.edgePoint(pos)
 	local lp = TransformToLocalPoint(GetCameraTransform(), pos)          -- (camera: x right, y up, -z ahead)
+	local cue = PC.belowCue(pos)
+	if lp[3] > 0 then
+		-- BEHIND the camera: the bottom edge (the usual convention: its tail points down, "behind you" - the user,
+		-- 2026-10-15; behind-right went to the right edge before), slid left / right by how far to that side they are:
+		-- dead behind the middle, right behind a shoulder near that corner
+		local hx = math.sqrt(lp[1] * lp[1] + lp[3] * lp[3])
+		local side = hx > 1e-3 and lp[1] / hx or 0                        -- (-1 .. 1: the sine of the angle off dead behind)
+		return UiWidth() / 2 + side * UiWidth() / 2, UiHeight(), cue
+	end
 	local dx, dy = lp[1], -lp[2]
 	local l = math.sqrt(dx * dx + dy * dy)
 	if l < 1e-3 then dx, dy, l = 0, 1, 1 end                              -- (right behind: the bottom)
@@ -3147,7 +3166,7 @@ function PC.edgePoint(pos)
 	local kx = math.abs(dx) > 1e-3 and (cx / math.abs(dx)) or 1e9      -- (to the very edge: the layout then keeps
 	local ky = math.abs(dy) > 1e-3 and (cy / math.abs(dy)) or 1e9      --  the whole bubble on screen)
 	local k = math.min(kx, ky)
-	return cx + dx * k, cy + dy * k
+	return cx + dx * k, cy + dy * k, cue
 end
 
 -- a speech bubble over player p, measured but not drawn yet. small: the "..." of someone typing (nil
@@ -3193,11 +3212,12 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
 	local sx, sy = x, y                                                   -- (where it comes from: the tail points there)
+	local cue                                                             -- ("below": a docked bubble's tag)
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 	elseif small then
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
-		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
+		x, y, cue = PC.edgePoint(head)                                    -- (off screen: on the edge, the speaker's side)
 		docked = true
 		local cx, cy = UiWidth() / 2, UiHeight() / 2                      -- (the source: past that edge, the same way)
 		sx, sy = cx + (x - cx) * 2, cy + (y - cy) * 2
@@ -3239,7 +3259,7 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	x = math.max(M + halfW + side, math.min(UiWidth() - M - halfW - side, x))   --  it cut off at the screen edge, 2026-10-15)
 	y = math.max(M + up, math.min(UiHeight() - M, y))
 	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
-	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy,
+	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy, cue = cue,
 		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked, dist = dist,
 		tr = trm, trvh = trvh, troff = troff,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
@@ -3354,6 +3374,20 @@ function PC.bubbleDraw(L)
 		UiFont(L.font, L.size)
 	end
 	if L.shout and not dev then UiColor(0.96, 0.45, 0.12, ab); UiRoundedRectOutline(w, h, 10, 4) end
+	if L.cue then                                                        -- (a docked bubble: "below" you)
+		UiPush()
+		UiFont("bold.ttf", 15)
+		local cw = (UiGetTextSize(L.cue) or 40) + 14
+		UiTranslate(w - cw + 8, -12)
+		UiColor(0.13, 0.12, 0.16, 0.92 * ab)
+		UiRoundedRect(cw, 20, 6)
+		UiTranslate(cw / 2, 10)
+		UiAlign("center middle")
+		UiColor(1, 0.82, 0.3, ab)
+		UiText(L.cue)
+		UiPop()
+		UiFont(L.font, L.size)
+	end
 	UiTranslate(15, 11)
 	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
 		UiPush()
