@@ -3191,12 +3191,15 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	-- depth (along the view) shrinks toward the screen edges, and the camera (third person) swings around
 	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
+	local sx, sy = x, y                                                   -- (where it comes from: the tail points there)
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 	elseif small then
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
 		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
 		docked = true
+		local cx, cy = UiWidth() / 2, UiHeight() / 2                      -- (the source: past that edge, the same way)
+		sx, sy = cx + (x - cx) * 2, cy + (y - cy) * 2
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local cfg = PC.cfg
@@ -3234,12 +3237,34 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	x = math.max(M + halfW, math.min(UiWidth() - M - halfW, x))
 	y = math.max(M + up, math.min(UiHeight() - M, y))
 	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
-	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime,
+	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy,
 		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked, dist = dist,
 		tr = trm, trvh = trvh, troff = troff,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 PC.TR_GAP = 10                                                         -- (px between a bubble's text and its translation)
+
+-- THE TAIL points where the voice / text comes from (the user, 2026-10-15: "put the pointer around the bubble where the
+-- voice/text is actually coming from", moving with it): the side of the w x h box (its own units, top left 0, 0) that the
+-- source (lx, ly) is out of, and the place on it nearest the source, kept off the round corners.
+-- -> side ("bottom" / "top" / "left" / "right"), and the tail's centre (tx, ty) on the box's border
+PC.TAIL_HALF = 9.2                                                     -- (the tail: a 13 px square turned 45 degrees)
+function PC.bubbleTail(w, h, lx, ly)
+	-- (the border's point nearest the source: a speaker below and left of a wide bubble gets the tail at its bottom
+	--  left, not near the middle as a line from the centre gives; the side: the way the source is farthest out)
+	local edge = 10 + PC.TAIL_HALF                                        -- (the corners' radius + the tail's half)
+	local function clampTo(v, lo, hi) if lo > hi then return (lo + hi) / 2 end return math.max(lo, math.min(hi, v)) end
+	local outX = lx < 0 and -lx or (lx > w and lx - w or 0)
+	local outY = ly < 0 and -ly or (ly > h and ly - h or 0)
+	if outY >= outX then
+		local px = clampTo(lx, edge, w - edge)
+		if ly < 0 then return "top", px, 0 end
+		return "bottom", px, h                                            -- (below, or behind the bubble: the bottom)
+	end
+	local py = clampTo(ly, edge, h - edge)
+	if lx < 0 then return "left", 0, py end
+	return "right", w, py
+end
 
 -- draw a laid-out bubble (thin black outline), raised by L.lift px; a raised one gets a thin line down
 -- to the speaker's head
@@ -3283,15 +3308,17 @@ function PC.bubbleDraw(L)
 		UiColor(0.5, 0.25, 0.75, 0.85 * ab)
 		UiPush(); UiTranslate(-6, -6); UiRoundedRectOutline(w + 12, h + 12, 16, 2); UiPop()
 	end
+	-- the tail's place: the source in the box's units (the box: (L.x, L.y - lift) is its bottom middle + 14 px, scaled)
+	local _, tcx, tcy = PC.bubbleTail(w, h, ((L.sx or L.x) - L.x) / s + w / 2, ((L.sy or L.y) - (L.y - L.lift)) / s + h + 14)
 	UiColor(0, 0, 0, 0.9 * ab)
 	if dev ~= "radio" then UiPush(); UiTranslate(-k, -k); UiRoundedRect(w + 2 * k, h + 2 * k, 10 + k); UiPop() end
-	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
+	UiPush(); UiTranslate(tcx - PC.TAIL_HALF, tcy); UiRotate(45); UiTranslate(-k, -k); UiRect(13 + 2 * k, 13 + 2 * k); UiPop()
 	if dev == "radio" then UiColor(0.9, 0.97, 0.87, ab)
 	elseif dev == "loudspeaker" then UiColor(1, 0.97, 0.82, ab)
 	elseif dev == "pa" then UiColor(0.95, 0.92, 1, ab)
 	elseif L.whisper then UiColor(0.86, 0.87, 1, ab) else UiColor(1, 1, 1, ab) end
 	UiRoundedRect(w, h, 10)
-	UiPush(); UiTranslate(w / 2 - 9, h); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
+	UiPush(); UiTranslate(tcx - PC.TAIL_HALF, tcy); UiRotate(45); UiRect(13, 13); UiPop()   -- the tail (covers the outline at its root)
 	if dev == "radio" then                                               -- (a walkie: a dotted, crackly outline and a small walkie)
 		UiColor(0.12, 0.38, 0.12, 0.9 * ab)
 		for xx = 4, w - 10, 14 do
