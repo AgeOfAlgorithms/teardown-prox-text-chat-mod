@@ -5,6 +5,11 @@
 -- scripts (each script has its own Lua state anyway) and other mods can #include the same file.
 -- This mod does not touch tools, player parameters or the level.
 #include "chat_core.lua"
+#include "voice.lua"
+#include "devices.lua"
+#include "heads.lua"
+#include "apicheck.lua"
+#include "padui.lua"
 
 -- Working with any game mode (mods cannot call each other; the registry is shared by every script):
 --   a game sets   SetBool("proxchat.lobby", true)   while its lobby / menu is up: everything said is heard by
@@ -28,8 +33,13 @@ end
 
 function client.tick(dt)
 	PC.clientTick(dt)
+	PC.apiCheckTick()                                                  -- (a game mod's proxchat.* keys: apicheck.lua)
 end
 
 function client.draw()
 	PC.draw()
+end
+
+function client.postUpdate(dt)
+	PC.bobApply()                                                      -- (heads.lua: talking heads bobble)
 end
