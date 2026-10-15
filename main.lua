@@ -9,7 +9,6 @@
 #include "devices.lua"
 #include "heads.lua"
 #include "apicheck.lua"
-#include "padtest.lua"
 #include "padui.lua"
 
 -- Working with any game mode (mods cannot call each other; the registry is shared by every script):

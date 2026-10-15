@@ -2858,7 +2858,7 @@ function PC.command(text)
 		PC.setPage("settings")
 	elseif cmd == "wheel" and PC.wheelCommand then
 		PC.wheelCommand(rest)
-	elseif cmd == "padtest" and PC.padTestToggle then
+	elseif cmd == "padtest" and PC.padTestToggle then                  -- (only in the TEST builds: tools/diag/padtest.lua)
 		PC.padTestToggle()
 	elseif cmd == "hint" then
 		PC.setHideHint(not c.hideHint)
