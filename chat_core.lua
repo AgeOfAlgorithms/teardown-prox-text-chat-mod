@@ -3234,7 +3234,8 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	local M = PC.EDGE_MARGIN
 	local halfW, up = (w / 2 + 2) * s, (h + 16) * s
 	local x0, y0 = x, y
-	x = math.max(M + halfW, math.min(UiWidth() - M - halfW, x))
+	local side = (PC.TAIL_HALF + 2) * s                                   -- (room for a tail on the side: docked bubbles had
+	x = math.max(M + halfW + side, math.min(UiWidth() - M - halfW - side, x))   --  it cut off at the screen edge, 2026-10-15)
 	y = math.max(M + up, math.min(UiHeight() - M, y))
 	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
 	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy,
