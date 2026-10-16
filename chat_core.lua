@@ -3078,11 +3078,15 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	local pw = prefix ~= "" and PC.textWidth(prefix, size) or 0
 	local iw = e.pad and math.floor(size * 0.95) or 0                  -- (the controller mark's room)
 	local tw = math.max(120, w - tagW - iw - pw)
-	UiFont(PC.chatFont(e.text), size)
+	-- (a translated line: the ORIGINAL smaller, the translation under it at full size - the user, 2026-10-16: the
+	--  translation is what the reader reads; the original stays on top, as said)
+	local os = e.tr and math.floor(size * PC.TR_ORIG + 0.5) or size
+	local odrop = math.floor((size - os) * 0.7 + 0.5)                   -- (down a little: level with the name's letters)
+	UiFont(PC.chatFont(e.text), os)
 	UiWordWrap(tw)
 	local vis = PC.chatVisual(e.text)
 	local _, th = UiGetTextSize(vis)
-	th = math.max(th or size, size)
+	th = math.max((th or os) + odrop, size)
 	local trVis, trH = nil, 0                                         -- (its translation, voice.lua: under the text, wrapped
 	if e.tr then                                                      --  the same, in its own font for its script)
 		trVis = PC.chatVisual(e.tr)
@@ -3119,9 +3123,12 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		elseif whisper then UiColor(0.8, 0.82, 1, fa)                    -- (lavender: readable, still not a Speak line)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
 		else UiColor(1, 1, 1, a) end
-		UiFont(PC.chatFont(e.text), size)
+		UiFont(PC.chatFont(e.text), os)
 		UiWordWrap(tw)
+		UiPush()
+		UiTranslate(0, odrop)
 		UiText(vis)
+		UiPop()
 		if trVis then
 			local col = PC.TR_COLOR
 			UiTranslate(0, th + 2)
@@ -3177,12 +3184,14 @@ PC.EDGE_MARGIN = 8
 -- a bubble text's font, shaped form and size, measured once and kept (every frame re-measuring every
 -- bubble cost the most of the drawing; a garbled text changes only when a letter turns)
 PC.measured, PC.measuredN = {}, 0
-function PC.measure(text)
+-- scale: the text's size share (PC.TR_ORIG: the original of a translated line, smaller than its translation)
+function PC.measure(text, scale)
 	local cfg = PC.cfg
-	local key = cfg.bubbleW .. "|" .. text
+	local key = cfg.bubbleW .. "|" .. (scale or 1) .. "|" .. text
 	local m = PC.measured[key]
 	if m then return m end
 	local font, size = PC.bubbleFont(text)
+	if scale then size = math.floor(size * scale + 0.5) end
 	local vis = PC.chatVisual(text)
 	UiPush()
 	PC.noWild()
@@ -3224,7 +3233,7 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local cfg = PC.cfg
-	local mt = PC.measure(text)
+	local mt = PC.measure(text, (tr and tr ~= "" and not small) and PC.TR_ORIG or nil)   -- (translated: the original smaller)
 	local font, size, vis, tw, th, lh = mt.font, mt.size, mt.vis, mt.tw, mt.th, mt.lh
 	-- a long message: cfg.bubbleLines lines visible, scrolling down at reading pace from t0
 	local vh, off, scrollTime = th, 0, 0
@@ -3265,6 +3274,7 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 PC.TR_GAP = 10                                                         -- (px between a bubble's text and its translation)
+PC.TR_ORIG = 0.75                                                      -- (a translated line's original: this share of the size)
 
 -- THE TAIL points where the voice / text comes from (the user, 2026-10-15: "put the pointer around the bubble where the
 -- voice/text is actually coming from", moving with it): the side of the w x h box (its own units, top left 0, 0) that the
