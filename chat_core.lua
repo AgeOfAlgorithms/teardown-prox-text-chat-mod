@@ -749,13 +749,12 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 9                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 8                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
                                                                     --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
-                                                                    --     proxchat.typing.<me> also on a controller's pages;
-                                                                    --  9: proxchat.listen.<p>, effects on what one player hears)
+                                                                    --     proxchat.typing.<me> also on a controller's pages)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -2456,7 +2455,6 @@ function PC.babbleTick()
 				end
 				if pos then
 					local set = (s[4] and q.set == "voice") and "shout" or q.set
-					if PC.listenFx and PC.listenFx() and q.how ~= "flat" then set = "radio" end   -- (proxchat.listen.<me>: muffled)
 					local clips = B.clips[set]
 					local clip = clips[s[1] % #clips + 1]
 					local jitter = s[4] and (1.04 + 0.16 * math.random()) or (0.94 + 0.12 * math.random())

@@ -286,13 +286,13 @@ function PC.devServerTick()
 					table.sort(pk)
 					for _, q in ipairs(pk) do
 						local v = GetString(reg .. ".effects.player." .. q)
-						if v ~= "" and tonumber(q) then fxRaw[#fxRaw + 1] = {"p", tonumber(q), v, "effects.player." .. q} end
+						if v ~= "" and tonumber(q) then fxRaw[#fxRaw + 1] = {"p", tonumber(q), v, "player." .. q} end
 					end
 				end
 			else
 				local v = GetString(reg .. ".effects." .. k)
 				local id = PC.FX_NAME[k:lower()]
-				if v ~= "" and id then fxRaw[#fxRaw + 1] = {"m", id, v, "effects." .. k}
+				if v ~= "" and id then fxRaw[#fxRaw + 1] = {"m", id, v, k}
 				elseif v ~= "" and PC.problem then
 					PC.problem(reg .. ".effects." .. k, "not a mode or device (whisper, speak, yell, dead, radio, megaphone, pa; "
 						.. "one player: effects.player.<id>) - ignored")
@@ -300,25 +300,19 @@ function PC.devServerTick()
 			end
 		end
 	end
-	-- what one player HEARS (proxchat.listen.<p>): over every voice in that player's own mix (a blind monster hears
-	-- everyone muffled while the others hear each other clear), and their typed lines' babble band-passed
-	for _, q in ipairs(PC.allPlayers()) do
-		local v = GetString(reg .. ".listen." .. q)
-		if v ~= "" then fxRaw[#fxRaw + 1] = {"l", q, v, "listen." .. q} end
-	end
 	local fs = {}
 	for i, e in ipairs(fxRaw) do fs[i] = e[1] .. e[2] .. "=" .. e[3] end
 	fs = table.concat(fs, "\n")
 	if fs ~= s.fxSig then
 		s.fxSig = fs
-		local fx = {modes = {}, players = {}, listeners = {}}
+		local fx = {modes = {}, players = {}}
 		for _, e in ipairs(fxRaw) do
 			local v, why = PC.fxParse(e[3])
 			if why and PC.problem then
-				PC.problem(reg .. "." .. e[4], PC.problemValue(e[3]) .. ": " .. why .. (v and " (skipped; the rest is used)" or " - ignored"))
+				PC.problem(reg .. ".effects." .. e[4], PC.problemValue(e[3]) .. ": " .. why .. (v and " (skipped; the rest is used)" or " - ignored"))
 			end
 			if v then
-				if e[1] == "m" then fx.modes[e[2]] = v elseif e[1] == "l" then fx.listeners[e[2]] = v else fx.players[e[2]] = v end
+				if e[1] == "m" then fx.modes[e[2]] = v else fx.players[e[2]] = v end
 			end
 		end
 		s.fxN = (s.fxN or 0) + 1
@@ -515,27 +509,18 @@ function PC.devLine(p, ch, vs)
 end
 
 -- ---- SOUND EFFECTS: a mode's or kind's (proxchat.effects.<name>) with the player's own over it
--- (proxchat.effects.player.<p>), and over both what I hear (proxchat.listen.<me>); nil: the defaults (a device's
--- preset; plain for a voice)
+-- (proxchat.effects.player.<p>); nil: the defaults (a device's preset; plain for a voice)
 function PC.fxFor(id, p)
 	local c = PC.c
 	local fx = c and c.fx
 	if not fx then return nil end
 	local a = fx.modes and fx.modes[id]
 	local b = p and fx.players and fx.players[p]
-	local l = PC.listenFx()
-	if not a and not b and not l then return nil end
+	if not a and not b then return nil end
 	local out = {}
 	for k, v in pairs(a or {}) do out[k] = v end
 	for k, v in pairs(b or {}) do out[k] = v end
-	for k, v in pairs(l or {}) do out[k] = v end
 	return out
-end
-
--- (client) the effects on everything I hear (proxchat.listen.<me>), or nil
-function PC.listenFx()
-	local fx = PC.c and PC.c.fx
-	return fx and fx.listeners and fx.listeners[GetLocalPlayer()] or nil
 end
 
 -- ---- VOICE (the feed)
