@@ -56,10 +56,10 @@
 -- Translate tab next to Voice shows it (Koetama's translations_status: into, and each pair's state).
 -- Every FULL line another player says that goes into this player's history or a bubble - typed, or spoken once
 -- finished (never live words), any mode, Global and the dead's channels too - is sent to Koetama (the feed's
--- to_translate) while Koetama runs and translates (not while it says it is off); only lines heard in full (not garbled
--- from a buffer; a typed one walked into range: then). Koetama translates on this PC (Mozilla's models) and answers
--- with a "translation"; it shows under the original in the history, the feed and its bubble, in its own colour
--- (PC.TR_COLOR).
+-- to_translate) while Koetama runs and translates (not while it says it is off). Koetama translates on this PC (Mozilla's
+-- models) and answers with a "translation"; it shows under the original in the history, the feed and its bubble, in its
+-- own colour (PC.TR_COLOR). A line heard garbled from a buffer is translated too, and its translation garbled as much
+-- (chat_core's PC.trShare / PC.trShown: the same share of its letters shows; walking closer reveals more of both).
 --
 -- /dummy voice: three VOICE dummies in a row (whisperer, speaker, yeller; green heads), separate from the
 -- chat's test dummies (/dummy): they talk in turns of cfg.voiceTurn s - the helper plays a recorded voice
@@ -863,13 +863,15 @@ function PC.trSend(vo)
 	return PC.trOn(vo) and vo.tr.into ~= ""
 end
 
--- (chat_core: a history entry e, and its bubble b, heard in full) another player's line: translated while Koetama runs
--- and translates. Each entry is asked once (e.trId); the reply goes onto both (PC.trReply).
+-- (chat_core: a history entry e, and its bubble b, shown - in full or garbled from a buffer) another player's line:
+-- translated while Koetama runs and translates. Each entry is asked once (e.trId); the reply goes onto both
+-- (PC.trReply). The whole line is asked (b.full: a garbled entry's text is boxes); a garbled line's translation is
+-- garbled as much where it is drawn (PC.trShown).
 function PC.trWant(e, b)
 	local c = PC.c
 	local vo = c and c.voice
 	if not PC.trSend(vo) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
-	local text = PC.trCut(e.text or "")
+	local text = PC.trCut((b and b.full) or e.text or "")
 	if text == "" then return end
 	local tr = vo.tr
 	-- FLOODS (2026-10-09): each line costs every listener's Koetama CPU. A line already translated (the same text, into

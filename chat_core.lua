@@ -451,6 +451,38 @@ function PC.histText(b)
 	return PC.garble(b.full, math.max(0, b.bestF or 0), b.seed or b.id or 0, 0)
 end
 
+-- A GARBLED LINE'S TRANSLATION (the user, 2026-10-19: option 1): a line heard from a buffer is translated too, and its
+-- translation garbled as much as the line - the same share of its letters shows, so a listener who can't read the
+-- original makes out as much as one who can, and walking closer reveals more of both.
+-- the share of b's letters made out (f: now, or the best yet; a spoken line: the mean of its letters', as heard when
+-- said); nil: heard in full
+function PC.trShare(b, f)
+	if b.level == "full" then return nil end
+	if b.fixed then
+		local n, s = 0, 0
+		for _, x in ipairs(b.fracs or {}) do n, s = n + 1, s + x end
+		return n > 0 and s / n or 0
+	end
+	return math.max(0, f or 0)
+end
+
+-- a translation as shown: garbled to share (nil: all of it); seed: its line's (its own letters picked from seed + 1)
+function PC.trShown(tr, share, seed, tick)
+	if not tr or not share then return tr end
+	return PC.garble(tr, share, (seed or 0) + 1, tick or 0)
+end
+
+-- (the history) an entry's translation as shown: e.trF / e.trSeed set where its text is (kept: the history draws it
+-- every frame)
+function PC.trHist(e)
+	if not e.tr then return nil end
+	local share = e.far and (e.trF or 0) or nil
+	if not share then return e.tr end
+	local key = e.tr .. "|" .. share
+	if e.trVK ~= key then e.trVK, e.trV = key, PC.trShown(e.tr, share, e.trSeed) end
+	return e.trV
+end
+
 -- characters removed outright: zero-width ones, direction overrides / isolates, line and paragraph
 -- separators, the BOM; and invisible "letters" used for blank or look-alike names (2026-10-09): the soft hyphen, the
 -- grapheme joiner, the Arabic letter mark, Hangul fillers, Khmer inherent vowels, Mongolian selectors, the braille
@@ -1980,12 +2012,12 @@ function PC.receive(m)
 				else                                                        --  nothing: the same as its live bubble showed)
 					b.level, b.text, b.mumble, b.fracs = "mumble", "...", true, cutFracs
 				end
-				b.entry = {ch = mode, p = m.p, name = m.name, text = PC.histText(b), shout = b.shout, far = b.level ~= "full", me = m.p == me, voice = true}
+				b.entry = {ch = mode, p = m.p, name = m.name, text = PC.histText(b), shout = b.shout, far = b.level ~= "full", me = m.p == me, voice = true,
+					trF = PC.trShare(b), trSeed = b.seed or b.id or 0}
 				PC.addHist(b.entry)
-				if b.level == "full" then
-					heard = cutText
-					if PC.trWant then PC.trWant(b.entry, b) end                 -- (heard clear: translated, if Koetama translates)
-				end
+				if b.level == "full" then heard = cutText end
+				if PC.trWant then PC.trWant(b.entry, b) end                     -- (translated, if Koetama translates - garbled
+				                                                                --  as the line is: PC.trShare)
 			end
 			PC.updateBubble(m.p, b, b.t, true)
 		end
@@ -2034,12 +2066,13 @@ function PC.updateBubble(p, b, now, fresh)
 		if b.entry and b.entry.via and not b.entry.far and far then      -- (a device gave all of it: devices.lua)
 		elseif b.entry then
 			b.entry.text, b.entry.far, b.entry.shout = htext, far, b.shout
+			b.entry.trF, b.entry.trSeed = PC.trShare(b, b.bestF), b.seed or b.id or 0
 		else
 			b.entry = {ch = b.mode, p = p, name = b.name, text = htext, shout = b.shout, far = far, me = p == GetLocalPlayer(), voice = b.voice,
-				pad = b.pad}
+				pad = b.pad, trF = PC.trShare(b, b.bestF), trSeed = b.seed or b.id or 0}
 			PC.addHist(b.entry)
 		end
-		if b.level == "full" and PC.trWant then PC.trWant(b.entry, b) end   -- (every word made out now: translated, voice.lua)
+		if PC.trWant then PC.trWant(b.entry, b) end                      -- (translated, voice.lua; garbled as the line is)
 	end
 end
 
@@ -3088,9 +3121,10 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	local _, th = UiGetTextSize(vis)
 	th = math.max((th or os) + odrop, size)
 	local trVis, trH = nil, 0                                         -- (its translation, voice.lua: under the text, wrapped
-	if e.tr then                                                      --  the same, in its own font for its script)
-		trVis = PC.chatVisual(e.tr)
-		UiFont(PC.chatFont(e.tr), size)
+	local trText = PC.trHist(e)                                       --  the same, in its own font for its script; garbled
+	if trText then                                                    --  as the line is)
+		trVis = PC.chatVisual(trText)
+		UiFont(PC.chatFont(trText), size)
 		UiWordWrap(tw)
 		local _, h2 = UiGetTextSize(trVis)
 		trH = math.max(h2 or size, size) + 2
@@ -3132,8 +3166,8 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		if trVis then
 			local col = PC.TR_COLOR
 			UiTranslate(0, th + 2)
-			UiColor(col[1], col[2], col[3], a)
-			UiFont(PC.chatFont(e.tr), size)
+			UiColor(col[1], col[2], col[3], e.far and 0.8 * a or a)
+			UiFont(PC.chatFont(trText), size)
 			UiWordWrap(tw)
 			UiText(trVis)
 		end
@@ -3531,7 +3565,8 @@ function PC.drawBubbles()
 			if (p ~= me or (third and not c.hideOwn)) and not b.hidden and PC.inReach(p, b) and not (b.voice and c.hideVoiceBubbles)
 				and not (PC.devCovers and PC.devCovers(p, b)) then                  -- (its holder's megaphone shows it: devices.lua)
 				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t, b.liveHold,
-					b.level == "full" and b.tr or nil, b.trT)                       -- (its translation, voice.lua)
+					PC.trShown(b.tr, PC.trShare(b, PC.bufferF(p, b)), b.seed or b.id or 0, math.floor(now * 3)), b.trT)   -- (its translation, voice.lua:
+					                                                                --  garbled as the line is)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
 					L.age = age
