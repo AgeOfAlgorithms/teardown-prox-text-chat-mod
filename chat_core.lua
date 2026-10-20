@@ -204,7 +204,8 @@ do
 		winW = 1000, winH = 400, -- the chat window's size (and the input line's width) unless the player sets one (Settings)
 		winMinW = 600, winMaxW = 1600, winMinH = 200, winMaxH = 1000,
 		pageMinW = 980,          -- the Settings and Voice pages: at least this wide (their rows have fixed widths)
-		settingsH = 710,         -- ... and the Settings page at least this tall (+40 for the host's walls row)
+		settingsH = 750,         -- ... and the Settings page at least this tall (+40 for the host's walls row; 750 with
+		                         --     ping.lua's "Ping size" row, 2026-10-20)
 		textMin = 0.7, textMax = 1.7,   -- the chat's text size (Settings): this much of the normal size
 		uiScale = 0.8,           -- the chat UI (window, feed, input line, hint) is drawn this much smaller
 		edge = 24, edgeBottom = 60,  -- px (before uiScale) from the screen's edges where the chat docks (the bottom: room
@@ -3741,6 +3742,7 @@ function PC.drawSettings(W, H)
 		if PC.voiceHostRows then PC.voiceHostRows(rows) end            -- (voice.lua: where the voice room lives)
 	end
 	rows[#rows + 1] = {"set_vb", "Bubbles for spoken lines", not c.hideVoiceBubbles, "Show", "Hide", function(v) PC.setHideVoiceBubbles(not v) end}
+	if PC.pingRows then PC.pingRows(rows) end                         -- (ping.lua: the pins' size)
 	PC.drawRows(rows)
 	UiTranslate(0, #rows * 40 + 10)
 	PC.rangeBar(W, not PC.isHost())                                   -- (everyone sees the distances; the host sets them)

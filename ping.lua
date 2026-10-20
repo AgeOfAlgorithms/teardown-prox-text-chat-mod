@@ -15,7 +15,10 @@
 
 do
 	local defaults = {
-		pingLife = 5,            -- s a pin stays
+		pingLife = 5,            -- s a pin stays in full
+		pingFade = 2.5,          -- s it then takes to fade out (slowly: the user, 2026-10-20)
+		pingSizeMin = 0.5,       -- Settings' "Ping size": 50 % .. 200 % (savegame.mod.pcpingsize)
+		pingSizeMax = 2,
 		pingMax = 300,           -- m: how far a ping reaches (the crosshair's ray)
 		pingRate = 2,            -- pings a second a player may make (a burst of pingBurst)
 		pingBurst = 3,
@@ -136,13 +139,46 @@ function PC.pingBlocked()
 	return false
 end
 
+-- (client) Settings' "Ping size" (a scale of the pins on this player's screen, saved)
+function PC.pingSize()
+	local c, cfg = PC.C(), PC.cfg
+	if not c.pingSize then
+		local v = HasKey(cfg.save .. "pingsize") and PC.finite(GetFloat(cfg.save .. "pingsize")) or 1
+		c.pingSize = math.max(cfg.pingSizeMin, math.min(cfg.pingSizeMax, v))
+	end
+	return c.pingSize
+end
+
+-- done: let go of the slider - saved, and a preview pin (only for you) where you aim, to see the size on the map
+function PC.setPingSize(v, done)
+	local c, cfg = PC.C(), PC.cfg
+	v = math.max(cfg.pingSizeMin, math.min(cfg.pingSizeMax, PC.finite(v) or 1))
+	c.pingSize = math.floor(v * 20 + 0.5) / 20                       -- (5 % steps)
+	if not done then return end
+	SetFloat(cfg.save .. "pingsize", c.pingSize)
+	local at = PC.pingAim()
+	if not at then return end
+	c.pings = c.pings or {}
+	for i = #c.pings, 1, -1 do if c.pings[i].preview then table.remove(c.pings, i) end end
+	c.pings[#c.pings + 1] = {p = GetLocalPlayer(), pos = at, t = GetTime(), col = PC.PING_COLOR, name = "Ping size", preview = true}
+end
+
+-- (chat_core's Settings page) its row: the slider, 50 % .. 200 %
+function PC.pingRows(rows)
+	local cfg = PC.cfg
+	local span = cfg.pingSizeMax - cfg.pingSizeMin
+	rows[#rows + 1] = {"set_ps", "Ping size", "slider", (PC.pingSize() - cfg.pingSizeMin) / span,
+		function(v, done) PC.setPingSize(cfg.pingSizeMin + v * span, done) end,
+		function(v) return string.format("%d%%", math.floor((cfg.pingSizeMin + v * span) * 100 + 0.5)) end}
+end
+
 -- (client, each tick) the ping buttons: the middle mouse button; on a controller L1 + R1 together (within PC.PING_CHORD
--- s of each other); and old pins go
+-- s of each other); and old pins go (in full for cfg.pingLife s, then fading for cfg.pingFade s)
 function PC.pingTick(now)
 	local c = PC.C()
 	if c.pings then
 		for i = #c.pings, 1, -1 do
-			if now - c.pings[i].t > PC.cfg.pingLife then table.remove(c.pings, i) end
+			if now - c.pings[i].t > PC.cfg.pingLife + PC.cfg.pingFade then table.remove(c.pings, i) end
 		end
 	end
 	local want = InputPressed("mmb")
@@ -159,24 +195,34 @@ function PC.pingTick(now)
 	if at then PC.call("pc_ping", at[1], at[2], at[3]) end
 end
 
+-- a pin's opacity at age s: full for cfg.pingLife s, then fading out over cfg.pingFade s (eased: slow at first)
+function PC.pingAlpha(age)
+	local cfg = PC.cfg
+	if age <= cfg.pingLife then return 1 end
+	local f = math.min(1, (age - cfg.pingLife) / cfg.pingFade)
+	return 1 - f * f
+end
+
 -- (client draw) the pins: a ring on the spot with a stem up to the pinger's name and the distance; off screen, on the
--- screen's edge in its direction. They pop in, then fade in their last 0.6 s
+-- screen's edge in its direction. They pop in, stay, then fade out slowly (PC.pingAlpha); Settings' "Ping size" scales
+-- them
 function PC.pingDraw()
 	local c = PC.C()
 	if not c.pings or #c.pings == 0 then return end
 	local now, cfg = GetTime(), PC.cfg
 	local W, H = UiWidth(), UiHeight()
 	local head = PC.listenerHead()
+	local size = PC.pingSize()
 	for _, pg in ipairs(c.pings) do
 		if pg.fresh then
 			pg.fresh = nil
 			if UiSound then pcall(UiSound, PC.PING_SOUND) end
 		end
 		local age = now - pg.t
-		local a = math.max(0, math.min(1, (cfg.pingLife - age) / 0.6))
+		local a = PC.pingAlpha(age)
 		local pop = 1 + 0.8 * math.max(0, 1 - age / 0.25)            -- (the ring starts big and settles: it catches the eye)
 		local x, y, d = UiWorldToPixel(pg.pos)
-		local m = 40
+		local m = 40 * size
 		local edge = not (d and d > 0 and x >= m and x <= W - m and y >= m and y <= H - m)
 		if edge then
 			x, y = PC.edgePoint(pg.pos)
@@ -186,6 +232,7 @@ function PC.pingDraw()
 		local col = pg.col
 		UiPush()
 		UiTranslate(x, y)
+		UiScale(size)
 		UiAlign("center middle")
 		UiColor(0, 0, 0, 0.45 * a)                                   -- (a dark halo: readable on snow and sky)
 		UiImageBox("ui/common/circle_filled_20x20.png", 34 * pop, 34 * pop, 0, 0)
@@ -208,7 +255,7 @@ function PC.pingDraw()
 		UiFont("bold.ttf", 22)
 		UiTextShadow(0, 0, 0, 0.8 * a, 2, 0.6)
 		UiColor(col[1], col[2], col[3], a)
-		UiText(string.format("%d m", math.floor(dist + 0.5)))
+		if not pg.preview then UiText(string.format("%d m", math.floor(dist + 0.5))) end
 		UiTranslate(0, -22)
 		UiFont(PC.chatFont(pg.name), 20)
 		UiColor(1, 1, 1, 0.9 * a)
