@@ -781,12 +781,13 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 8                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 9                                                 -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
                                                                     --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
-                                                                    --     proxchat.typing.<me> also on a controller's pages)
+                                                                    --     proxchat.typing.<me> also on a controller's pages;
+                                                                    --  9: pings - proxchat.team.<p>, proxchat.noping, 2026-10-20)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1050,6 +1051,7 @@ PC.SEND = {
 	pc_live = function(...) ServerCall("server.pc_live", ...) end,
 	pc_talk = function(...) ServerCall("server.pc_talk", ...) end,
 	pc_room = function(...) ServerCall("server.pc_room", ...) end,
+	pc_ping = function(...) ServerCall("server.pc_ping", ...) end,     -- (ping.lua)
 }
 
 function PC.call(name, ...)
@@ -2150,6 +2152,7 @@ function PC.clientTick(dt)
 	PC.revealBubbles(now)
 	PC.babbleTick()
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
+	if PC.pingTick then PC.pingTick(now) end                           -- (ping.lua: the ping buttons, old pins go)
 end
 
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
@@ -4312,8 +4315,9 @@ function PC.draw()
 	PC.preKeys()
 	UiPush()
 	PC.noWild()                                                         -- (no UiText "[[...]]" markup in anything the chat draws:
-	PC.drawBubbles()                                                    --  player text could hold a browser link; voice.lua's own
-	                                                                    --  Koetama link turns them on for itself)
+	if PC.pingDraw then PC.pingDraw() end                               --  player text could hold a browser link; voice.lua's own
+	PC.drawBubbles()                                                    --  Koetama link turns them on for itself; ping.lua's pins
+	                                                                    --  go under the bubbles)
 	if PC.voiceDraw then PC.voiceDraw() end
 	local L = PC.layout()
 	c.L = L                                                             -- (voice.lua's own live words sit by the input line)
