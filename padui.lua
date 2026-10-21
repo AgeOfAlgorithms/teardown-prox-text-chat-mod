@@ -145,14 +145,7 @@ end
 
 -- the talk mode one step, round (the user, 2026-10-12: R2 on Global -> Whisper)
 function PC.padModeStep(step)
-	local cur = PC.mode()
-	for i, x in ipairs(PC.MODES) do
-		if x[1] == cur then
-			local j = (i - 1 + step) % #PC.MODES + 1
-			PC.setMode(PC.MODES[j][1])
-			return
-		end
-	end
+	PC.setMode(PC.stepMode(PC.mode(), step))                          -- (Global skipped while it is off: proxchat.noglobal)
 end
 
 local function pressed(...)

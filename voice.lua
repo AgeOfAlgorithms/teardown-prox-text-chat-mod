@@ -1134,6 +1134,7 @@ end
 function PC.setVoiceMode(m)
 	local vo = PC.voice()
 	if not PC.TALK_MODE_I[m] or vo.vmode == m then return end
+	if PC.modeAllowed and not PC.modeAllowed(m) then return end       -- (Global off: proxchat.noglobal)
 	vo.modeFrom, vo.modeT = vo.vmode, GetTime()
 	vo.vmode = m
 	vo.vmodeT = 0                                                      -- (the host hears of it at once: shared.pcVMode)
@@ -1141,10 +1142,12 @@ function PC.setVoiceMode(m)
 	PC.setMode(m)                                                      -- (and the input line's: one mode for both)
 end
 
--- talk key + Tab: Whisper -> Speak -> Yell -> Global -> Whisper
+-- talk key + Tab: Whisper -> Speak -> Yell -> Global -> Whisper (Global skipped while it is off: proxchat.noglobal)
 function PC.nextVoiceMode()
 	local vo = PC.voice()
-	PC.setVoiceMode(PC.TALK_MODES[PC.TALK_MODE_I[vo.vmode] % #PC.TALK_MODES + 1])
+	local m = PC.TALK_MODES[PC.TALK_MODE_I[vo.vmode] % #PC.TALK_MODES + 1]
+	if PC.modeAllowed and not PC.modeAllowed(m) then m = PC.TALK_MODES[PC.TALK_MODE_I[m] % #PC.TALK_MODES + 1] end
+	PC.setVoiceMode(m)
 end
 
 -- the Voice page: push to talk (true) or always on (false), saved; the helper hears of it now

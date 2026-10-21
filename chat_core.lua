@@ -782,14 +782,15 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 10                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 11                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
                                                                     --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
                                                                     --     proxchat.typing.<me> also on a controller's pages;
                                                                     --  9: pings - proxchat.team.<p>, proxchat.noping, 2026-10-20;
-                                                                    --  10: a ping's reach, proxchat.ranges "ping=<m>", 2026-10-21)
+                                                                    --  10: a ping's reach, proxchat.ranges "ping=<m>", 2026-10-21;
+                                                                    --  11: proxchat.noglobal, 2026-10-21)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1297,6 +1298,10 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		return
 	end
 	ch = PC.validMode(ch)
+	if ch == "g" and s.noGlobal and not PC.inLobby() and not s.chan[p] then   -- (proxchat.noglobal: no Global lines - a
+		if seq then pcAck(p, seq) end                                          --  channel's players still talk to their
+		return                                                                 --  channel; taken, so it isn't resent)
+	end
 	if s.time - (s.last[p] or -10) < cfg.rate then return end            -- (no spamming: the resend gets in later)
 	s.last[p] = s.time
 	if seq then pcAck(p, seq) end
@@ -1447,6 +1452,8 @@ function PC.serverTick(dt)
 	PC.hearAllTick()
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
+	local noGlobal = GetBool(PC.cfg.reg .. ".noglobal")                 -- (a game: no Global chat now - set every tick)
+	if noGlobal ~= s.noGlobal then s.noGlobal = noGlobal; shared.pcNoGlobal = noGlobal end
 	PC.heartbeat()
 	if PC.voiceServerTick then PC.voiceServerTick() end               -- (voice.lua: stale live words go)
 	-- a game's switches (set every tick by it): walls, and who talks only to the dead
@@ -1632,10 +1639,36 @@ function PC.mode()
 	return PC.C().mode
 end
 
+-- GLOBAL OFF (proxchat.noglobal, API 11 - a game where chat must stay local, 2026-10-21): this player can't pick Global
+-- now. The lobby wins (everything goes to everyone there); a player in a channel (the dead) isn't affected - their channel
+-- talks whatever the mode. The host refuses Global lines then too (server.pc_say).
+PC.NO_GLOBAL = "Global chat is off in this game."
+function PC.noGlobal()
+	return shared.pcNoGlobal == true and not PC.lobby() and not PC.dead()
+end
+
+-- a mode this player may pick now
+function PC.modeAllowed(m)
+	return not (m == "g" and PC.noGlobal())
+end
+
+-- (each tick) Global off while it is this player's mode (typing or talking): down to Speak, said once
+function PC.noGlobalTick()
+	local c = PC.C()
+	if not PC.noGlobal() then return end
+	local vm = c.voice and c.voice.vmode
+	if c.mode ~= "g" and vm ~= "g" then return end
+	c.mode = c.mode == "g" and "s" or c.mode                         -- (setMode won't pick Global; this is the way out of it)
+	if PC.setVoiceMode and vm == "g" then PC.setVoiceMode("s") end
+	PC.setMode("s")
+	PC.system(PC.NO_GLOBAL)
+end
+
 function PC.setMode(m)
 	local c = PC.C()
 	if PC.lobby() then return end                                   -- (the lobby is Global only)
 	if m ~= "g" and m ~= "w" and m ~= "y" then m = "s" end
+	if not PC.modeAllowed(m) then return end                        -- (Global off: proxchat.noglobal)
 	if c.mode == m then return end
 	c.mode = m
 	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
@@ -1643,12 +1676,23 @@ function PC.setMode(m)
 	if PC.setVoiceMode then PC.setVoiceMode(m) end                  -- (one mode: typing and talking whisper alike - the user 2026-10-11)
 end
 
--- Tab: Whisper -> Speak -> Yell -> Global -> Whisper
-function PC.nextMode()
-	local cur = PC.mode()
+-- the mode step modes from cur, round, skipping one this player can't pick (Global, while it is off)
+function PC.stepMode(cur, step)
+	local n = #PC.MODES
 	for i, x in ipairs(PC.MODES) do
-		if x[1] == cur then PC.setMode(PC.MODES[i % #PC.MODES + 1][1]); return end
+		if x[1] == cur then
+			for k = 1, n do
+				local m = PC.MODES[(i - 1 + k * step) % n + 1][1]
+				if PC.modeAllowed(m) then return m end
+			end
+		end
 	end
+	return cur
+end
+
+-- Tab: Whisper -> Speak -> Yell -> Global -> Whisper (Global skipped while it is off)
+function PC.nextMode()
+	PC.setMode(PC.stepMode(PC.mode(), 1))
 end
 
 function PC.page() return PC.C().page end
@@ -2156,6 +2200,7 @@ function PC.clientTick(dt)
 	PC.babbleTick()
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
 	if PC.pingTick then PC.pingTick(now) end                           -- (ping.lua: the ping buttons, old pins go)
+	PC.noGlobalTick()                                                  -- (proxchat.noglobal: Global down to Speak)
 end
 
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
@@ -2707,6 +2752,7 @@ end
 function PC.modeCommand(m, rest)
 	local info = PC.modeInfo(m)
 	if PC.lobby() and m ~= "g" then PC.system("In the lobby everyone hears everything."); return end
+	if not PC.modeAllowed(m) then PC.system(PC.NO_GLOBAL); return end
 	if rest ~= "" then
 		PC.say(rest, m)
 	else
@@ -4229,7 +4275,7 @@ function PC.drawTyping(L)
 	UiTranslate(W - 10 - chipsW, (IH - chh) / 2)
 	local cur, cx = PC.mode(), 0
 	for _, x in ipairs(PC.MODES) do
-		local dim = (PC.lobby() and x[1] ~= "g") or PC.dead()
+		local dim = (PC.lobby() and x[1] ~= "g") or PC.dead() or not PC.modeAllowed(x[1])
 		local on = x[1] == cur
 		local w = on and cw or cs
 		UiPush()
