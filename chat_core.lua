@@ -782,13 +782,14 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 9                                                 -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 10                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
                                                                     --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
                                                                     --     proxchat.typing.<me> also on a controller's pages;
-                                                                    --  9: pings - proxchat.team.<p>, proxchat.noping, 2026-10-20)
+                                                                    --  9: pings - proxchat.team.<p>, proxchat.noping, 2026-10-20;
+                                                                    --  10: a ping's reach, proxchat.ranges "ping=<m>", 2026-10-21)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1143,7 +1144,7 @@ end
 -- any order and any subset ("private=10 megaphone=90"; keys: whisper, speak, yell, private / radio (walkies), megaphone /
 -- loudspeaker, pa, and reach = Private's reach, 0: any) ->
 -- {w, s, y, pr, m, pa, reach} (only those given), or nil; and what was wrong (nil: nothing), for PC.problem
-PC.RANGE_NAMES = "whisper, speak, yell, private, megaphone, pa, reach"
+PC.RANGE_NAMES = "whisper, speak, yell, private, megaphone, pa, reach, ping"
 function PC.parseRanges(str)
 	str = tostring(str or "")
 	if str:find("=") then
@@ -1158,7 +1159,7 @@ function PC.parseRanges(str)
 				k = k:lower()
 				local id = (k == "reach" or k == "privatereach") and "reach"
 					or ({whisper = "w", speak = "s", yell = "y", shout = "y", private = "pr", radio = "pr", walkie = "pr",
-						megaphone = "m", loudspeaker = "m", pa = "pa"})[k]
+						megaphone = "m", loudspeaker = "m", pa = "pa", ping = "ping"})[k]
 				if not id then bad[#bad + 1] = '"' .. k .. '" is not a range (' .. PC.RANGE_NAMES .. ')'
 				elseif not n then bad[#bad + 1] = k .. '="' .. v .. '" is not a number'
 				else t[id], any = n, true end
@@ -1482,6 +1483,7 @@ function PC.serverTick(dt)
 		local cfg = PC.cfg
 		if t and (t.w or t.s or t.y) then PC.setRanges(t.w or cfg.whisperR, t.s or cfg.chatR, t.y or cfg.shoutR, false) end
 		if t and (t.pr or t.m or t.pa or t.reach) and PC.setDevRanges then PC.setDevRanges(t.pr, t.m, t.pa, t.reach, false) end
+		if t and t.ping and PC.setPingRange then PC.setPingRange(t.ping) end   -- (ping.lua: how far a ping reaches)
 	end
 	for _, p in ipairs(PC.removedPlayers()) do
 		p = tonumber(p)
