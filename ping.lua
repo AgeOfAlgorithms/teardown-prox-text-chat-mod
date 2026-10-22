@@ -5,6 +5,7 @@
 --   2. else the colour a game mode forces on the player: the game's team modes colour every player in their team's
 --      colour every tick (data/script/mp/lib/teams.lua: SetPlayerColor) - the same colour is the same team;
 --   3. else no team: every player without one sees it (sandbox, free for all - the user, 2026-10-20: "Everyone").
+-- A LIST: proxchat.pingto.<p> (a game's: only those players get p's pins, not p's team; PC.pingToOf).
 -- COLOUR: proxchat.pingcolor.<p> (a game's, any player), else proxchat.pingcolor (everyone's), else the forced team
 -- colour, else yellow.
 -- DEAD: in a channel (proxchat.channel.<p>: a game's dead) or no health left. A game turns pings off with
@@ -90,6 +91,26 @@ function PC.pingColorOf(p)
 	return colorKey(reg .. ".pingcolor." .. p) or colorKey(reg .. ".pingcolor")
 end
 
+-- (server) PINGS TO A LIST (API 14, 2026-10-21 - Witch Hunt: a spirit witch's pins go only to the other witches, while
+-- every witch stays in the humans' team, as a team would tell them apart): proxchat.pingto.<p> = player ids separated by
+-- spaces, set every tick by a game. While it isn't "", p's pins go only to them (and p), instead of to p's team; ids that
+-- aren't players are ignored; the dead only if listed (a dead player mustn't learn from a pin who is on which side).
+-- Reach (ping=<m>) and colours still apply. Returns {[id] = true}, or nil: "" (the team rules)
+function PC.pingToOf(p)
+	local key = PC.cfg.reg .. ".pingto." .. p
+	local v = GetString(key)
+	if v == "" then return nil end
+	local set, bad = {}, nil
+	for x in v:gmatch("[^%s,]+") do
+		local q = tonumber(x)
+		if q and q == math.floor(q) then set[q] = true else bad = bad or x end
+	end
+	if bad and PC.problem then
+		PC.problem(key, PC.problemValue(bad) .. " is not a player id (ids from GetAllPlayers(), separated by spaces) - skipped")
+	end
+	return set
+end
+
 -- (server) p can't ping now: dead (a game's channel, or no health) - the lobby comes first (nobody is dead there)
 function PC.pingDead(p)
 	if PC.inLobby() then return false end
@@ -124,8 +145,11 @@ function server.pc_ping(p, tok, x, y, z)
 		reachS = string.format("%.2f,%.2f,%.2f,%g,%g", tr.pos[1], tr.pos[2], tr.pos[3], s.pingR, outer)
 		sendTo = outer + cfg.pingSlack
 	end
+	local only = PC.pingToOf(p)                                          -- (a game's own list instead of the team)
 	for _, q in ipairs(PC.allPlayers()) do
-		if PC.teamOf(q) == team then
+		local to
+		if only then to = q == p or only[q] == true else to = PC.teamOf(q) == team end
+		if to then
 			local near = q == p or not sendTo or s.chan[q] ~= nil             -- (the dead see every ping)
 			if not near then
 				local okQ, tq = pcall(GetPlayerTransform, q)
