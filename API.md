@@ -70,7 +70,7 @@ Server keys are checked on the host, so that's the screen to watch.
 ## `proxchat.version`, `proxchat.alive`
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
-`proxchat.version` is the API version (13 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`), `proxchat.alive` the `GetTime()` of its last
+`proxchat.version` is the API version (15 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone)), `proxchat.alive` the `GetTime()` of its last
 tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
 make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
@@ -292,8 +292,8 @@ huge open one, and how far your [devices](#devices-walkie-talkies-megaphones-a-p
 - `"whisper,speak,yell"`, defaults `"8,25,40"`;
 - `"whisper,speak,yell,private,megaphone,pa"`, defaults `"8,25,40,6,60,45"`;
 - `key=value` pairs, any of them, in any order: `"private=10 megaphone=90"`. Keys: `whisper`, `speak`, `yell`, `private`
-  (walkies; also `radio`), `megaphone` (loudspeakers; also `loudspeaker`), `pa`, `reach` (below), and `ping` (how far a
-  [ping](#pings-proxchatteamplayer-proxchatnoping) reaches; since version 10). What you leave out stays as it is.
+  (walkies; also `radio`), `megaphone` (loudspeakers; also `loudspeaker`), `pa`, and `reach` (below). What you leave out
+  stays as it is. Whisper, Speak and Yell also set how far [pings](#pings-proxchatteamplayer-proxchatnoping) reach.
 
 The garbled zone past each range follows at the same share: Whisper +50 %, Speak +40 %, Yell +37.5 %, walkies +50 %,
 loudspeakers and PA +1/3 (so the defaults garble out to 12, 35, 55, 9, 80 and 60 m). Whisper, Speak and Yell are measured
@@ -385,22 +385,23 @@ decides what that player's game shows of what it is sent.)
 
 ## Pings: `proxchat.team.<player>`, `proxchat.noping`
 
-**Server, since version 9** (the reach: version 10). Players ping with the middle mouse button, or L1 + R1 together on a controller: a pin
+**Server, since version 9.** Players ping with the middle mouse button, or L1 + R1 together on a controller: a pin
 where their crosshair points, for 5 seconds, with their name and the distance. Only their **team** sees it, and dead
 players can't ping (a player in a [channel](#proxchatchannelplayer), or with no health left).
 
-**How far a ping reaches** is yours to set, apart from the talk modes' distances: `"ping=<metres>"` in
-[`proxchat.ranges`](#proxchatranges). Teammates within that distance of where the pinger stood see the pin in full; in
-the buffer beyond it (+40 %, as Speak's) it fades out with their distance; past that they don't get it. It follows
-them: a teammate walking closer while the pin is up sees it appear, one walking away sees it fade. Without `ping=` a
-ping reaches the whole map. The dead (in a [channel](#proxchatchannelplayer)) see every ping.
+**How far a ping reaches is the pinger's talk mode** (since version 15): a ping goes out in Whisper, Speak or Yell, the
+mode the player has picked, and reaches as far as their words would. Teammates within the mode's range of where the
+pinger stood see the pin in full; across its garbled zone (Whisper 8 to 12 m, Speak 25 to 35 m, Yell 40 to 55 m by
+default) it fades out with their distance; past that they don't get it. It follows them: a teammate walking closer
+while the pin is up sees it appear, one walking away sees it fade. To change it, change the modes' distances in
+[`proxchat.ranges`](#proxchatranges). **No pings in Global** (the player is told so). In your
+[lobby](#proxchatlobby) a ping reaches everyone. The dead (in a [channel](#proxchatchannelplayer)) see every ping.
 
-```lua
--- server: a hidden-role mode - pins only for the people around you (a whisper's distance: 8 m, faded to 11.2 m)
-function server.init()
-	SetString("proxchat.ranges", "ping=8")
-end
-```
+A pin has **two colours**: its ring is the team's or yours (below; white by default), and its centre and distance are
+the mode's (Whisper lavender, Speak yellow, Yell orange). A Whisper pin is smaller, a Yell pin bigger with a "!".
+
+(Versions 10 and 14 had `"ping=<metres>"` in `proxchat.ranges` and `proxchat.pingto.<player>`; both are gone and
+ignored. A hidden role pinging its own kind does it in a whisper, and anyone standing close sees it too.)
 
 Who is on which team, in this order:
 
@@ -419,12 +420,12 @@ function server.tick(dt)
 end
 ```
 
-**Pin colours** (since version 13), `"r g b"`, 0 to 1 each as `SetPlayerColor` takes them (0 to 255 works too):
+**Ring colours** (since version 13), `"r g b"`, 0 to 1 each as `SetPlayerColor` takes them (0 to 255 works too):
 
 - `proxchat.pingcolor.<player>` colours that player's pins, for everyone who sees them: any player, any colour (a
   team's colour, a role's, one of their own).
 - `proxchat.pingcolor` colours everyone's pins; a player's own key wins over it.
-- Neither: a pin takes the player's forced team colour, else the chat's yellow.
+- Neither: the ring takes the player's forced team colour, else white.
 
 ```lua
 -- server: red and blue pins

@@ -4043,7 +4043,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 13, "proxchat.version 13")
+	check(M.reg["proxchat.version"] == 15, "proxchat.version 15")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4177,10 +4177,13 @@ end
 end)()
 
 -- ================================================================== pings (ping.lua, 2026-10-20): the middle mouse button,
--- L1 + R1 on a controller; a pin where the crosshair points, 5 s, for the pinger's team; not from the dead
+-- L1 + R1 on a controller; a pin where the crosshair points, 5 s, for the pinger's team within their mode's reach (none in
+-- Global); not from the dead. (Everyone within Speak's 25 m of each other here; the reach is tested further down.)
 ;(function()
 	local ALL = {P1, P2, P3, P4, P5}
-	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	local BASE = {Vec(0, 0, 0), Vec(4, 0, 0), Vec(10, 0, 0), Vec(16, 0, 0), Vec(20, 0, 0)}
+	local function home() for i = 1, 5 do W.pos[i] = Vec(BASE[i][1], BASE[i][2], BASE[i][3]) end end
+	home()
 	for k in pairs(HOST.reg) do if k:find("^proxchat%.channel%.") or k:find("^proxchat%.team%.") or k:find("^proxchat%.lobby") then HOST.reg[k] = nil end end
 	for _, M in ipairs(ALL) do
 		if M.PC.c.typing then press(M, "esc") end
@@ -4200,7 +4203,8 @@ end)()
 	check(who(ALL) == "1 1 1 1 1" and pg and pg.p == 2 and math.abs(pg.pos[1] - 4) < 1e-6 and math.abs(pg.pos[3] + 20) < 1e-6
 		and math.abs(pg.pos[2] - 1.7) < 1e-6 and pg.name == "P2" and P2.rejected == 502,
 		"the middle mouse button: a pin where P2's crosshair hits the wall (not P2's own body), for every player - no teams (" .. who(ALL) .. ")")
-	check(P1.PC.PING_COLOR == pg.col, "... in the chat's yellow (no team colour)")
+	check(P1.PC.PING_COLOR == pg.col and pg.col[1] == 1 and pg.col[2] == 1 and pg.col[3] == 1 and pg.mode == "s",
+		"... a white ring (no team colour), its centre Speak's (P2's mode)")
 	P1.uiSounds = {}; step()
 	check(drawn(P1, "^P2$") and drawn(P1, "^20 m$") and #P1.uiSounds == 0, "drawn: the pinger's name and the distance (20 m from P1's head)")
 	check(P3.PC.c.pings[1].fresh == nil, "... and its sound played once, when it came")
@@ -4265,12 +4269,12 @@ end)()
 	W.clog = {}
 	waitRate(); press(P5, "mmb"); steps(2)
 	check(who(ALL) == "0 0 0 0 0" and nCalls() == 0, "no health left: no ping (" .. who(ALL) .. ")")
-	P5.PC.call("pc_ping", 14, 1.7, -20); steps(2)
+	P5.PC.call("pc_ping", 20, 1.7, -20, "s"); steps(2)
 	check(who(ALL) == "0 0 0 0 0", "... and a game that asks anyway: the host refuses")
 	W.health[5] = nil
 	HOST.reg["proxchat.channel.4"] = "dead"; steps(2)
 	waitRate(); press(P4, "mmb"); steps(2)
-	P4.PC.call("pc_ping", 60, 1.7, -20); steps(2)
+	P4.PC.call("pc_ping", 16, 1.7, -20, "s"); steps(2)
 	check(who(ALL) == "0 0 0 0 0", "dead (proxchat.channel.<p>): no ping (" .. who(ALL) .. ")")
 	HOST.reg["proxchat.lobby"] = true; steps(2)
 	waitRate(); press(P4, "mmb"); steps(2)
@@ -4305,51 +4309,83 @@ end)()
 	-- the host checks: a forged token, a point far from the pinger, NaN; at most 3 at once, a player's 3 newest pins
 	W.clog = {}
 	waitRate()
-	HOST.server.pc_ping(2, "0123456789abcdef0123456789abcdef", 4, 1.7, -20); steps(2)
-	P2.PC.call("pc_ping", 4, 1.7, -2000); steps(2)
-	P2.PC.call("pc_ping", 0 / 0, 1.7, -20); steps(2)
-	check(#pins(P1) == 0 and nCalls() == 0, "the host refuses a wrong token, a point 2 km away, NaN")
+	HOST.server.pc_ping(2, "0123456789abcdef0123456789abcdef", 4, 1.7, -20, "s"); steps(2)
+	P2.PC.call("pc_ping", 4, 1.7, -2000, "s"); steps(2)
+	P2.PC.call("pc_ping", 0 / 0, 1.7, -20, "s"); steps(2)
+	P2.PC.call("pc_ping", 4, 1.7, -20, "g"); steps(2)
+	P2.PC.call("pc_ping", 4, 1.7, -20); steps(2)
+	check(#pins(P1) == 0 and nCalls() == 0, "the host refuses a wrong token, a point 2 km away, NaN, Global, no mode")
 	waitRate(); steps(120)
-	for i = 1, 6 do P2.PC.call("pc_ping", i, 1.7, -20) end
+	for i = 1, 6 do P2.PC.call("pc_ping", i, 1.7, -20, "s") end
 	steps(2)
-	check(#pins(P1) == 3 and nCalls() == 3 * #HOST.GetAllPlayers(), "6 pings in one frame: the host takes 3 (a burst of 3) (" .. #pins(P1) .. ", " .. nCalls() .. " sends)")
+	local nNear = 0                                                    -- (the players within Speak's buffer + the slack)
+	for _, q in ipairs(HOST.GetAllPlayers()) do
+		if W.pos[q] and math.abs(W.pos[q][1] - 4) + math.abs(W.pos[q][3]) <= HOST.PC.cfg.mumbleR + HOST.PC.cfg.pingSlack then nNear = nNear + 1 end
+	end
+	check(#pins(P1) == 3 and nCalls() == 3 * nNear, "6 pings in one frame: the host takes 3 (a burst of 3) (" .. #pins(P1) .. ", " .. nCalls() .. " sends)")
 	steps(60)
-	P2.PC.call("pc_ping", 9, 1.7, -20); steps(2)
+	P2.PC.call("pc_ping", 9, 1.7, -20, "s"); steps(2)
 	local xs = {}
 	for _, p in ipairs(pins(P1)) do xs[#xs + 1] = p.pos[1] end
 	check(#pins(P1) == 3 and table.concat(xs, " ") == "2 3 9", "a 4th pin: the oldest of P2's goes (" .. table.concat(xs, " ") .. ")")
-	-- a game sets how far a ping reaches: proxchat.ranges "ping=8" (buffer +40 %: to 11.2 m), apart from the talk modes.
-	-- P2 (at 4) pings: P1 (4 m) in full; P5 (10 m) faded (the buffer); P3 (26 m) is sent it (room to walk in) but sees
-	-- nothing; P4 (56 m) isn't sent it. By the distance NOW to where P2 stood: P3 walking in sees it
+	-- THE REACH IS THE MODE'S (API 15). P2 (at 4) pings in Whisper (8 m, faded to 12): P1 (4 m) in full; P5 (10 m) faded
+	-- (the buffer); P3 (26 m) is sent it (room to walk in) but sees nothing; P4 (56 m) isn't sent it. By the distance NOW to
+	-- where P2 stood: P3 walking in sees it, P1 walking off sees it fade
 	clearPins()
-	HOST.reg["proxchat.ranges"] = "ping=8"; steps(2)
-	check(HOST.PC.S().pingR == 8 and HOST.PC.cfg.chatR == 25, "proxchat.ranges \"ping=8\": a ping's reach, the talk modes' untouched")
+	W.pos[3], W.pos[4], W.pos[5] = Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	P2.PC.setMode("w"); steps(2)
 	waitRate(); press(P2, "mmb"); steps(2)
 	local seen = function(M) local pgx = pins(M)[1]; return pgx and M.PC.pingSeen(pgx) or -1 end
-	check(who(ALL) == "1 1 1 0 1" and seen(P1) == 1 and seen(P2) == 1 and math.abs(seen(P5) - 1.2 / 3.2) < 1e-6 and seen(P3) == 0,
-		string.format("ping=8: P1 (4 m) in full, P5 (10 m, the buffer) faded to %.2f, P3 (26 m) sent but unseen, P4 (56 m) nothing (%s)", seen(P5), who(ALL)))
+	check(who(ALL) == "1 1 1 0 1" and seen(P1) == 1 and seen(P2) == 1 and math.abs(seen(P5) - 0.5) < 1e-6 and seen(P3) == 0
+		and pins(P1)[1].mode == "w", string.format("Whisper (8 m, faded to 12): P1 (4 m) in full, P5 (10 m) faded to %.2f, P3 (26 m) sent but unseen, P4 (56 m) nothing (%s)",
+		seen(P5), who(ALL)))
 	P3.uiSounds = {}; step()
 	check(drawn(P1, "^P2$") and not drawn(P3, "^P2$") and #P3.uiSounds == 0, "... drawn for P1, not for P3 (no sound either)")
 	W.pos[3] = Vec(9, 0, 0); step()
 	check(seen(P3) == 1 and drawn(P3, "^P2$") and #P3.uiSounds == 1, "P3 walks to 5 m from where P2 stood: the pin shows (its sound now)")
-	W.pos[1] = Vec(-6.4, 0, 0); step()
-	local s104 = seen(P1)
-	W.pos[1] = Vec(-8, 0, 0); step()
-	check(math.abs(s104 - 0.25) < 1e-6 and seen(P1) == 0 and not drawn(P1, "^P2$"),
-		string.format("P1 walks away: 10.4 m - faded to %.2f; 12 m (past the buffer) - gone", s104))
-	W.pos[1] = Vec(0, 0, 0); W.pos[3] = Vec(30, 0, 0); clearPins()
+	W.pos[1] = Vec(-6, 0, 0); step()
+	local s10 = seen(P1)
+	W.pos[1] = Vec(-9, 0, 0); step()
+	check(math.abs(s10 - 0.5) < 1e-6 and seen(P1) == 0 and not drawn(P1, "^P2$"),
+		string.format("P1 walks away: 10 m - faded to %.2f; 13 m (past Whisper's 12) - gone", s10))
+	W.pos[1], W.pos[3] = Vec(0, 0, 0), Vec(30, 0, 0); clearPins()
+	-- Yell (40 m, faded to 55): P3 (26 m) in full, P4 (56 m) sent but past it; a "!" in the middle
+	P2.PC.setMode("y"); steps(2)
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(who(ALL) == "1 1 1 1 1" and seen(P3) == 1 and seen(P4) == 0 and pins(P1)[1].mode == "y" and drawn(P1, "^!$"),
+		"Yell (40 m, faded to 55): P3 (26 m) in full, P4 (56 m) sent but unseen; a \"!\" in the pin (" .. who(ALL) .. ")")
+	clearPins()
+	-- a mod's own distances (proxchat.ranges) move the pins' too
+	HOST.reg["proxchat.ranges"] = "whisper=20 speak=30 yell=50"; steps(2)
+	P2.PC.setMode("w"); steps(2)
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(seen(P5) == 1 and math.abs(seen(P3) - (30 - 26) / 10) < 1e-6,
+		string.format("proxchat.ranges whisper=20: a whispered pin in full at 10 m, %.2f at 26 m (faded to 30)", seen(P3)))
+	HOST.reg["proxchat.ranges"] = "whisper=8 speak=25 yell=40"; steps(2); clearPins()
+	-- no pings in Global: said (at most every 3 s), nothing sent
+	P2.PC.setMode("g"); steps(2)
+	W.clog = {}
+	local nSaid = function() local n = 0; for _, e in ipairs(hist(P2)) do if e.sys and e.text == P2.PC.NO_GLOBAL_PING then n = n + 1 end end; return n end
+	waitRate(); press(P2, "mmb"); steps(2); press(P2, "mmb"); steps(2)
+	check(who(ALL) == "0 0 0 0 0" and nCalls() == 0 and nSaid() == 1, "Global: no ping - \"" .. P2.PC.NO_GLOBAL_PING .. "\" (once for two presses)")
+	-- the lobby: everyone (everything goes to everyone there), shown as Speak
+	HOST.reg["proxchat.lobby"] = true; steps(2)
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(who(ALL) == "1 1 1 1 1" and seen(P4) == 1 and pins(P4)[1].mode == "s", "the lobby: P4 (56 m) in full too, a Speak pin")
+	HOST.reg["proxchat.lobby"] = nil; steps(2); clearPins()
 	-- the dead see every ping (they hear everyone)
+	P2.PC.setMode("s"); steps(2)
 	HOST.reg["proxchat.channel.4"] = "dead"; steps(2)
 	waitRate(); press(P2, "mmb"); steps(2)
-	check(#pins(P4) == 1 and seen(P4) == 1, "a dead teammate 56 m away sees it in full (the dead see every ping)")
+	check(#pins(P4) == 1 and seen(P4) == 1, "a dead teammate 56 m away sees a Speak pin in full (the dead see every ping)")
 	HOST.reg["proxchat.channel.4"] = nil; steps(2); clearPins()
-	-- ping=0 is no distance: said, and the reach stays
-	HOST.debug = {}
-	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}               -- (an earlier test used up the session's 20)
-	HOST.reg["proxchat.ranges"] = "ping=0"; steps(2)
-	check(HOST.PC.S().pingR == 8 and table.concat(HOST.debug, " "):find("proxchat.noping", 1, true),
-		"ping=0: refused, with the hint to use proxchat.noping (the reach stays 8 m)")
-	HOST.reg["proxchat.ranges"] = nil; HOST.PC.S().pingR = nil
+	-- the gone keys (API 10's ping=, API 14's pingto): ignored quietly
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}
+	HOST.reg["proxchat.ranges"], HOST.reg["proxchat.pingto.2"] = "ping=8", "1"; steps(150)
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(who(ALL) == "1 1 1 0 1" and #HOST.debug == 0, "a mod still setting ping= or pingto: ignored, nothing said (" .. who(ALL) .. ")")
+	HOST.reg["proxchat.ranges"], HOST.reg["proxchat.pingto.2"] = "whisper=8 speak=25 yell=40", nil; steps(2)
+	home(); clearPins()
 	-- a game steers the ray (API 12): proxchat.aim "x y z dx dy dz" (its own camera's view), proxchat.pingskip "body ..."
 	-- (bodies the ray passes through); set every frame, read and cleared; unset - the player's camera again
 	clearPins()

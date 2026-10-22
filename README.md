@@ -74,9 +74,11 @@ copies.
   - With Koetama running, a controller player's microphone is always on (it only sends while they talk),
     unless they choose push to talk on the Voice page.
 - **Ping:** the **middle mouse button** (on a controller **L1 + R1** together) puts a pin where your crosshair
-  points, with your name and its distance, for 5 seconds, then it fades out. Only your team sees it (in the game's
-  team modes, the players in your colour; with no teams, everyone). Dead players can't ping. **Ping size** in
-  Settings (50 % to 200 %) sets how big pins are on your screen.
+  points, with your name and its distance, for 5 seconds, then it fades out. It reaches as far as your words in your
+  mode: Whisper only those right by you, Speak the people around, Yell farther; **no pings in Global**. Only your team
+  sees it (in the game's team modes, the players in your colour; with no teams, everyone). The ring shows the team's
+  colour, the centre your mode's (a Yell pin has a "!"). Dead players can't ping. **Ping size** in Settings (50 % to
+  200 %) sets how big pins are on your screen.
 - **Commands:**
   - `/s`, `/w`, `/y` and `/g` choose the mode (Speak, Whisper, Yell, Global), or say one line in it:
     `/w psst`, `/y over here`.
