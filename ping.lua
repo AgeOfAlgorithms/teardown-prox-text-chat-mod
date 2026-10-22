@@ -5,6 +5,8 @@
 --   2. else the colour a game mode forces on the player: the game's team modes colour every player in their team's
 --      colour every tick (data/script/mp/lib/teams.lua: SetPlayerColor) - the same colour is the same team;
 --   3. else no team: every player without one sees it (sandbox, free for all - the user, 2026-10-20: "Everyone").
+-- COLOUR: proxchat.pingcolor.<p> (a game's, any player), else proxchat.pingcolor (everyone's), else the forced team
+-- colour, else yellow.
 -- DEAD: in a channel (proxchat.channel.<p>: a game's dead) or no health left. A game turns pings off with
 -- proxchat.noping (a free-for-all mode where pins would give players away).
 -- THE BUTTONS (2026-10-20): every pad button has a job in play, and a mod can't take one from the game. L1 / R1 are the
@@ -66,6 +68,28 @@ function PC.teamOf(p)
 	return nil
 end
 
+-- (server) the colour a game gives p's pins (API 13, 2026-10-21: "maybe some mods want different colored pings for
+-- different teams" - "shouldn't be restricted to per team"): proxchat.pingcolor.<p> (any player any colour), else
+-- proxchat.pingcolor (everyone's pins); "r g b", 0..1 as SetPlayerColor (0..255 too). nil: neither (a wrong one is said
+-- and ignored)
+local function colorKey(key)
+	local v = GetString(key)
+	if v == "" then return nil end
+	local t = {}
+	for x in v:gmatch("[^%s,]+") do t[#t + 1] = PC.finite(x) end
+	if #t == 3 and t[1] and t[2] and t[3] and t[1] >= 0 and t[2] >= 0 and t[3] >= 0 then
+		local k = (t[1] > 1 or t[2] > 1 or t[3] > 1) and 255 or 1     -- (0..255 given: scaled)
+		if t[1] <= k and t[2] <= k and t[3] <= k then return {t[1] / k, t[2] / k, t[3] / k} end
+	end
+	if PC.problem then PC.problem(key, PC.problemValue(v) .. ' is not "r g b" (0 to 1 each, e.g. "1 0.2 0.2") - ignored') end
+	return nil
+end
+
+function PC.pingColorOf(p)
+	local reg = PC.cfg.reg
+	return colorKey(reg .. ".pingcolor." .. p) or colorKey(reg .. ".pingcolor")
+end
+
 -- (server) p can't ping now: dead (a game's channel, or no health) - the lobby comes first (nobody is dead there)
 function PC.pingDead(p)
 	if PC.inLobby() then return false end
@@ -92,6 +116,7 @@ function server.pc_ping(p, tok, x, y, z)
 	if not PC.allow(p, "ping", cfg.pingRate, cfg.pingBurst) then return end         --  the camera: no pins across the map)
 	local s = PC.S()
 	local team, col = PC.teamOf(p)
+	col = PC.pingColorOf(p) or col                                       -- (a game's own colour first)
 	local colS = col and string.format("%.3f,%.3f,%.3f", col[1], col[2], col[3]) or ""
 	local reachS, sendTo = "", nil                                       -- (a reach: where the pinger stood, inner, outer)
 	if s.pingR then
