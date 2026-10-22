@@ -159,17 +159,80 @@ function PC.pingSeen(pg)
 	return (pg.outer - d) / (pg.outer - pg.inner)
 end
 
+-- A GAME STEERS THE RAY (API 12, 2026-10-21 - Humans vs Clickers: its monster's view is its own camera, from a head
+-- twice a human's height, in a creature model with hit boxes around it; from the player's camera the ray hit those, and
+-- the pin landed on the player). Two client keys, set every frame by the game, read and cleared here (as proxchat.avoid):
+--   proxchat.aim       "x y z dx dy dz" - the view ray the game draws its own camera with: pings cast along it
+--   proxchat.pingskip  "body body ..."  - bodies the ray passes through (its creature model, its hit boxes)
+-- What was read counts for PC.PING_STEER_HOLD s (the game's script may run after this one in a frame).
+PC.PING_STEER_HOLD = 0.25
+PC.PING_SKIP_MAX = 64
+
+local function words(str)
+	local t = {}
+	for x in tostring(str or ""):gmatch("[^%s,]+") do t[#t + 1] = x end
+	return t
+end
+
+-- (client, each tick) a game's proxchat.aim / proxchat.pingskip, read and cleared
+function PC.pingSteerTick(now)
+	local c, reg = PC.C(), PC.cfg.reg
+	local key = reg .. ".aim"
+	local a = GetString(key)
+	if a ~= "" then
+		local w, ok = words(a), false
+		if #w == 6 then
+			local n = {}
+			for i = 1, 6 do n[i] = PC.finite(w[i]) end
+			if n[1] and n[2] and n[3] and n[4] and n[5] and n[6] then
+				local d = Vec(n[4], n[5], n[6])
+				local len = VecLength(d)
+				if len > 1e-6 then
+					c.pingRay, ok = {o = Vec(n[1], n[2], n[3]), d = VecScale(d, 1 / len), t = now}, true
+				end
+			end
+		end
+		if not ok and PC.problem then
+			PC.problem(key, PC.problemValue(a) .. ' is not "x y z dx dy dz" (where your camera is and the way it looks) - ignored')
+		end
+		ClearKey(key)
+	end
+	key = reg .. ".pingskip"
+	local sk = GetString(key)
+	if sk ~= "" then
+		local list, bad = {}, nil
+		for _, x in ipairs(words(sk)) do
+			local h = tonumber(x)
+			if h and h == math.floor(h) and h > 0 then
+				if #list < PC.PING_SKIP_MAX then list[#list + 1] = h end
+			else bad = bad or x end
+		end
+		if bad and PC.problem then
+			PC.problem(key, PC.problemValue(bad) .. " is not a body handle (body handles separated by spaces) - skipped")
+		end
+		c.pingSkip = {list = list, t = now}
+		ClearKey(key)
+	end
+end
+
 -- (client) where this player's crosshair points: the first thing on the camera's ray within cfg.pingMax (not their own
--- body, nor the vehicle they sit in); nil: nothing there (the sky)
+-- body, nor the vehicle they sit in, nor a game's pingskip bodies); the ray a game gives in proxchat.aim instead of the
+-- camera's; nil: nothing there (the sky)
 function PC.pingAim()
 	local me = GetLocalPlayer()
+	local c, now = PC.C(), GetTime()
+	local ray = c.pingRay and now - c.pingRay.t <= PC.PING_STEER_HOLD and c.pingRay or nil
 	local cam
-	if GetPlayerCameraTransform then
+	if not ray and GetPlayerCameraTransform then
 		local ok, t = pcall(GetPlayerCameraTransform)
 		if ok and t and t.pos then cam = t end
 	end
 	cam = cam or GetCameraTransform()
-	local dir = TransformToParentVec(cam, Vec(0, 0, -1))
+	local origin = ray and ray.o or cam.pos
+	local dir = ray and ray.d or TransformToParentVec(cam, Vec(0, 0, -1))
+	if c.pingSkip and now - c.pingSkip.t <= PC.PING_STEER_HOLD then
+		for _, b in ipairs(c.pingSkip.list) do pcall(QueryRejectBody, b) end
+	end
 	if QueryRejectAnimator and GetPlayerAnimator then
 		local ok, a = pcall(GetPlayerAnimator, me)
 		if ok and a and a ~= 0 then QueryRejectAnimator(a) end
@@ -178,9 +241,9 @@ function PC.pingAim()
 		local ok, v = pcall(GetPlayerVehicle, me)
 		if ok and v and v ~= 0 then QueryRejectVehicle(v) end
 	end
-	local hit, dist = QueryRaycast(cam.pos, dir, PC.cfg.pingMax)
+	local hit, dist = QueryRaycast(origin, dir, PC.cfg.pingMax)
 	if not hit then return nil end
-	return VecAdd(cam.pos, VecScale(dir, dist))
+	return VecAdd(origin, VecScale(dir, dist))
 end
 
 -- (client) this player can't ping now (its own game's view; the host checks again)
@@ -240,6 +303,7 @@ function PC.pingTick(now)
 			if now - c.pings[i].t > PC.cfg.pingLife + PC.cfg.pingFade then table.remove(c.pings, i) end
 		end
 	end
+	PC.pingSteerTick(now)
 	local want = InputPressed("mmb")
 	if PC.pad() then
 		if InputPressed("scroll_up") then c.pingL1 = now end
