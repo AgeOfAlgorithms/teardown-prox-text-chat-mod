@@ -4043,7 +4043,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 15, "proxchat.version 15")
+	check(M.reg["proxchat.version"] == 16, "proxchat.version 16")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4256,6 +4256,17 @@ end)()
 	check(cw and cw[1] == 1 and cw[2] == 1 and cw[3] == 1 and cb and cb[1] == 0 and cb[3] == 1,
 		"proxchat.pingcolor \"1 1 1\": P1's pins white (over its team colour); P4's own pingcolor.4 (blue) wins over it")
 	HOST.reg["proxchat.pingcolor"], HOST.reg["proxchat.pingcolor.4"] = nil, nil
+	clearPins()
+	-- proxchat.pinganon.<p> (API 16): P1's pins show no name, to anyone (P1 too); all else as ever
+	HOST.reg["proxchat.pinganon.1"] = true
+	waitRate(); press(P1, "mmb"); steps(2)
+	check(who(ALL) == "1 1 0 0 0" and pins(P2)[1].name == "" and pins(P1)[1].name == "" and not drawn(P2, "^P1$") and drawn(P2, " m$"),
+		"proxchat.pinganon.1: P1's pin with no name, for P2 and P1 alike (the distance still shown; still only P1's team) (" .. who(ALL) .. ")")
+	clearPins()
+	HOST.reg["proxchat.pinganon.1"] = false
+	waitRate(); press(P1, "mmb"); steps(2)
+	check(pins(P2)[1] and pins(P2)[1].name == "P1", "... false: the name again")
+	HOST.reg["proxchat.pinganon.1"] = nil
 	clearPins()
 	-- team names from a game mod come first (tidied: case, spaces)
 	HOST.reg["proxchat.team.1"], HOST.reg["proxchat.team.3"] = "Alpha", "  ALPHA "

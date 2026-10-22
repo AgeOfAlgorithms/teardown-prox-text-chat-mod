@@ -23,6 +23,7 @@ whole interface:
 | [`proxchat.hearall.<player>`](#proxchathearallplayer) | bool | your **server** script | host | that player's game is sent every Speak and Yell line, wherever they are (spectators, radios) |
 | [`proxchat.team.<player>`](#pings-proxchatteamplayer-proxchatnoping) | string | your **server** script | host | that player's team: only their team sees their pings |
 | [`proxchat.noping`](#pings-proxchatteamplayer-proxchatnoping) | bool | your **server** script | host | while true, nobody can ping |
+| [`proxchat.pinganon.<player>`](#pings-proxchatteamplayer-proxchatnoping) | bool | your **server** script, every tick | host | that player's pins show no name |
 | [`proxchat.pingcolor`, `.pingcolor.<player>`](#pings-proxchatteamplayer-proxchatnoping) | string | your **server** script | host | the colour of everyone's pins, or of one player's (`"r g b"`) |
 | [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping) | string | your **client** script, every frame | each machine | the view ray pings follow (your own camera), and bodies they pass through |
 | [`proxchat.walls`](#proxchatwalls) | bool | your **server** script | host | walls, floors and roofs muffle voices, or not, on your map |
@@ -70,7 +71,7 @@ Server keys are checked on the host, so that's the screen to watch.
 ## `proxchat.version`, `proxchat.alive`
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
-`proxchat.version` is the API version (15 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone)), `proxchat.alive` the `GetTime()` of its last
+`proxchat.version` is the API version (16 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone), 16 `proxchat.pinganon.<player>`), `proxchat.alive` the `GetTime()` of its last
 tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
 make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
@@ -416,6 +417,18 @@ Who is on which team, in this order:
 function server.tick(dt)
 	for _, p in ipairs(GetAllPlayers()) do
 		SetString("proxchat.team." .. p, teamOf(p))          -- "red", "blue"; "" = no team
+	end
+end
+```
+
+**No name** (since version 16): while `proxchat.pinganon.<player>` is true (set it every tick), that player's pins
+show no name to anyone who sees them, the pinger included. Everything else stays: the reach, the team, the colours.
+
+```lua
+-- server: a disguised player's pins mustn't give them away
+function server.tick(dt)
+	for _, p in ipairs(GetAllPlayers()) do
+		SetBool("proxchat.pinganon." .. p, isDisguised(p))
 	end
 end
 ```
