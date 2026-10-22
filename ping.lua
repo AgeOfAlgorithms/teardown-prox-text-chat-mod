@@ -5,22 +5,24 @@
 --   2. else the colour a game mode forces on the player: the game's team modes colour every player in their team's
 --      colour every tick (data/script/mp/lib/teams.lua: SetPlayerColor) - the same colour is the same team;
 --   3. else no team: every player without one sees it (sandbox, free for all - the user, 2026-10-20: "Everyone").
--- A LIST: proxchat.pingto.<p> (a game's: only those players get p's pins, not p's team; PC.pingToOf).
--- COLOUR: proxchat.pingcolor.<p> (a game's, any player), else proxchat.pingcolor (everyone's), else the forced team
--- colour, else yellow.
+-- TWO COLOURS (2026-10-21): the ring is the team's / a mod's (proxchat.pingcolor.<p>, else proxchat.pingcolor, else the
+-- forced team colour, else white); the centre and the distance are the MODE's (Whisper lavender, Speak yellow, Yell
+-- orange - PC.modeInfo), a Whisper pin smaller, a Yell pin with a "!".
 -- DEAD: in a channel (proxchat.channel.<p>: a game's dead) or no health left. A game turns pings off with
 -- proxchat.noping (a free-for-all mode where pins would give players away).
 -- THE BUTTONS (2026-10-20): every pad button has a job in play, and a mod can't take one from the game. L1 / R1 are the
 -- tool scroll up / down, so both at once step back and forth to the same tool: nothing stays changed (long L3 left the
 -- zoom on, R3 is the scoreboard toggle, the D-pad switches tools). Pad only: a quick up-and-down mouse wheel is no chord.
--- REACH (the user, 2026-10-21: "let the mod decide how far the ping message reaches"): a game mod sets it in
--- proxchat.ranges, "ping=<m>", apart from the talk modes' distances. A teammate within it of where the pinger stood sees
--- the pin in full; in the buffer beyond (cfg.pingBuf more, as Speak's) it fades out with the distance; past that nothing.
--- By the listener's distance NOW (walking in shows it, walking away fades it). Not set: the whole map (Witch Hunt, a
--- hidden-role mode, wants pins only for the people around). The dead (a channel) see every ping, as they hear everyone.
--- The host checks every ping (a real player with their token, alive, at most cfg.pingRate a second, a point within
--- reach of them) and sends it to the team alone - with a reach, only the teammates within it, the buffer and
--- cfg.pingSlack (room to walk in) - by client.pc_ping, never in shared.
+-- REACH = THE MODE'S (the user, 2026-10-21: "ping message distances should follow whisper, speak, and yell distances"):
+-- a ping goes out in the pinger's mode; a teammate within that mode's range of where the pinger stood sees the pin in
+-- full, across its buffer it fades out with the distance, past that nothing (a mod changes it with proxchat.ranges, as
+-- the talk). By the listener's distance NOW (walking in shows it, walking away fades it). No pings in Global ("No pings
+-- in Global" said; the host refuses one); the lobby: everyone (everything goes to everyone there). The dead (a channel)
+-- see every ping, as they hear everyone. (Gone the same day: proxchat.ranges "ping=<m>" and proxchat.pingto.<p>, API 10
+-- and 14 - a mod's keys for them are ignored quietly; a hidden witch must take care whom she pings near.)
+-- The host checks every ping (a real player with their token, alive, a mode, at most cfg.pingRate a second, a point
+-- within reach of them) and sends it to the teammates within the mode's buffer and cfg.pingSlack (room to walk in) - by
+-- client.pc_ping, never in shared.
 
 do
 	local defaults = {
@@ -32,7 +34,6 @@ do
 		pingRate = 2,            -- pings a second a player may make (a burst of pingBurst)
 		pingBurst = 3,
 		pingPer = 3,             -- pins of one player at once (a new one pushes their oldest out)
-		pingBuf = 0.4,           -- a ping's reach (proxchat.ranges "ping=<m>"): its buffer beyond it, a share (as Speak's)
 		pingSlack = 15,          -- m past the buffer the host still sends a pin to (room to walk in while it is up)
 	}
 	for k, v in pairs(defaults) do
@@ -40,20 +41,13 @@ do
 	end
 end
 PC.PING_CHORD = 0.2                                                  -- s: L1 and R1 count as pressed together within this
-PC.PING_COLOR = {1, 0.82, 0.3}                                       -- (a pin without a team colour: the chat's yellow)
+PC.PING_COLOR = {1, 1, 1}                                            -- (a ring without a team / mod colour: white - the
+                                                                     --  mode's colour is the centre's)
+PC.PING_MODE_SIZE = {w = 0.8, s = 1, y = 1.15}                       -- (a Whisper pin smaller, a Yell pin bigger)
+PC.NO_GLOBAL_PING = "No pings in Global: switch to Whisper, Speak or Yell."
 PC.PING_SOUND = "ui/hud/location.ogg"                                -- (the game's map-marker sound)
 
 -- ---- the host
-
--- (server, from proxchat.ranges "ping=<m>") how far a ping reaches; nil: the whole map
-function PC.setPingRange(m)
-	m = PC.finite(m)
-	if not m or m <= 0 then
-		if PC.problem then PC.problem(PC.cfg.reg .. ".ranges", "ping=" .. tostring(m) .. " is no distance - to turn pings off, SetBool(\"proxchat.noping\", true)") end
-		return
-	end
-	PC.S().pingR = math.min(m, 2000)
-end
 
 -- (server) p's team: "t:<name>" (proxchat.team.<p>), "c:<r,g,b>" and that colour (a game's team colour), or nil
 function PC.teamOf(p)
@@ -91,26 +85,6 @@ function PC.pingColorOf(p)
 	return colorKey(reg .. ".pingcolor." .. p) or colorKey(reg .. ".pingcolor")
 end
 
--- (server) PINGS TO A LIST (API 14, 2026-10-21 - Witch Hunt: a spirit witch's pins go only to the other witches, while
--- every witch stays in the humans' team, as a team would tell them apart): proxchat.pingto.<p> = player ids separated by
--- spaces, set every tick by a game. While it isn't "", p's pins go only to them (and p), instead of to p's team; ids that
--- aren't players are ignored; the dead only if listed (a dead player mustn't learn from a pin who is on which side).
--- Reach (ping=<m>) and colours still apply. Returns {[id] = true}, or nil: "" (the team rules)
-function PC.pingToOf(p)
-	local key = PC.cfg.reg .. ".pingto." .. p
-	local v = GetString(key)
-	if v == "" then return nil end
-	local set, bad = {}, nil
-	for x in v:gmatch("[^%s,]+") do
-		local q = tonumber(x)
-		if q and q == math.floor(q) then set[q] = true else bad = bad or x end
-	end
-	if bad and PC.problem then
-		PC.problem(key, PC.problemValue(bad) .. " is not a player id (ids from GetAllPlayers(), separated by spaces) - skipped")
-	end
-	return set
-end
-
 -- (server) p can't ping now: dead (a game's channel, or no health) - the lobby comes first (nobody is dead there)
 function PC.pingDead(p)
 	if PC.inLobby() then return false end
@@ -123,13 +97,17 @@ function PC.pingDead(p)
 	return false
 end
 
--- a player pings the point x, y, z: checked, then sent to their team (themselves too)
-function server.pc_ping(p, tok, x, y, z)
+-- a player pings the point x, y, z in their mode (w / s / y): checked, then sent to their team (themselves too) within
+-- the mode's reach
+function server.pc_ping(p, tok, x, y, z, mode)
 	local cfg = PC.cfg
 	p = PC.who(p, tok)
 	if not p then return end
 	x, y, z = PC.finite(x), PC.finite(y), PC.finite(z)
 	if not (x and y and z) then return end
+	local lobby = PC.inLobby()
+	if lobby then mode = "s"                                             -- (the lobby: everyone, shown as Speak)
+	elseif mode ~= "w" and mode ~= "s" and mode ~= "y" then return end  -- (Global, or none: no ping)
 	if GetBool(cfg.reg .. ".noping") or PC.pingDead(p) then return end
 	local okT, tr = pcall(GetPlayerTransform, p)
 	if not (okT and tr and tr.pos) then return end
@@ -139,23 +117,20 @@ function server.pc_ping(p, tok, x, y, z)
 	local team, col = PC.teamOf(p)
 	col = PC.pingColorOf(p) or col                                       -- (a game's own colour first)
 	local colS = col and string.format("%.3f,%.3f,%.3f", col[1], col[2], col[3]) or ""
-	local reachS, sendTo = "", nil                                       -- (a reach: where the pinger stood, inner, outer)
-	if s.pingR then
-		local outer = s.pingR * (1 + cfg.pingBuf)
-		reachS = string.format("%.2f,%.2f,%.2f,%g,%g", tr.pos[1], tr.pos[2], tr.pos[3], s.pingR, outer)
+	local reachS, sendTo = "", nil                                       -- (the mode's reach: where the pinger stood, inner,
+	if not lobby then                                                    --  outer; the lobby: everyone)
+		local inner, outer = PC.rangeOf(mode)
+		reachS = string.format("%.2f,%.2f,%.2f,%g,%g", tr.pos[1], tr.pos[2], tr.pos[3], inner, outer)
 		sendTo = outer + cfg.pingSlack
 	end
-	local only = PC.pingToOf(p)                                          -- (a game's own list instead of the team)
 	for _, q in ipairs(PC.allPlayers()) do
-		local to
-		if only then to = q == p or only[q] == true else to = PC.teamOf(q) == team end
-		if to then
+		if PC.teamOf(q) == team then
 			local near = q == p or not sendTo or s.chan[q] ~= nil             -- (the dead see every ping)
 			if not near then
 				local okQ, tq = pcall(GetPlayerTransform, q)
 				near = okQ and tq and tq.pos and VecLength(VecSub(tq.pos, tr.pos)) <= sendTo
 			end
-			if near then ClientCall(q, "client.pc_ping", p, x, y, z, colS, reachS) end
+			if near then ClientCall(q, "client.pc_ping", p, x, y, z, colS, reachS, mode) end
 		end
 	end
 end
@@ -172,9 +147,9 @@ local function numbers(str, n)
 	return t
 end
 
--- (client) a pin from the host: player p at x, y, z; col "r,g,b" ("": the chat's yellow); reach "fx,fy,fz,inner,outer"
--- (where the pinger stood, the distances: PC.pingSeen; "": the whole map)
-function client.pc_ping(p, x, y, z, colS, reachS)
+-- (client) a pin from the host: player p at x, y, z; col "r,g,b" (the ring; "": white); reach "fx,fy,fz,inner,outer"
+-- (where the pinger stood, the mode's distances: PC.pingSeen; "": everyone - the lobby); mode w / s / y (the centre)
+function client.pc_ping(p, x, y, z, colS, reachS, mode)
 	local c = PC.C()
 	p, x, y, z = PC.finite(p), PC.finite(x), PC.finite(y), PC.finite(z)
 	if not (p and x and y and z) then return end
@@ -189,7 +164,8 @@ function client.pc_ping(p, x, y, z, colS, reachS)
 			if mine >= PC.cfg.pingPer then table.remove(c.pings, i) end
 		end
 	end
-	local pg = {p = p, pos = Vec(x, y, z), t = GetTime(), col = col, name = PC.nameOf(p), fresh = true}
+	mode = (mode == "w" or mode == "y") and mode or "s"
+	local pg = {p = p, pos = Vec(x, y, z), t = GetTime(), col = col, mode = mode, name = PC.nameOf(p), fresh = true}
 	if reach and reach[4] > 0 and reach[5] >= reach[4] then
 		pg.from, pg.inner, pg.outer = Vec(reach[1], reach[2], reach[3]), reach[4], reach[5]
 	end
@@ -331,7 +307,9 @@ function PC.setPingSize(v, done)
 	if not at then return end
 	c.pings = c.pings or {}
 	for i = #c.pings, 1, -1 do if c.pings[i].preview then table.remove(c.pings, i) end end
-	c.pings[#c.pings + 1] = {p = GetLocalPlayer(), pos = at, t = GetTime(), col = PC.PING_COLOR, name = "Ping size", preview = true}
+	local m = PC.mode()
+	c.pings[#c.pings + 1] = {p = GetLocalPlayer(), pos = at, t = GetTime(), col = PC.PING_COLOR, mode = m == "g" and "s" or m,
+		name = "Ping size", preview = true}
 end
 
 -- (chat_core's Settings page) its row: the slider, 50 % .. 200 %
@@ -363,8 +341,16 @@ function PC.pingTick(now)
 		end
 	end
 	if not want or PC.pingBlocked() then return end
+	local mode = PC.mode()
+	if mode == "g" and not PC.lobby() then                             -- (no pings in Global: said, at most every 3 s)
+		if now - (c.pingNoGlobalT or -1e9) > 3 then
+			c.pingNoGlobalT = now
+			PC.system(PC.NO_GLOBAL_PING)
+		end
+		return
+	end
 	local at = PC.pingAim()
-	if at then PC.call("pc_ping", at[1], at[2], at[3]) end
+	if at then PC.call("pc_ping", at[1], at[2], at[3], mode) end
 end
 
 -- a pin's opacity at age s: full for cfg.pingLife s, then fading out over cfg.pingFade s (eased: slow at first)
@@ -375,9 +361,13 @@ function PC.pingAlpha(age)
 	return 1 - f * f
 end
 
--- one pin at opacity a (age s): a ring on the spot with a stem up to the distance and the pinger's name; off screen, on
--- the screen's edge in its direction (no stem). It pops in (big, then settles: it catches the eye); size scales it
+-- one pin at opacity a (age s): a ring on the spot (the team's / mod's colour) round a centre in the mode's colour - a
+-- dot, a "!" for Yell - with a stem up to the distance (the mode's colour) and the pinger's name; off screen, on the
+-- screen's edge in its direction (no stem). It pops in (big, then settles: it catches the eye); size scales it, and the
+-- mode (PC.PING_MODE_SIZE)
 local function drawPin(pg, a, age, size, head)
+	size = size * (PC.PING_MODE_SIZE[pg.mode] or 1)
+	local mc = PC.modeInfo(pg.mode or "s")[5]
 	local W, H = UiWidth(), UiHeight()
 	local pop = 1 + 0.8 * math.max(0, 1 - age / 0.25)
 	local x, y, d = UiWorldToPixel(pg.pos)
@@ -397,7 +387,15 @@ local function drawPin(pg, a, age, size, head)
 	UiImageBox("ui/common/circle_filled_20x20.png", 34 * pop, 34 * pop, 0, 0)
 	UiColor(col[1], col[2], col[3], a)
 	UiImageBox("ui/common/circle_hollow_20x20.png", 30 * pop, 30 * pop, 0, 0)
-	UiImageBox("ui/common/circle_filled_20x20.png", 10, 10, 0, 0)
+	UiColor(mc[1], mc[2], mc[3], a)
+	if pg.mode == "y" then                                           -- (Yell: a "!" in the middle)
+		UiPush()
+		UiFont("bold.ttf", 22)
+		UiText("!")
+		UiPop()
+	else
+		UiImageBox("ui/common/circle_filled_20x20.png", 12, 12, 0, 0)
+	end
 	if not edge then                                                 -- (the stem up to the label)
 		UiPush()
 		UiAlign("center bottom")
@@ -413,7 +411,7 @@ local function drawPin(pg, a, age, size, head)
 	PC.noWild()
 	UiFont("bold.ttf", 22)
 	UiTextShadow(0, 0, 0, 0.8 * a, 2, 0.6)
-	UiColor(col[1], col[2], col[3], a)
+	UiColor(mc[1], mc[2], mc[3], a)
 	if not pg.preview then UiText(string.format("%d m", math.floor(dist + 0.5))) end
 	UiTranslate(0, -22)
 	UiFont(PC.chatFont(pg.name), 20)
