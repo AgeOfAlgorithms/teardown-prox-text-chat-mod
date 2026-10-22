@@ -8,6 +8,8 @@
 -- TWO COLOURS (2026-10-21): the ring is the team's / a mod's (proxchat.pingcolor.<p>, else proxchat.pingcolor, else the
 -- forced team colour, else white); the centre and the distance are the MODE's (Whisper lavender, Speak yellow, Yell
 -- orange - PC.modeInfo), a Whisper pin smaller, a Yell pin with a "!".
+-- NO NAME: proxchat.pinganon.<p> (a game's, true every tick - API 16, Witch Hunt: a spirit has no name for humans, so
+-- her pins mustn't carry it): p's pins show no name to anyone (the pinger too); all else as ever.
 -- DEAD: in a channel (proxchat.channel.<p>: a game's dead) or no health left. A game turns pings off with
 -- proxchat.noping (a free-for-all mode where pins would give players away).
 -- THE BUTTONS (2026-10-20): every pad button has a job in play, and a mod can't take one from the game. L1 / R1 are the
@@ -114,6 +116,7 @@ function server.pc_ping(p, tok, x, y, z, mode)
 	if VecLength(VecSub(Vec(x, y, z), tr.pos)) > cfg.pingMax + 10 then return end   -- (from where they stand, give or take
 	if not PC.allow(p, "ping", cfg.pingRate, cfg.pingBurst) then return end         --  the camera: no pins across the map)
 	local s = PC.S()
+	local anon = GetBool(cfg.reg .. ".pinganon." .. p)                  -- (no name on p's pins: a game's)
 	local team, col = PC.teamOf(p)
 	col = PC.pingColorOf(p) or col                                       -- (a game's own colour first)
 	local colS = col and string.format("%.3f,%.3f,%.3f", col[1], col[2], col[3]) or ""
@@ -130,7 +133,7 @@ function server.pc_ping(p, tok, x, y, z, mode)
 				local okQ, tq = pcall(GetPlayerTransform, q)
 				near = okQ and tq and tq.pos and VecLength(VecSub(tq.pos, tr.pos)) <= sendTo
 			end
-			if near then ClientCall(q, "client.pc_ping", p, x, y, z, colS, reachS, mode) end
+			if near then ClientCall(q, "client.pc_ping", p, x, y, z, colS, reachS, mode, anon) end
 		end
 	end
 end
@@ -148,8 +151,9 @@ local function numbers(str, n)
 end
 
 -- (client) a pin from the host: player p at x, y, z; col "r,g,b" (the ring; "": white); reach "fx,fy,fz,inner,outer"
--- (where the pinger stood, the mode's distances: PC.pingSeen; "": everyone - the lobby); mode w / s / y (the centre)
-function client.pc_ping(p, x, y, z, colS, reachS, mode)
+-- (where the pinger stood, the mode's distances: PC.pingSeen; "": everyone - the lobby); mode w / s / y (the centre);
+-- anon: no name on it (proxchat.pinganon.<p>)
+function client.pc_ping(p, x, y, z, colS, reachS, mode, anon)
 	local c = PC.C()
 	p, x, y, z = PC.finite(p), PC.finite(x), PC.finite(y), PC.finite(z)
 	if not (p and x and y and z) then return end
@@ -165,7 +169,7 @@ function client.pc_ping(p, x, y, z, colS, reachS, mode)
 		end
 	end
 	mode = (mode == "w" or mode == "y") and mode or "s"
-	local pg = {p = p, pos = Vec(x, y, z), t = GetTime(), col = col, mode = mode, name = PC.nameOf(p), fresh = true}
+	local pg = {p = p, pos = Vec(x, y, z), t = GetTime(), col = col, mode = mode, name = anon == true and "" or PC.nameOf(p), fresh = true}
 	if reach and reach[4] > 0 and reach[5] >= reach[4] then
 		pg.from, pg.inner, pg.outer = Vec(reach[1], reach[2], reach[3]), reach[4], reach[5]
 	end
@@ -414,9 +418,11 @@ local function drawPin(pg, a, age, size, head)
 	UiColor(mc[1], mc[2], mc[3], a)
 	if not pg.preview then UiText(string.format("%d m", math.floor(dist + 0.5))) end
 	UiTranslate(0, -22)
-	UiFont(PC.chatFont(pg.name), 20)
-	UiColor(1, 1, 1, 0.9 * a)
-	UiText(pg.name)
+	if pg.name ~= "" then                                            -- (no name: proxchat.pinganon)
+		UiFont(PC.chatFont(pg.name), 20)
+		UiColor(1, 1, 1, 0.9 * a)
+		UiText(pg.name)
+	end
 	UiPop()
 end
 

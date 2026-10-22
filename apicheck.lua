@@ -12,10 +12,10 @@ PC.PROBLEM_EVERY = 2                                                   -- s betw
 -- the keys under proxchat. the chat reads or writes (lower case; API.md, and hostroom: voice.lua's own)
 PC.API_KEYS = {version = true, alive = true, lobby = true, block = true, open = true, typing = true, ranges = true, device = true,
 	tx = true, effects = true, channel = true, hearall = true, walls = true, said = true, avoid = true, hidebubbles = true,
-	hostroom = true, problem = true, close = true, key = true, talking = true, team = true, noping = true, noglobal = true, aim = true, pingskip = true, pingcolor = true, pingto = true}   -- (pingto: API 14's, gone in 15 - kept known
+	hostroom = true, problem = true, close = true, key = true, talking = true, team = true, noping = true, noglobal = true, aim = true, pingskip = true, pingcolor = true, pingto = true, pinganon = true}   -- (pingto: API 14's, gone in 15 - kept known
 	--  so a mod still setting it isn't told off on its players' screens; ignored)
 -- the ones that hold one key per player: proxchat.<name>.<player id>
-PC.API_PER_PLAYER = {typing = true, tx = true, channel = true, hearall = true, talking = true, team = true, pingcolor = true, pingto = true}
+PC.API_PER_PLAYER = {typing = true, tx = true, channel = true, hearall = true, talking = true, team = true, pingcolor = true, pingto = true, pinganon = true}
 -- the bools (SetBool): a text in them that doesn't read true is a mistake
 PC.API_BOOLS = {"lobby", "block", "walls", "hideBubbles", "noping", "noglobal"}
 

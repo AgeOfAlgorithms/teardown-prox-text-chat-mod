@@ -782,7 +782,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 15                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 16                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -795,7 +795,8 @@ PC.API_VERSION = 15                                                -- (3: proxch
                                                                     --  13: proxchat.pingcolor.<p>;
                                                                     --  14: proxchat.pingto.<p> - pins to a game's list;
                                                                     --  15: pins follow the pinger's mode (Whisper / Speak /
-                                                                    --     Yell's reach, none in Global); ping= and pingto gone)
+                                                                    --     Yell's reach, none in Global); ping= and pingto gone;
+                                                                    --  16: proxchat.pinganon.<p> - pins without a name)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
