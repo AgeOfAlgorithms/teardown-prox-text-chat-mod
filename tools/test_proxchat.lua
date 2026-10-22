@@ -4043,7 +4043,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 12, "proxchat.version 12")
+	check(M.reg["proxchat.version"] == 13, "proxchat.version 13")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4224,6 +4224,34 @@ end)()
 	clearPins()
 	waitRate(); press(P4, "mmb"); steps(2)
 	check(who(ALL) == "0 0 0 1 1", "a player without a team: every player without one (P4, P5) (" .. who(ALL) .. ")")
+	clearPins()
+	-- a game's own pin colour (proxchat.pingcolor.<p>) wins over the team colour; 0..255 works too; a wrong one: said, ignored
+	HOST.reg["proxchat.pingcolor.1"] = "0.1 0.9 0.3"
+	waitRate(); press(P1, "mmb"); steps(2)
+	local c1 = pins(P2)[1] and pins(P2)[1].col
+	check(who(ALL) == "1 1 0 0 0" and c1 and math.abs(c1[1] - 0.1) < 1e-3 and math.abs(c1[2] - 0.9) < 1e-3 and math.abs(c1[3] - 0.3) < 1e-3,
+		"proxchat.pingcolor.1 = \"0.1 0.9 0.3\": P1's pins in green (still only P1's team gets them)")
+	clearPins()
+	HOST.reg["proxchat.pingcolor.1"] = "255 128 0"
+	waitRate(); press(P1, "mmb"); steps(2)
+	c1 = pins(P2)[1] and pins(P2)[1].col
+	check(c1 and c1[1] == 1 and math.abs(c1[2] - 128 / 255) < 1e-3 and c1[3] == 0, "\"255 128 0\": read as 0..255 (orange)")
+	clearPins()
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}
+	HOST.reg["proxchat.pingcolor.1"] = "green"
+	waitRate(); press(P1, "mmb"); steps(2)
+	c1 = pins(P2)[1] and pins(P2)[1].col
+	check(c1 and c1[1] == 0.8 and table.concat(HOST.debug, " "):find('is not "r g b"', 1, true),
+		"\"green\": said, and the team colour (red) instead")
+	HOST.reg["proxchat.pingcolor.1"] = nil
+	clearPins()
+	-- proxchat.pingcolor (no player): everyone's pins; a player's own key wins over it
+	HOST.reg["proxchat.pingcolor"], HOST.reg["proxchat.pingcolor.4"] = "1 1 1", "0 0 1"
+	waitRate(); press(P1, "mmb"); press(P4, "mmb"); steps(2)
+	local cw, cb = pins(P2)[1] and pins(P2)[1].col, pins(P5)[1] and pins(P5)[1].col
+	check(cw and cw[1] == 1 and cw[2] == 1 and cw[3] == 1 and cb and cb[1] == 0 and cb[3] == 1,
+		"proxchat.pingcolor \"1 1 1\": P1's pins white (over its team colour); P4's own pingcolor.4 (blue) wins over it")
+	HOST.reg["proxchat.pingcolor"], HOST.reg["proxchat.pingcolor.4"] = nil, nil
 	clearPins()
 	-- team names from a game mod come first (tidied: case, spaces)
 	HOST.reg["proxchat.team.1"], HOST.reg["proxchat.team.3"] = "Alpha", "  ALPHA "
