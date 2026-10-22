@@ -9,6 +9,7 @@ whole interface:
 |---|---|---|---|---|
 | [`proxchat.version`, `proxchat.alive`](#proxchatversion-proxchatalive) | int, float | the chat | each machine | the chat is running here (and which API version) |
 | [`proxchat.lobby`](#proxchatlobby) | bool | your **server** script | host | while true, everything said goes to everyone |
+| [`proxchat.noglobal`](#proxchatnoglobal) | bool | your **server** script, every tick | host | while true, nobody can chat in Global (the dead's channel still works) |
 | [`proxchat.block`](#proxchatblock) | bool | your **client** script | each machine | while true, Enter does not open the chat |
 | [`proxchat.open`](#proxchatopen) | bool | your **client** script | each machine | opens the chat now, as Enter would (the chat clears it) |
 | [`proxchat.close`](#proxchatclose) | bool | your **client** script | each machine | closes the chat now (the chat clears it) |
@@ -20,6 +21,9 @@ whole interface:
 | [`proxchat.effects.<mode>`](#proxchateffectsmode), `.player.<p>` | string | your **server** script | host | how a mode, a device or one player sounds: pitch, echo, static... |
 | [`proxchat.channel.<player>`](#proxchatchannelplayer) | string | your **server** script | host | `"dead"` (or `"dead red"`...): that player talks only to the same channel, and hears everyone |
 | [`proxchat.hearall.<player>`](#proxchathearallplayer) | bool | your **server** script | host | that player's game is sent every Speak and Yell line, wherever they are (spectators, radios) |
+| [`proxchat.team.<player>`](#pings-proxchatteamplayer-proxchatnoping) | string | your **server** script | host | that player's team: only their team sees their pings |
+| [`proxchat.noping`](#pings-proxchatteamplayer-proxchatnoping) | bool | your **server** script | host | while true, nobody can ping |
+| [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping) | string | your **client** script, every frame | each machine | the view ray pings follow (your own camera), and bodies they pass through |
 | [`proxchat.walls`](#proxchatwalls) | bool | your **server** script | host | walls, floors and roofs muffle voices, or not, on your map |
 | [`proxchat.said.*`](#proxchatsaid-chat-events) | several | the chat | host | an event for every message said |
 | [`proxchat.avoid.<name>`](#proxchatavoidname) | string | your **client** script, every frame | each machine | a screen rectangle speech bubbles stay out of (your HUD panels) |
@@ -65,7 +69,7 @@ Server keys are checked on the host, so that's the screen to watch.
 ## `proxchat.version`, `proxchat.alive`
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
-`proxchat.version` is the API version (8 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer)), `proxchat.alive` the `GetTime()` of its last
+`proxchat.version` is the API version (12 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping)), `proxchat.alive` the `GetTime()` of its last
 tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
 make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
@@ -106,6 +110,49 @@ end
 ```
 
 Every chat event says whether it was said in your lobby (`lobby` field, below).
+
+## `proxchat.aim`, `proxchat.pingskip`: steering the ping
+
+**Client, strings, every frame, since version 12.** A ping casts a ray from the player's camera to find what they point
+at. If your mode draws its own camera (`SetCameraTransform`), or puts things around the player that the ray would hit
+first (a creature model, invisible hit boxes), the pin lands in the wrong place. Set these on each player's machine,
+every frame, and the chat reads and clears them (as [`proxchat.avoid`](#proxchatavoidname)):
+
+- `proxchat.aim`: `"x y z dx dy dz"`, the view ray your camera is drawn with (its position and the way it looks). While
+  set, pings cast along it instead of the player's camera.
+- `proxchat.pingskip`: body handles separated by spaces (at most 64). The ping ray passes through them.
+
+Not set: the player's own camera, skipping only their own body and the vehicle they sit in.
+
+```lua
+-- client: a monster's own camera, from inside its model
+function client.tick(dt)
+	local fwd = TransformToParentVec(myCamera, Vec(0, 0, -1))
+	SetString("proxchat.aim", string.format("%f %f %f %f %f %f", myCamera.pos[1], myCamera.pos[2], myCamera.pos[3],
+		fwd[1], fwd[2], fwd[3]))
+	SetString("proxchat.pingskip", table.concat(myModelBodies, " "))   -- the creature model, its hit boxes
+end
+```
+
+## `proxchat.noglobal`
+
+**Server, bool, every tick, since version 11.** While it is true, **Global chat is off**: for a game where everything
+said must stay local (a hidden-role or survival mode).
+
+- The host refuses Global lines, so a modified game can't send one either.
+- On each player's game the input line skips Global when cycling modes (Tab, the mode chips, a controller's L2 / R2,
+  the talk key + Tab), and `/g` says no. A player who had Global selected drops to Speak, typing and talking alike,
+  and their chat says "Global chat is off in this game."
+- Players in a [channel](#proxchatchannelplayer) (the dead) are not affected: their channel works as before, whatever
+  their mode, and they still hear everyone.
+- [`proxchat.lobby`](#proxchatlobby) wins: in the lobby everything goes to everyone, whatever this says.
+
+```lua
+-- server: no Global chat while a round is on (the lobby before it still reaches everyone)
+function server.tick(dt)
+	SetBool("proxchat.noglobal", roundRunning)
+end
+```
 
 ## `proxchat.block`
 
@@ -244,8 +291,8 @@ huge open one, and how far your [devices](#devices-walkie-talkies-megaphones-a-p
 - `"whisper,speak,yell"`, defaults `"8,25,40"`;
 - `"whisper,speak,yell,private,megaphone,pa"`, defaults `"8,25,40,6,60,45"`;
 - `key=value` pairs, any of them, in any order: `"private=10 megaphone=90"`. Keys: `whisper`, `speak`, `yell`, `private`
-  (walkies; also `radio`), `megaphone` (loudspeakers; also `loudspeaker`), `pa`, and `reach` (below). What you leave out
-  stays as it is.
+  (walkies; also `radio`), `megaphone` (loudspeakers; also `loudspeaker`), `pa`, `reach` (below), and `ping` (how far a
+  [ping](#pings-proxchatteamplayer-proxchatnoping) reaches; since version 10). What you leave out stays as it is.
 
 The garbled zone past each range follows at the same share: Whisper +50 %, Speak +40 %, Yell +37.5 %, walkies +50 %,
 loudspeakers and PA +1/3 (so the defaults garble out to 12, 35, 55, 9, 80 and 60 m). Whisper, Speak and Yell are measured
@@ -334,6 +381,52 @@ end
 
 (Built into your own mod with `#include "chat_core.lua"`: also set `PC.hooks.everyoneHears` on the client, which
 decides what that player's game shows of what it is sent.)
+
+## Pings: `proxchat.team.<player>`, `proxchat.noping`
+
+**Server, since version 9** (the reach: version 10). Players ping with the middle mouse button, or L1 + R1 together on a controller: a pin
+where their crosshair points, for 5 seconds, with their name and the distance. Only their **team** sees it, and dead
+players can't ping (a player in a [channel](#proxchatchannelplayer), or with no health left).
+
+**How far a ping reaches** is yours to set, apart from the talk modes' distances: `"ping=<metres>"` in
+[`proxchat.ranges`](#proxchatranges). Teammates within that distance of where the pinger stood see the pin in full; in
+the buffer beyond it (+40 %, as Speak's) it fades out with their distance; past that they don't get it. It follows
+them: a teammate walking closer while the pin is up sees it appear, one walking away sees it fade. Without `ping=` a
+ping reaches the whole map. The dead (in a [channel](#proxchatchannelplayer)) see every ping.
+
+```lua
+-- server: a hidden-role mode - pins only for the people around you (a whisper's distance: 8 m, faded to 11.2 m)
+function server.init()
+	SetString("proxchat.ranges", "ping=8")
+end
+```
+
+Who is on which team, in this order:
+
+1. `proxchat.team.<player>`: a team name your mod sets (any text; tidied to lower case, at most 24 characters).
+   Players with the same name are one team.
+2. Otherwise the player's forced colour: the game's own team modes colour every player in their team's colour
+   (`SetPlayerColor`), so players in the same colour are one team. Nothing to do if your mode uses mplib's teams.
+3. Otherwise no team: every player without a team sees the ping (sandbox, co-op, free for all).
+
+```lua
+-- server: your own teams
+function server.tick(dt)
+	for _, p in ipairs(GetAllPlayers()) do
+		SetString("proxchat.team." .. p, teamOf(p))          -- "red", "blue"; "" = no team
+	end
+end
+```
+
+`proxchat.noping` turns pings off for everyone while it is true, for a free-for-all mode where a pin would give a
+player away:
+
+```lua
+-- server
+function server.init()
+	SetBool("proxchat.noping", true)
+end
+```
 
 ## `proxchat.walls`
 

@@ -177,6 +177,21 @@ local function machine(me, isHost, presetReg, prePC)
 		return t0
 	end
 	api.QueryRequire = function() end
+	-- (pings, ping.lua: the camera looks along -z; W.health / W.color per player; UiSound noted)
+	api.GetPlayerCameraTransform = function() return api.GetCameraTransform() end
+	api.GetPlayerHealth = function(p) p = (p == nil or p == 0) and me or p; return (W.health and W.health[p]) or 1 end
+	api.GetPlayerColor = function(p)
+		local col = W.color and W.color[(p == nil or p == 0) and me or p]
+		if col then return true, col[1], col[2], col[3] end
+		return false, 1, 1, 1
+	end
+	api.QueryRejectAnimator = function(a) env.rejected = a end
+	api.QueryRejectVehicle = function() end
+	api.QueryRejectBody = function(b) env.rejectedBodies = env.rejectedBodies or {}; env.rejectedBodies[#env.rejectedBodies + 1] = b end
+	api.GetPlayerVehicle = function() return 0 end
+	env.uiSounds = {}
+	api.UiSound = function(path) env.uiSounds[#env.uiSounds + 1] = path end
+	api.UiImageBox = function() end
 	api.QueryRaycast = function(o, d, L)
 		env.rays = (env.rays or 0) + 1
 		local best
@@ -1432,6 +1447,25 @@ local Lfar = P1.PC.bubbleLayout(3, "hello", false, 1, false, false, false, W.tim
 P1.offscreen = nil
 check(Lnear and Lfar and math.abs(Lnear.right - (1920 - 8 - (P1.PC.TAIL_HALF + 2) * Lnear.s)) < 1 and Lnear.s > Lfar.s,
 	string.format("on the edge: 8 px from the border plus room for its tail, still sized by distance (4 m: %.2f, 30 m: %.2f)", Lnear.s, Lfar.s))
+check(Lnear.cue == nil, "... beside you, level: no cue")
+-- BEHIND you: the bottom edge, no cue, the tail down (2026-10-15); more than 45 degrees below you: "below"
+do
+local function add(u, v) return {u[1] + v[1], u[2] + v[2], u[3] + v[3]} end
+P1.offscreen, P1.yaw = true, 270                                             -- (the camera turned: P2, to the east, behind it)
+local Lbh = P1.PC.bubbleLayout(2, "behind you", false, 1, false, false, false, W.time)
+P1.offscreen, P1.yaw = nil, nil
+check(Lbh and Lbh.cue == nil and math.abs(Lbh.bottom - (1080 - 8)) < 30 and inside(Lbh),
+	"a speaker behind you: the bottom edge, no cue (bottom " .. tostring(Lbh and Lbh.bottom) .. ")")
+local tside = P1.PC.bubbleTail(Lbh.w, Lbh.h, (Lbh.sx - Lbh.x) / Lbh.s + Lbh.w / 2, (Lbh.sy - Lbh.y) / Lbh.s + Lbh.h + 14)
+check(tside == "bottom", "... its tail points down")
+local head1 = P1.PC.listenerHead()
+local _, ey, cue = P1.PC.edgePoint(add(head1, Vec(0, -20, -2)))           -- (2 m ahead, 20 m down)
+check(cue == "below" and ey > 1079, "far below you, ahead: the bottom edge, \"below\"")
+local _, ey2, cue2 = P1.PC.edgePoint(add(head1, Vec(0, -10, 6)))          -- (behind, 10 m down: steeper than 45)
+check(cue2 == "below" and ey2 > 1079, "below and behind you (steeper than 45 degrees): the bottom edge, \"below\"")
+local _, _, cue3 = P1.PC.edgePoint(add(head1, Vec(0, -3, 8)))             -- (behind, 3 m down: shallower than 45)
+check(cue3 == nil, "behind and a little below (less than 45 degrees): no cue")
+end
 P1.pixel = {3, 1076}
 local Lc = P1.PC.bubbleLayout(2, string.rep("abcdefghi ", 9), false, 1, false, false, false, W.time)
 P1.pixel = {1918, 2}
@@ -2404,7 +2438,7 @@ end)()
 	local rows = M.PC.c.navN
 	check(rows and rows >= 6, "the items: the header and the Voice page's rows (" .. tostring(rows) .. ")")
 	-- (R1 lands on the page's first row, Voice volume)
-	for _ = 1, #M.PC.otherPlayers() do M.keys.menu_down = true; helperStep(); step() end   -- (each other player's volume)
+	-- (the players' volumes are their own subsection at the end of the page now, 2026-10-15)
 	M.keys.menu_down = true; helperStep(); step()                     -- (then Microphone)
 	M.keys.menu_right = true; helperStep(); step(); helperStep(); step()   -- (the feed: written the next frame)
 	check(not VO.ptt and head().mic == 1, "D-pad right on Microphone: Always on (mic 1)")
@@ -2836,13 +2870,37 @@ end)()
 	W.pos[5] = Vec(60, 0, 0)
 	waitRate(); say(P5, "/g hola a todos"); run(3)
 	check(reqFor("hola a todos") ~= nil, "a Global line from 60 m away: asked")
-	-- a typed line from the buffer (garbled): not asked; walking into range (every word then): asked
+	-- a typed line from the buffer (garbled): asked too (the whole line); its translation garbled as much as the line
+	-- (the same share of its letters), in the bubble and the history; walking into range: both in full, not asked again
+	do
 	W.pos[2] = Vec(30, 0, 0)
 	waitRate(); say(P1, "/s from far away"); run(3)
 	local bf = M.PC.c.bubbles[1]
-	check(bf and bf.level == "mumble" and reqFor("from far away") == nil and #PC.voice().tr.reqs == 3, "a typed line heard garbled from the buffer: not asked")
+	local idf = reqFor("from far away")
+	local ef = bf and bf.entry
+	check(bf and bf.level == "mumble" and idf ~= nil and ef and ef.far and ef.trId == idf and #PC.voice().tr.reqs == 4,
+		"a typed line heard garbled from the buffer: asked, the whole line (not its boxes)")
+	sendObj({type = "translation", id = idf, text = "desde muy lejos aqui"}); run(3)
+	local BOXG = PC.GARBLE[1]
+	local function nLetters(s) local n = 0; for ch in s:gmatch(PC.UTF8_CHAR) do if ch ~= BOXG and not ch:find("%s") then n = n + 1 end end; return n end
+	local th = PC.trHist(ef)
+	local share = PC.trShare(bf, PC.bufferF(1, bf))
+	local tb = PC.trShown(bf.tr, share, bf.seed or bf.id or 0, 0)
+	check(ef.tr == "desde muy lejos aqui" and th ~= ef.tr and th:find(BOXG, 1, true) and nLetters(th) > 0 and #th > 0
+		and tb:find(BOXG, 1, true) and share > 0 and share < PC.cfg.garbleMax,
+		string.format("... its translation is garbled as much (%.2f of the letters): history '%s', bubble '%s'", share or -1, tostring(th), tostring(tb)))
+	-- (the same share of letters shows: over a long text the revealed share is close to it)
+	local long = ("abcdefghij "):rep(40)
+	local g = PC.trShown(long, 0.4, 7, 0)
+	local shown = nLetters(g) / 400
+	check(math.abs(shown - 0.4) < 0.08 and PC.trShown("abc", nil, 7) == "abc" and PC.trShare({level = "full"}, 0.3) == nil
+		and math.abs(PC.trShare({level = "mumble", fixed = true, fracs = {1, 1, 0, 0.2}}) - 0.55) < 1e-9,
+		string.format("trShown reveals that share of the letters (0.4 -> %.2f); in full: unchanged; a spoken line: the mean of its letters'", shown))
 	W.pos[2] = Vec(4, 0, 0); run(3)
-	check(bf.level == "full" and reqFor("from far away") ~= nil, "... walked into range while it is up: now heard in full - asked")
+	check(bf.level == "full" and reqFor("from far away") == nil and ef.trId == idf and PC.trHist(ef) == "desde muy lejos aqui",
+		"... walked into range while it is up: the line and its translation in full (not asked again)")
+	ef.tr = nil                                                       -- (its two lines out of the way: the history checks below
+	end                                                               --  need konnichiwa's line on screen)
 	-- spoken: live words never, the finished line (with word times: as heard) yes
 	M.client.pc_live(1, 77, "live words here", "s"); run(3)
 	check(reqFor("live words here") == nil, "live words: never asked")
@@ -2852,8 +2910,9 @@ end)()
 	local T0 = PC.serverNow() - 1
 	M.client.pc_near(900002, 1, "P1", "s", "timed words", nil, true, "00000032", T0, 78); run(3)
 	local et = hist(M)[#hist(M)]
-	check(et.voice and et.far and et.text:find(PC.GARBLE[1], 1, true) and not et.trId and reqFor("timed words") == nil,
-		"a spoken line with word times heard partly from the buffer while it was said (garbled, '" .. et.text .. "'): not asked")
+	check(et.voice and et.far and et.text:find(PC.GARBLE[1], 1, true) and et.trId and reqFor("timed words") ~= nil and et.trF and et.trF < 1,
+		"a spoken line with word times heard partly from the buffer while it was said (garbled, '" .. et.text .. "'): asked; its translation will show "
+		.. string.format("%.2f of its letters", et.trF or -1))
 	run(90)
 	T0 = PC.serverNow() - 1
 	M.client.pc_near(900003, 1, "P1", "s", "clear words", nil, true, "00000032", T0, 79); run(3)
@@ -3756,9 +3815,19 @@ end)()
 		"per-player volume: 100 % by default (yourself and the test speakers: always)")
 	-- the slider: P1's Voice page, P2's row is the first player row (340 px wide); dragged to 3/4 = 150 %
 	press(P1, "return"); P1.PC.setPage("voice"); step()
-	check(drawn(P1, "^      P2$") and drawn(P1, "^100%%$"), "the Voice page: a row per other player (P2 at 100 %)")
-	P1.hover = {340, 36, 1}; P1.mouseX = 255; P1.keys.lmb = true; P1.held = {lmb = true}; step()
-	check(P1.PC.playerVolume(2) == 1.5 and P1.reg[KEY2] == nil and drawn(P1, "^150%%$"), "... dragging it: 150 % at once, not saved yet")
+	check(drawn(P1, "^Players$") and drawn(P1, "^their volume, only for you$") and drawn(P1, "^P2$") and drawn(P1, "^100%%$"),
+		"the Voice page: a Players subsection, a row per other player (P2 at 100 %)")
+	local pvRow
+	for _, r in ipairs(P1.PC.voiceRows()) do if r[1] == "set_pv2" then pvRow = r end end
+	check(pvRow and math.abs(pvRow.mark - 1 / 1.5) < 1e-9 and pvRow.steps == 30 and math.abs(pvRow[4] - 1 / 1.5) < 1e-9,
+		"... its slider: 0-150 %, a tick at 100 % (2/3 along), 5 % steps; 100 % sits on the tick")
+	P1.hover = {340, 36, 1}; P1.mouseX = 340; P1.keys.lmb = true; P1.held = {lmb = true}; step()
+	P1.held = nil; step(); P1.hover = nil
+	check(P1.PC.playerVolume(2) == 1, "... without Koetama the Players subsection is greyed out like the page: dragging does nothing")
+	local VOp = P1.PC.voice()
+	VOp.h.alive = true                                                -- (Koetama connected: the page usable)
+	P1.hover = {340, 36, 1}; P1.mouseX = 340; P1.keys.lmb = true; P1.held = {lmb = true}; step()
+	check(P1.PC.playerVolume(2) == 1.5 and P1.reg[KEY2] == nil and drawn(P1, "^150%%$"), "... with Koetama, dragging it: 150 % at once, not saved yet")
 	P1.held = nil; step(); P1.hover = nil
 	check(P1.reg[KEY2] == 1.5, "... let go: saved by P2's name (savegame.mod.pcpvol.<hex of the name>)")
 	local R = machine(1, false, deep(P1.reg))
@@ -3769,8 +3838,9 @@ end)()
 	P1.hover = {P1.PC.RESET_W, 36, 1}; P1.keys.lmb = true; step(); P1.hover = nil; step()
 	check(P1.PC.playerVolume(2) == 1 and P1.reg[KEY2] == nil, "Reset: back to 100 %, the saved key cleared")
 	P1.PC.c.muted[3] = "P3"; step()
-	check(drawn(P1, "P3  (muted)", true) ~= nil and drawn(P1, "^      P2$"), "a muted player shows as muted on the Voice page")
+	check(drawn(P1, "P3  (muted)", true) ~= nil and drawn(P1, "^P2$"), "a muted player shows as muted on the Voice page")
 	P1.PC.c.muted[3] = nil
+	VOp.h.alive = false
 	-- /volume
 	W.names[4], W.names[5] = "Bobby", "Bobcat"
 	press(P1, "esc"); step()
@@ -3783,22 +3853,22 @@ end)()
 		"/volume bobc 50: the start of a name, Bobcat at 50 %, saved")
 	say(P1, "/volume Bobcat")
 	check(lastLine(P1).text:find("Bobcat: 50%", 1, true) and P1.PC.playerVolume(5) == 0.5, "/volume Bobcat alone: shows it (50 %)")
-	say(P1, "/volume #4 200%")
-	check(P1.PC.playerVolume(4) == 2, "/volume #4 200%: by number (and a % sign), Bobby at 200 %")
-	say(P1, "/volume bobby 250")
-	check(P1.PC.playerVolume(4) == 2 and lastLine(P1).text:find("0 to 200", 1, true), "/volume bobby 250: refused (0-200), unchanged")
+	say(P1, "/volume #4 150%")
+	check(P1.PC.playerVolume(4) == 1.5, "/volume #4 150%: by number (and a % sign), Bobby at 150 %")
+	say(P1, "/volume bobby 160")
+	check(P1.PC.playerVolume(4) == 1.5 and lastLine(P1).text:find("0 to 150", 1, true), "/volume bobby 160: refused (0-150), unchanged")
 	say(P1, "/volume nobody 50")
 	check(lastLine(P1).text:find("No player called", 1, true), "/volume nobody 50: no such player")
 	say(P1, "/volume")
 	l = lastLine(P1).text
-	check(l:find("Bobby 200%", 1, true) and l:find("Bobcat 50%", 1, true) and not l:find("P2 ", 1, true), "/volume alone: the players not at 100 %: " .. l)
+	check(l:find("Bobby 150%", 1, true) and l:find("Bobcat 50%", 1, true) and not l:find("P2 ", 1, true), "/volume alone: the players not at 100 %: " .. l)
 	P1.PC.c.muted[5] = "Bobcat"
 	say(P1, "/volume bobcat")
 	check(lastLine(P1).text:find("muted", 1, true), "/volume on a muted player says so")
 	P1.PC.c.muted[5] = nil
 	say(P1, "/help")
 	local helpHas = false
-	for _, e in ipairs(hist(P1)) do if e.sys and (e.text or ""):find("/volume <name> <0-200>", 1, true) then helpHas = true end end
+	for _, e in ipairs(hist(P1)) do if e.sys and (e.text or ""):find("/volume <name> <0-150>", 1, true) then helpHas = true end end
 	check(helpHas, "/help lists /volume")
 	say(P1, "/volume bobby 100"); say(P1, "/volume bobcat 100")
 	check(P1.reg["savegame.mod.pcpvol.426f626279"] == nil and P1.reg["savegame.mod.pcpvol.426f62636174"] == nil, "/volume ... 100: the keys cleared")
@@ -3973,7 +4043,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 8, "proxchat.version 8")
+	check(M.reg["proxchat.version"] == 12, "proxchat.version 12")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4016,6 +4086,15 @@ end)()
 	H.LastInputDevice, H.device = nil, nil
 	M.LastInputDevice, M.device, M.mouseX, M.mouseY = nil, nil, nil, nil
 end)()
+
+-- A TRANSLATED line: the original smaller (75 %), its translation full size under it (2026-10-16)
+do
+	local Lp = P1.PC.bubbleLayout(2, "hola amigos", false, 1, false, false, false, W.time)
+	local Lt = P1.PC.bubbleLayout(2, "hola amigos", false, 1, false, false, false, W.time, false, "hello friends", W.time)
+	check(Lp and Lt and Lt.tr and Lt.size == math.floor(Lp.size * 0.75 + 0.5) and Lt.tr.size == Lp.size,
+		string.format("a bubble with a translation: the original at 75 %% (%s of %s), the translation full size (%s)",
+			tostring(Lt and Lt.size), tostring(Lp and Lp.size), tostring(Lt and Lt.tr and Lt.tr.size)))
+end
 
 -- THE BUBBLE'S TAIL points where it comes from (2026-10-15): the side facing the source, slid along it, off the corners
 do
@@ -4095,6 +4174,249 @@ end
 	check(P2.PC.koetamaNewer(vo) and nNewer == 1, "a Koetama with a newer protocol: \"" .. P2.PC.KOETAMA_NEWER .. "\" in the chat, once")
 	P2.PC.voiceMessage(vo, {type = "hello", app = "Koetama", version = "0.5.4", protocol = P2.PC.PROTOCOL, features = {}})
 	check(not P2.PC.koetamaNewer(vo), "... and not with this protocol")
+end)()
+
+-- ================================================================== pings (ping.lua, 2026-10-20): the middle mouse button,
+-- L1 + R1 on a controller; a pin where the crosshair points, 5 s, for the pinger's team; not from the dead
+;(function()
+	local ALL = {P1, P2, P3, P4, P5}
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	for k in pairs(HOST.reg) do if k:find("^proxchat%.channel%.") or k:find("^proxchat%.team%.") or k:find("^proxchat%.lobby") then HOST.reg[k] = nil end end
+	for _, M in ipairs(ALL) do
+		if M.PC.c.typing then press(M, "esc") end
+		if M.PC.c.nav then M.PC.setNav(false) end
+		M.PC.c.pings = nil
+	end
+	W.boxes = {{lo = Vec(-100, -5, -21), hi = Vec(100, 30, -20)}}    -- (a wall 20 m ahead of everyone: the cameras look along -z)
+	W.color, W.health = {}, {}
+	steps(3)
+	local function pins(M) return M.PC.c.pings or {} end
+	local function who(list) local t = {}; for _, M in ipairs(list) do t[#t + 1] = #pins(M) end; return table.concat(t, " ") end
+	local function clearPins() for _, M in ipairs(ALL) do M.PC.c.pings = nil end end
+	local function nCalls() local n = 0; for _, cl in ipairs(W.clog or {}) do if cl.name == "pc_ping" then n = n + 1 end end; return n end
+	-- the middle mouse button: everyone (no teams here) gets P2's pin, on the wall in front of P2's camera
+	press(P2, "mmb"); steps(2)
+	local pg = pins(P1)[1]
+	check(who(ALL) == "1 1 1 1 1" and pg and pg.p == 2 and math.abs(pg.pos[1] - 4) < 1e-6 and math.abs(pg.pos[3] + 20) < 1e-6
+		and math.abs(pg.pos[2] - 1.7) < 1e-6 and pg.name == "P2" and P2.rejected == 502,
+		"the middle mouse button: a pin where P2's crosshair hits the wall (not P2's own body), for every player - no teams (" .. who(ALL) .. ")")
+	check(P1.PC.PING_COLOR == pg.col, "... in the chat's yellow (no team colour)")
+	P1.uiSounds = {}; step()
+	check(drawn(P1, "^P2$") and drawn(P1, "^20 m$") and #P1.uiSounds == 0, "drawn: the pinger's name and the distance (20 m from P1's head)")
+	check(P3.PC.c.pings[1].fresh == nil, "... and its sound played once, when it came")
+	steps(math.ceil(5.5 * 60))
+	local PA = P1.PC.pingAlpha
+	check(#pins(P1) == 1 and PA(4.9) == 1 and PA(5) == 1 and math.abs(PA(6.25) - 0.75) < 1e-9 and PA(7.5) == 0,
+		"still there after 5.5 s: in full for 5 s, then fading slowly (eased) over 2.5 s - 75 % at 6.25 s")
+	steps(150)
+	check(#pins(P1) == 0 and not drawn(P1, "^P2$"), "gone after 7.5 s")
+	-- nothing under the crosshair (the sky): no ping
+	W.boxes = nil
+	W.clog = {}
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(#pins(P1) == 0 and nCalls() == 0, "nothing under the crosshair (the sky): no ping")
+	W.boxes = {{lo = Vec(-100, -5, -21), hi = Vec(100, 30, -20)}}
+	-- teams by the colour a game mode forces (mplib's team modes): red P1, P2; blue P3; P4, P5 none
+	W.color[1], W.color[2], W.color[3] = {0.8, 0.25, 0.2}, {0.8, 0.25, 0.2}, {0.2, 0.55, 0.8}
+	waitRate(); press(P1, "mmb"); steps(2)
+	check(who(ALL) == "1 1 0 0 0" and pins(P2)[1].col[1] == 0.8 and pins(P2)[1].col[3] == 0.2,
+		"team colours: P1's pin reaches P1 and P2 (red) only, in red (" .. who(ALL) .. ")")
+	clearPins()
+	waitRate(); press(P4, "mmb"); steps(2)
+	check(who(ALL) == "0 0 0 1 1", "a player without a team: every player without one (P4, P5) (" .. who(ALL) .. ")")
+	clearPins()
+	-- team names from a game mod come first (tidied: case, spaces)
+	HOST.reg["proxchat.team.1"], HOST.reg["proxchat.team.3"] = "Alpha", "  ALPHA "
+	waitRate(); press(P1, "mmb"); steps(2)
+	check(who(ALL) == "1 0 1 0 0", "proxchat.team.<p>: P1 and P3 both 'alpha' - P2 (red, no name) no more (" .. who(ALL) .. ")")
+	clearPins()
+	HOST.reg["proxchat.team.1"], HOST.reg["proxchat.team.3"] = nil, nil
+	W.color = {}
+	-- the dead can't ping: no health, or a game's channel; the lobby comes first
+	W.health[5] = 0
+	W.clog = {}
+	waitRate(); press(P5, "mmb"); steps(2)
+	check(who(ALL) == "0 0 0 0 0" and nCalls() == 0, "no health left: no ping (" .. who(ALL) .. ")")
+	P5.PC.call("pc_ping", 14, 1.7, -20); steps(2)
+	check(who(ALL) == "0 0 0 0 0", "... and a game that asks anyway: the host refuses")
+	W.health[5] = nil
+	HOST.reg["proxchat.channel.4"] = "dead"; steps(2)
+	waitRate(); press(P4, "mmb"); steps(2)
+	P4.PC.call("pc_ping", 60, 1.7, -20); steps(2)
+	check(who(ALL) == "0 0 0 0 0", "dead (proxchat.channel.<p>): no ping (" .. who(ALL) .. ")")
+	HOST.reg["proxchat.lobby"] = true; steps(2)
+	waitRate(); press(P4, "mmb"); steps(2)
+	check(#pins(P4) == 1, "... in the lobby, everyone is alive: a ping")
+	clearPins()
+	HOST.reg["proxchat.lobby"], HOST.reg["proxchat.channel.4"] = nil, nil; steps(2)
+	-- proxchat.noping: nobody
+	HOST.reg["proxchat.noping"] = true
+	waitRate(); P1.keys.mmb = true; P3.keys.mmb = true; steps(3)
+	check(who(ALL) == "0 0 0 0 0", "proxchat.noping: nobody can ping")
+	HOST.reg["proxchat.noping"] = nil
+	-- the chat has the keys (typing): the middle mouse button doesn't ping
+	press(P2, "return"); step()
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(#pins(P1) == 0, "typing: no ping")
+	press(P2, "esc"); step()
+	-- a controller: L1 + R1 together (scroll_up, scroll_down within 0.2 s); apart, or on the mouse (its wheel), nothing
+	P2.LastInputDevice = function() return P2.device end
+	P2.device = 2
+	waitRate(); P2.keys.scroll_up = true; steps(5); P2.keys.scroll_down = true; steps(3)
+	check(#pins(P1) == 1 and pins(P1)[1].p == 2, "a controller: L1, then R1 0.08 s later - a ping")
+	clearPins()
+	waitRate(); P2.keys.scroll_down = true; steps(1); P2.keys.scroll_up = true; steps(3)
+	check(#pins(P1) == 1, "... R1 first works too")
+	clearPins()
+	waitRate(); P2.keys.scroll_up = true; steps(20); P2.keys.scroll_down = true; steps(3)
+	check(#pins(P1) == 0, "... 0.33 s apart (two tool switches): no ping")
+	P2.device = 0
+	waitRate(); P2.keys.scroll_up = true; steps(1); P2.keys.scroll_down = true; steps(3)
+	check(#pins(P1) == 0, "the mouse wheel up and down at once: no ping (a controller's chord only)")
+	P2.LastInputDevice, P2.device = nil, nil
+	-- the host checks: a forged token, a point far from the pinger, NaN; at most 3 at once, a player's 3 newest pins
+	W.clog = {}
+	waitRate()
+	HOST.server.pc_ping(2, "0123456789abcdef0123456789abcdef", 4, 1.7, -20); steps(2)
+	P2.PC.call("pc_ping", 4, 1.7, -2000); steps(2)
+	P2.PC.call("pc_ping", 0 / 0, 1.7, -20); steps(2)
+	check(#pins(P1) == 0 and nCalls() == 0, "the host refuses a wrong token, a point 2 km away, NaN")
+	waitRate(); steps(120)
+	for i = 1, 6 do P2.PC.call("pc_ping", i, 1.7, -20) end
+	steps(2)
+	check(#pins(P1) == 3 and nCalls() == 3 * #HOST.GetAllPlayers(), "6 pings in one frame: the host takes 3 (a burst of 3) (" .. #pins(P1) .. ", " .. nCalls() .. " sends)")
+	steps(60)
+	P2.PC.call("pc_ping", 9, 1.7, -20); steps(2)
+	local xs = {}
+	for _, p in ipairs(pins(P1)) do xs[#xs + 1] = p.pos[1] end
+	check(#pins(P1) == 3 and table.concat(xs, " ") == "2 3 9", "a 4th pin: the oldest of P2's goes (" .. table.concat(xs, " ") .. ")")
+	-- a game sets how far a ping reaches: proxchat.ranges "ping=8" (buffer +40 %: to 11.2 m), apart from the talk modes.
+	-- P2 (at 4) pings: P1 (4 m) in full; P5 (10 m) faded (the buffer); P3 (26 m) is sent it (room to walk in) but sees
+	-- nothing; P4 (56 m) isn't sent it. By the distance NOW to where P2 stood: P3 walking in sees it
+	clearPins()
+	HOST.reg["proxchat.ranges"] = "ping=8"; steps(2)
+	check(HOST.PC.S().pingR == 8 and HOST.PC.cfg.chatR == 25, "proxchat.ranges \"ping=8\": a ping's reach, the talk modes' untouched")
+	waitRate(); press(P2, "mmb"); steps(2)
+	local seen = function(M) local pgx = pins(M)[1]; return pgx and M.PC.pingSeen(pgx) or -1 end
+	check(who(ALL) == "1 1 1 0 1" and seen(P1) == 1 and seen(P2) == 1 and math.abs(seen(P5) - 1.2 / 3.2) < 1e-6 and seen(P3) == 0,
+		string.format("ping=8: P1 (4 m) in full, P5 (10 m, the buffer) faded to %.2f, P3 (26 m) sent but unseen, P4 (56 m) nothing (%s)", seen(P5), who(ALL)))
+	P3.uiSounds = {}; step()
+	check(drawn(P1, "^P2$") and not drawn(P3, "^P2$") and #P3.uiSounds == 0, "... drawn for P1, not for P3 (no sound either)")
+	W.pos[3] = Vec(9, 0, 0); step()
+	check(seen(P3) == 1 and drawn(P3, "^P2$") and #P3.uiSounds == 1, "P3 walks to 5 m from where P2 stood: the pin shows (its sound now)")
+	W.pos[1] = Vec(-6.4, 0, 0); step()
+	local s104 = seen(P1)
+	W.pos[1] = Vec(-8, 0, 0); step()
+	check(math.abs(s104 - 0.25) < 1e-6 and seen(P1) == 0 and not drawn(P1, "^P2$"),
+		string.format("P1 walks away: 10.4 m - faded to %.2f; 12 m (past the buffer) - gone", s104))
+	W.pos[1] = Vec(0, 0, 0); W.pos[3] = Vec(30, 0, 0); clearPins()
+	-- the dead see every ping (they hear everyone)
+	HOST.reg["proxchat.channel.4"] = "dead"; steps(2)
+	waitRate(); press(P2, "mmb"); steps(2)
+	check(#pins(P4) == 1 and seen(P4) == 1, "a dead teammate 56 m away sees it in full (the dead see every ping)")
+	HOST.reg["proxchat.channel.4"] = nil; steps(2); clearPins()
+	-- ping=0 is no distance: said, and the reach stays
+	HOST.debug = {}
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}               -- (an earlier test used up the session's 20)
+	HOST.reg["proxchat.ranges"] = "ping=0"; steps(2)
+	check(HOST.PC.S().pingR == 8 and table.concat(HOST.debug, " "):find("proxchat.noping", 1, true),
+		"ping=0: refused, with the hint to use proxchat.noping (the reach stays 8 m)")
+	HOST.reg["proxchat.ranges"] = nil; HOST.PC.S().pingR = nil
+	-- a game steers the ray (API 12): proxchat.aim "x y z dx dy dz" (its own camera's view), proxchat.pingskip "body ..."
+	-- (bodies the ray passes through); set every frame, read and cleared; unset - the player's camera again
+	clearPins()
+	P2.rejectedBodies = {}
+	waitRate(); P2.reg["proxchat.aim"], P2.reg["proxchat.pingskip"] = "10 5 0 0 0 -2", "123 456"; press(P2, "mmb"); steps(2)
+	local pa = pins(P1)[1]
+	check(pa and math.abs(pa.pos[1] - 10) < 1e-6 and math.abs(pa.pos[2] - 5) < 1e-6 and math.abs(pa.pos[3] + 20) < 1e-6
+		and table.concat(P2.rejectedBodies, " ") == "123 456" and P2.reg["proxchat.aim"] == nil and P2.reg["proxchat.pingskip"] == nil,
+		"proxchat.aim: the pin on the game's ray (10, 5, -20), its pingskip bodies passed through, both keys cleared ("
+		.. (pa and string.format("%.1f %.1f %.1f", pa.pos[1], pa.pos[2], pa.pos[3]) or "none") .. ")")
+	clearPins(); steps(20)
+	waitRate(); press(P2, "mmb"); steps(2)
+	pa = pins(P1)[1]
+	check(pa and math.abs(pa.pos[1] - 4) < 1e-6 and math.abs(pa.pos[2] - 1.7) < 1e-6, "no longer set (0.3 s): the player's own camera again")
+	clearPins()
+	P2.PC.problems = {seen = {}, n = 0, scanT = -1e9}; P2.debug = {}
+	P2.reg["proxchat.aim"], P2.reg["proxchat.pingskip"] = "1 2 3", "12 abc"; step()
+	local said = table.concat(P2.debug, " | ")
+	check(said:find("proxchat.aim", 1, true) and said:find("x y z dx dy dz", 1, true) and said:find('"abc" is not a body handle', 1, true)
+		and P2.reg["proxchat.aim"] == nil, "a wrong aim or skip list: said (what the form is), cleared")
+	-- Settings' "Ping size": a slider 50 % .. 200 % (100 % at first); let go - saved, and a preview pin where you aim
+	clearPins()
+	say(P2, "/settings"); step()
+	check(drawn(P2, "^Ping size$") and P2.PC.pingSize() == 1 and drawn(P2, "^100%%$"), "Settings: a 'Ping size' slider, 100 %")
+	P2.hover = {400, 36, 5}; P2.keys.lmb = true; P2.held = {lmb = true}; P2.mouseX = 0; step(); P2.hover = nil
+	check(P2.PC.pingSize() == 0.5 and drawn(P2, "^50%%$") and P2.reg["savegame.mod.pcpingsize"] == nil and #pins(P2) == 0,
+		"dragged to the left end: 50 % at once, not saved yet")
+	P2.held = nil; step()
+	check(P2.reg["savegame.mod.pcpingsize"] == 0.5 and #pins(P2) == 1 and pins(P2)[1].preview and #pins(P1) == 0,
+		"let go: saved; a preview pin where P2 aims - only on P2's screen")
+	P2.hover = {400, 36, 5}; P2.keys.lmb = true; P2.held = {lmb = true}; P2.mouseX = 999; step(); P2.held = nil; step(); P2.hover = nil
+	check(P2.PC.pingSize() == 2 and P2.reg["savegame.mod.pcpingsize"] == 2 and #pins(P2) == 1, "the right end: 200 % (one preview pin, the new one)")
+	press(P2, "esc"); step()
+	P2.PC.c.pingSize = nil
+	check(P2.PC.pingSize() == 2, "read back from the save")
+	P2.PC.setPingSize(1, true); clearPins()
+	-- the API checker knows the keys
+	HOST.reg["proxchat.team.2"], HOST.reg["proxchat.noping"] = "red", false
+	HOST.debug = {}; steps(150)
+	local said = table.concat(HOST.debug, " | ")
+	check(not said:find("team", 1, true) and not said:find("noping", 1, true), "apicheck: proxchat.team.<p> and proxchat.noping are known keys (" .. said .. ")")
+	HOST.reg["proxchat.team.2"], HOST.reg["proxchat.noping"] = nil, nil
+	clearPins()
+	W.boxes, W.color, W.health, W.clog = nil, nil, nil, nil
+end)()
+
+-- ================================================================== proxchat.noglobal (API 11, 2026-10-21): a game turns
+-- Global chat off - the host refuses Global lines, the mode drops to Speak (said), Tab / L2 R2 / talk key + Tab skip it;
+-- a channel's players (the dead) and the lobby are not affected
+;(function()
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	for k in pairs(HOST.reg) do if k:find("^proxchat%.channel%.") or k:find("^proxchat%.lobby") then HOST.reg[k] = nil end end
+	for _, M in ipairs({P1, P2, P3, P4, P5}) do if M.PC.c.typing then press(M, "esc") end end
+	steps(2)
+	P2.PC.setMode("g"); step()
+	check(P2.PC.mode() == "g" and P2.PC.voice().vmode == "g", "Global on: P2 picks Global (typing and talking)")
+	HOST.reg["proxchat.noglobal"] = true; steps(3)
+	local sysOff = 0
+	for _, e in ipairs(hist(P2)) do if e.sys and e.text == P2.PC.NO_GLOBAL then sysOff = sysOff + 1 end end
+	check(P2.PC.mode() == "s" and P2.PC.voice().vmode == "s" and sysOff == 1 and P1.PC.noGlobal(),
+		"proxchat.noglobal: P2's Global drops to Speak (typing and talking), said once: \"" .. P2.PC.NO_GLOBAL .. "\"")
+	P2.PC.setMode("y"); P2.PC.nextMode()
+	check(P2.PC.mode() == "w", "Tab from Yell: Whisper (Global skipped)")
+	P2.PC.setMode("w"); P2.PC.padModeStep(-1)
+	check(P2.PC.mode() == "y", "a controller's L2 from Whisper: Yell (Global skipped, the other way round)")
+	P2.PC.setMode("y"); P2.PC.nextVoiceMode()
+	check(P2.PC.voice().vmode == "w", "talk key + Tab from Yell: Whisper")
+	P2.PC.setMode("g")
+	check(P2.PC.mode() == "w", "picking Global (a chip, a game): nothing changes")
+	local n1 = #hist(P1)
+	waitRate(); say(P2, "/g hello everyone"); steps(2)
+	check(#hist(P1) == n1 and lastLine(P2).sys and lastLine(P2).text == P2.PC.NO_GLOBAL, "/g hello: refused on P2's own game, nothing sent")
+	waitRate(); P2.PC.call("pc_say", "g", "a sneaky global", 1e6); steps(3)
+	check(not hasLine(P1, "g", "a sneaky global") and not hasLine(P4, "g", "a sneaky global"), "a Global line sent anyway (a modified game): the host refuses it")
+	-- the dead: their channel works whatever their mode
+	HOST.reg["proxchat.channel.3"], HOST.reg["proxchat.channel.4"] = "dead", "dead"; steps(2)
+	P4.PC.c.mode = "g"
+	waitRate(); say(P4, "boo from the grave"); steps(2)
+	check(hasLine(P3, "d", "boo from the grave") and P4.PC.mode() == "g" and not P4.PC.noGlobal(),
+		"a dead player (a channel) on Global: their channel still gets it, their mode untouched")
+	HOST.reg["proxchat.channel.3"], HOST.reg["proxchat.channel.4"] = nil, nil; steps(2)
+	-- the lobby wins
+	HOST.reg["proxchat.lobby"] = true; steps(2)
+	waitRate(); say(P5, "lobby hello"); steps(2)
+	check(hasLine(P4, "g", "lobby hello") and not P1.PC.noGlobal(), "the lobby (proxchat.lobby) wins: everything to everyone")
+	HOST.reg["proxchat.lobby"] = nil; steps(3)
+	-- the API checker knows the key; off again: Global is back
+	HOST.debug = {}; steps(150)
+	check(not table.concat(HOST.debug, " "):find("noglobal", 1, true), "apicheck: proxchat.noglobal is a known key")
+	HOST.reg["proxchat.noglobal"] = nil; steps(2)
+	P2.PC.setMode("g")
+	check(P2.PC.mode() == "g" and not P2.PC.noGlobal(), "proxchat.noglobal cleared: Global can be picked again")
+	waitRate(); say(P2, "/g back to all"); steps(2)
+	check(hasLine(P4, "g", "back to all"), "... and Global lines reach everyone again")
+	P2.PC.setMode("s"); step()
 end)()
 
 -- (as the game: a ServerCall / ClientCall works only with its function's name as a string LITERAL in the source -

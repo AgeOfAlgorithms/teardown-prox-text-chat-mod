@@ -43,6 +43,8 @@ babble for every alphabet.
 it automatically from the Workshop. Teardown only allows Workshop mods in multiplayer, not local
 copies.
 
+**Not compatible with other chat mods** such as Easy Chat: turn them off when you use this one.
+
 ## Use
 
 - **Enter**: open the chat line and the chat window. Enter again sends; **Esc** closes. A message can
@@ -71,13 +73,17 @@ copies.
   - Lines sent from a controller show a small four-dot mark (the face buttons) before the name.
   - With Koetama running, a controller player's microphone is always on (it only sends while they talk),
     unless they choose push to talk on the Voice page.
+- **Ping:** the **middle mouse button** (on a controller **L1 + R1** together) puts a pin where your crosshair
+  points, with your name and its distance, for 5 seconds, then it fades out. Only your team sees it (in the game's
+  team modes, the players in your colour; with no teams, everyone). Dead players can't ping. **Ping size** in
+  Settings (50 % to 200 %) sets how big pins are on your screen.
 - **Commands:**
   - `/s`, `/w`, `/y` and `/g` choose the mode (Speak, Whisper, Yell, Global), or say one line in it:
     `/w psst`, `/y over here`.
   - `/voice` lists the voices; `/voice robot` picks one.
   - `/mute <name>` hides a player's messages, only for you (`/unmute <name>`, `/unmute all`;
     `/mute` alone lists who is muted).
-  - `/volume <name> <0-200>` sets one player's volume, only for you (100 is normal): their voice in Koetama
+  - `/volume <name> <0-150>` sets one player's volume, only for you (100 is normal): their voice in Koetama
     and the babble of their typed lines. `/volume <name>` shows it, `/volume` lists who is not at 100 %. The start of a
     name is enough; `#<number>` picks one of two alike. The Voice page has the same as a slider per player, with Reset.
     It is remembered by the player's name, so a friend's level carries over to the next session.
