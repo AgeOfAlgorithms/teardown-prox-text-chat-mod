@@ -56,10 +56,10 @@
 -- Translate tab next to Voice shows it (Koetama's translations_status: into, and each pair's state).
 -- Every FULL line another player says that goes into this player's history or a bubble - typed, or spoken once
 -- finished (never live words), any mode, Global and the dead's channels too - is sent to Koetama (the feed's
--- to_translate) while Koetama runs and translates (not while it says it is off); only lines heard in full (not garbled
--- from a buffer; a typed one walked into range: then). Koetama translates on this PC (Mozilla's models) and answers
--- with a "translation"; it shows under the original in the history, the feed and its bubble, in its own colour
--- (PC.TR_COLOR).
+-- to_translate) while Koetama runs and translates (not while it says it is off). Koetama translates on this PC (Mozilla's
+-- models) and answers with a "translation"; it shows under the original in the history, the feed and its bubble, in its
+-- own colour (PC.TR_COLOR). A line heard garbled from a buffer is translated too, and its translation garbled as much
+-- (chat_core's PC.trShare / PC.trShown: the same share of its letters shows; walking closer reveals more of both).
 --
 -- /dummy voice: three VOICE dummies in a row (whisperer, speaker, yeller; green heads), separate from the
 -- chat's test dummies (/dummy): they talk in turns of cfg.voiceTurn s - the helper plays a recorded voice
@@ -786,13 +786,6 @@ function PC.voiceRows()
 	local rows = {}
 	local vo, c = PC.voice(), PC.C()
 	rows[#rows + 1] = {"set_x", "Voice volume", "slider", vo.volume, PC.setVoiceVolume}
-	for _, o in ipairs(PC.otherPlayers()) do                          -- (each other player's volume, 0-200 %: PC.playerVolume)
-		local q = o.p
-		rows[#rows + 1] = {"set_pv" .. q, "      " .. o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / 2,
-			function(v, done) PC.setPlayerVolume(q, v * 2, done) end,
-			function(v) return string.format("%d%%", math.floor(v * 200 + 0.5)) end,
-			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true}
-	end
 	do
 		rows[#rows + 1] = {"set_pt", "Microphone", vo.ptt, "Push to talk", "Always on", PC.setVoicePtt, w = 170}
 		rows[#rows + 1] = {"set_tk", vo.ptt and "Talk key (hold it to talk)" or "Talk key (+ Tab: mode)", "cycle",
@@ -804,8 +797,22 @@ function PC.voiceRows()
 			step = function(d) PC.setVoiceLang(vo.lang + d) end}                                    -- (a controller: steps through it)
 		rows[#rows + 1] = {"set_v2", "Live words while I talk", vo.liveOn, "On", "Off", PC.setVoiceLiveOn}
 	end
-	if not vo.h.alive then
-		for _, r in ipairs(rows) do if not r.player then r.off = true end end
+	-- PLAYERS: each other player's volume, 0-150 % (a tick at 100 %), only for you (PC.playerVolume) - its own subsection (the user,
+	-- 2026-10-15); greyed out with the rest without Koetama (/volume still sets it: their babble)
+	local others = PC.otherPlayers()
+	rows[#rows + 1] = {"set_ph", "Players", "heading", "their volume, only for you", player = true}
+	if #others == 0 then rows[#rows + 1] = {"set_pn", "No one else here yet.", "note", player = true} end
+	for _, o in ipairs(others) do
+		local q = o.p
+		local top = PC.PVOL_MAX
+		rows[#rows + 1] = {"set_pv" .. q, o.name .. (c.muted[q] and "  (muted)" or ""), "slider", PC.playerVolume(q) / top,
+			function(v, done) PC.setPlayerVolume(q, v * top, done) end,
+			function(v) return string.format("%d%%", math.floor(v * top * 100 + 0.5)) end,
+			sw = PC.PVOL_W, reset = function() PC.setPlayerVolume(q, 1) end, size = 20, player = true,
+			mark = 1 / top, steps = math.floor(top * 20 + 0.5)}
+	end
+	if not vo.h.alive then                                             -- (no Koetama: the whole page grey, the players too -
+		for _, r in ipairs(rows) do r.off = true end                   --  the user, 2026-10-15; /volume still sets them)
 	end
 	return rows
 end
@@ -856,13 +863,15 @@ function PC.trSend(vo)
 	return PC.trOn(vo) and vo.tr.into ~= ""
 end
 
--- (chat_core: a history entry e, and its bubble b, heard in full) another player's line: translated while Koetama runs
--- and translates. Each entry is asked once (e.trId); the reply goes onto both (PC.trReply).
+-- (chat_core: a history entry e, and its bubble b, shown - in full or garbled from a buffer) another player's line:
+-- translated while Koetama runs and translates. Each entry is asked once (e.trId); the reply goes onto both
+-- (PC.trReply). The whole line is asked (b.full: a garbled entry's text is boxes); a garbled line's translation is
+-- garbled as much where it is drawn (PC.trShown).
 function PC.trWant(e, b)
 	local c = PC.c
 	local vo = c and c.voice
 	if not PC.trSend(vo) or e.trId or e.sys or e.p == nil or e.p == GetLocalPlayer() then return end
-	local text = PC.trCut(e.text or "")
+	local text = PC.trCut((b and b.full) or e.text or "")
 	if text == "" then return end
 	local tr = vo.tr
 	-- FLOODS (2026-10-09): each line costs every listener's Koetama CPU. A line already translated (the same text, into
@@ -1125,6 +1134,7 @@ end
 function PC.setVoiceMode(m)
 	local vo = PC.voice()
 	if not PC.TALK_MODE_I[m] or vo.vmode == m then return end
+	if PC.modeAllowed and not PC.modeAllowed(m) then return end       -- (Global off: proxchat.noglobal)
 	vo.modeFrom, vo.modeT = vo.vmode, GetTime()
 	vo.vmode = m
 	vo.vmodeT = 0                                                      -- (the host hears of it at once: shared.pcVMode)
@@ -1132,10 +1142,12 @@ function PC.setVoiceMode(m)
 	PC.setMode(m)                                                      -- (and the input line's: one mode for both)
 end
 
--- talk key + Tab: Whisper -> Speak -> Yell -> Global -> Whisper
+-- talk key + Tab: Whisper -> Speak -> Yell -> Global -> Whisper (Global skipped while it is off: proxchat.noglobal)
 function PC.nextVoiceMode()
 	local vo = PC.voice()
-	PC.setVoiceMode(PC.TALK_MODES[PC.TALK_MODE_I[vo.vmode] % #PC.TALK_MODES + 1])
+	local m = PC.TALK_MODES[PC.TALK_MODE_I[vo.vmode] % #PC.TALK_MODES + 1]
+	if PC.modeAllowed and not PC.modeAllowed(m) then m = PC.TALK_MODES[PC.TALK_MODE_I[m] % #PC.TALK_MODES + 1] end
+	PC.setVoiceMode(m)
 end
 
 -- the Voice page: push to talk (true) or always on (false), saved; the helper hears of it now

@@ -60,7 +60,7 @@
 --   clicks in Tall Order's lobby).
 -- COMMANDS (echoed locally): /s /w /y /g [text] (Speak / Whisper / Yell / Global: set the mode, or say one line
 --   in it; /p = /s), /voice [name|n], /settings, /hint, /window, /clear, /mute [name], /unmute name|all, /dummy [1|2|3|clear]
---   (local test speakers), /volume [name [0-200]] (a player's voice and babble, only for you), /help, //text sends "/text".
+--   (local test speakers), /volume [name [0-150]] (a player's voice and babble, only for you), /help, //text sends "/text".
 --
 -- TRUST (2026-10-09, after a security audit; see TRUST below the server's start): every server.pc_* call carries the
 --   caller's id and its session token (PC.call on the client; PC.who on the server checks both and that the id is a real
@@ -190,7 +190,7 @@ do
 		reg = "proxchat",        -- registry prefix
 		save = "savegame.mod.pc",-- persistent settings: pcvoice, pcmode, pchidehint, pchideown, pcbubbles, pcvolume, pcnovoicebubbles,
 		                         --   pcdock, pcwinw, pcwinh, pctext (the chat's place, size and text size),
-		                         --   pcpvol.<hex of a cleaned name> (a player's volume, 0..2; PC.playerVolume)
+		                         --   pcpvol.<hex of a cleaned name> (a player's volume, 0..1.5; PC.playerVolume)
 		babbleMax = 45,          -- syllables per message
 		babbleVol = 0.75,
 		shoutVol = 0.8,          -- Yell (the shout clips, already a little louder than babble)
@@ -204,7 +204,8 @@ do
 		winW = 1000, winH = 400, -- the chat window's size (and the input line's width) unless the player sets one (Settings)
 		winMinW = 600, winMaxW = 1600, winMinH = 200, winMaxH = 1000,
 		pageMinW = 980,          -- the Settings and Voice pages: at least this wide (their rows have fixed widths)
-		settingsH = 710,         -- ... and the Settings page at least this tall (+40 for the host's walls row)
+		settingsH = 750,         -- ... and the Settings page at least this tall (+40 for the host's walls row; 750 with
+		                         --     ping.lua's "Ping size" row, 2026-10-20)
 		textMin = 0.7, textMax = 1.7,   -- the chat's text size (Settings): this much of the normal size
 		uiScale = 0.8,           -- the chat UI (window, feed, input line, hint) is drawn this much smaller
 		edge = 24, edgeBottom = 60,  -- px (before uiScale) from the screen's edges where the chat docks (the bottom: room
@@ -449,6 +450,38 @@ function PC.histText(b)
 	if b.level == "full" then return b.full end
 	if b.fixed then return PC.garble(b.full, 0, b.seed or b.id or 0, 0, b.fracs) end
 	return PC.garble(b.full, math.max(0, b.bestF or 0), b.seed or b.id or 0, 0)
+end
+
+-- A GARBLED LINE'S TRANSLATION (the user, 2026-10-19: option 1): a line heard from a buffer is translated too, and its
+-- translation garbled as much as the line - the same share of its letters shows, so a listener who can't read the
+-- original makes out as much as one who can, and walking closer reveals more of both.
+-- the share of b's letters made out (f: now, or the best yet; a spoken line: the mean of its letters', as heard when
+-- said); nil: heard in full
+function PC.trShare(b, f)
+	if b.level == "full" then return nil end
+	if b.fixed then
+		local n, s = 0, 0
+		for _, x in ipairs(b.fracs or {}) do n, s = n + 1, s + x end
+		return n > 0 and s / n or 0
+	end
+	return math.max(0, f or 0)
+end
+
+-- a translation as shown: garbled to share (nil: all of it); seed: its line's (its own letters picked from seed + 1)
+function PC.trShown(tr, share, seed, tick)
+	if not tr or not share then return tr end
+	return PC.garble(tr, share, (seed or 0) + 1, tick or 0)
+end
+
+-- (the history) an entry's translation as shown: e.trF / e.trSeed set where its text is (kept: the history draws it
+-- every frame)
+function PC.trHist(e)
+	if not e.tr then return nil end
+	local share = e.far and (e.trF or 0) or nil
+	if not share then return e.tr end
+	local key = e.tr .. "|" .. share
+	if e.trVK ~= key then e.trVK, e.trV = key, PC.trShown(e.tr, share, e.trSeed) end
+	return e.trV
 end
 
 -- characters removed outright: zero-width ones, direction overrides / isolates, line and paragraph
@@ -749,12 +782,16 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 8                                                  -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 12                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
                                                                     --  8: proxchat.close, proxchat.key.*, proxchat.talking.<p>;
-                                                                    --     proxchat.typing.<me> also on a controller's pages)
+                                                                    --     proxchat.typing.<me> also on a controller's pages;
+                                                                    --  9: pings - proxchat.team.<p>, proxchat.noping, 2026-10-20;
+                                                                    --  10: a ping's reach, proxchat.ranges "ping=<m>", 2026-10-21;
+                                                                    --  11: proxchat.noglobal, 2026-10-21;
+                                                                    --  12: proxchat.aim, proxchat.pingskip - a game steers the ping ray)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1018,6 +1055,7 @@ PC.SEND = {
 	pc_live = function(...) ServerCall("server.pc_live", ...) end,
 	pc_talk = function(...) ServerCall("server.pc_talk", ...) end,
 	pc_room = function(...) ServerCall("server.pc_room", ...) end,
+	pc_ping = function(...) ServerCall("server.pc_ping", ...) end,     -- (ping.lua)
 }
 
 function PC.call(name, ...)
@@ -1108,7 +1146,7 @@ end
 -- any order and any subset ("private=10 megaphone=90"; keys: whisper, speak, yell, private / radio (walkies), megaphone /
 -- loudspeaker, pa, and reach = Private's reach, 0: any) ->
 -- {w, s, y, pr, m, pa, reach} (only those given), or nil; and what was wrong (nil: nothing), for PC.problem
-PC.RANGE_NAMES = "whisper, speak, yell, private, megaphone, pa, reach"
+PC.RANGE_NAMES = "whisper, speak, yell, private, megaphone, pa, reach, ping"
 function PC.parseRanges(str)
 	str = tostring(str or "")
 	if str:find("=") then
@@ -1123,7 +1161,7 @@ function PC.parseRanges(str)
 				k = k:lower()
 				local id = (k == "reach" or k == "privatereach") and "reach"
 					or ({whisper = "w", speak = "s", yell = "y", shout = "y", private = "pr", radio = "pr", walkie = "pr",
-						megaphone = "m", loudspeaker = "m", pa = "pa"})[k]
+						megaphone = "m", loudspeaker = "m", pa = "pa", ping = "ping"})[k]
 				if not id then bad[#bad + 1] = '"' .. k .. '" is not a range (' .. PC.RANGE_NAMES .. ')'
 				elseif not n then bad[#bad + 1] = k .. '="' .. v .. '" is not a number'
 				else t[id], any = n, true end
@@ -1261,6 +1299,10 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		return
 	end
 	ch = PC.validMode(ch)
+	if ch == "g" and s.noGlobal and not PC.inLobby() and not s.chan[p] then   -- (proxchat.noglobal: no Global lines - a
+		if seq then pcAck(p, seq) end                                          --  channel's players still talk to their
+		return                                                                 --  channel; taken, so it isn't resent)
+	end
 	if s.time - (s.last[p] or -10) < cfg.rate then return end            -- (no spamming: the resend gets in later)
 	s.last[p] = s.time
 	if seq then pcAck(p, seq) end
@@ -1411,6 +1453,8 @@ function PC.serverTick(dt)
 	PC.hearAllTick()
 	local lobby = PC.inLobby()
 	if lobby ~= s.lobby then s.lobby = lobby; shared.pcLobby = lobby end
+	local noGlobal = GetBool(PC.cfg.reg .. ".noglobal")                 -- (a game: no Global chat now - set every tick)
+	if noGlobal ~= s.noGlobal then s.noGlobal = noGlobal; shared.pcNoGlobal = noGlobal end
 	PC.heartbeat()
 	if PC.voiceServerTick then PC.voiceServerTick() end               -- (voice.lua: stale live words go)
 	-- a game's switches (set every tick by it): walls, and who talks only to the dead
@@ -1447,6 +1491,7 @@ function PC.serverTick(dt)
 		local cfg = PC.cfg
 		if t and (t.w or t.s or t.y) then PC.setRanges(t.w or cfg.whisperR, t.s or cfg.chatR, t.y or cfg.shoutR, false) end
 		if t and (t.pr or t.m or t.pa or t.reach) and PC.setDevRanges then PC.setDevRanges(t.pr, t.m, t.pa, t.reach, false) end
+		if t and t.ping and PC.setPingRange then PC.setPingRange(t.ping) end   -- (ping.lua: how far a ping reaches)
 	end
 	for _, p in ipairs(PC.removedPlayers()) do
 		p = tonumber(p)
@@ -1595,10 +1640,36 @@ function PC.mode()
 	return PC.C().mode
 end
 
+-- GLOBAL OFF (proxchat.noglobal, API 11 - a game where chat must stay local, 2026-10-21): this player can't pick Global
+-- now. The lobby wins (everything goes to everyone there); a player in a channel (the dead) isn't affected - their channel
+-- talks whatever the mode. The host refuses Global lines then too (server.pc_say).
+PC.NO_GLOBAL = "Global chat is off in this game."
+function PC.noGlobal()
+	return shared.pcNoGlobal == true and not PC.lobby() and not PC.dead()
+end
+
+-- a mode this player may pick now
+function PC.modeAllowed(m)
+	return not (m == "g" and PC.noGlobal())
+end
+
+-- (each tick) Global off while it is this player's mode (typing or talking): down to Speak, said once
+function PC.noGlobalTick()
+	local c = PC.C()
+	if not PC.noGlobal() then return end
+	local vm = c.voice and c.voice.vmode
+	if c.mode ~= "g" and vm ~= "g" then return end
+	c.mode = c.mode == "g" and "s" or c.mode                         -- (setMode won't pick Global; this is the way out of it)
+	if PC.setVoiceMode and vm == "g" then PC.setVoiceMode("s") end
+	PC.setMode("s")
+	PC.system(PC.NO_GLOBAL)
+end
+
 function PC.setMode(m)
 	local c = PC.C()
 	if PC.lobby() then return end                                   -- (the lobby is Global only)
 	if m ~= "g" and m ~= "w" and m ~= "y" then m = "s" end
+	if not PC.modeAllowed(m) then return end                        -- (Global off: proxchat.noglobal)
 	if c.mode == m then return end
 	c.mode = m
 	SetString(PC.cfg.save .. "mode", m)                             -- (your default next time)
@@ -1606,12 +1677,23 @@ function PC.setMode(m)
 	if PC.setVoiceMode then PC.setVoiceMode(m) end                  -- (one mode: typing and talking whisper alike - the user 2026-10-11)
 end
 
--- Tab: Whisper -> Speak -> Yell -> Global -> Whisper
-function PC.nextMode()
-	local cur = PC.mode()
+-- the mode step modes from cur, round, skipping one this player can't pick (Global, while it is off)
+function PC.stepMode(cur, step)
+	local n = #PC.MODES
 	for i, x in ipairs(PC.MODES) do
-		if x[1] == cur then PC.setMode(PC.MODES[i % #PC.MODES + 1][1]); return end
+		if x[1] == cur then
+			for k = 1, n do
+				local m = PC.MODES[(i - 1 + k * step) % n + 1][1]
+				if PC.modeAllowed(m) then return m end
+			end
+		end
 	end
+	return cur
+end
+
+-- Tab: Whisper -> Speak -> Yell -> Global -> Whisper (Global skipped while it is off)
+function PC.nextMode()
+	PC.setMode(PC.stepMode(PC.mode(), 1))
 end
 
 function PC.page() return PC.C().page end
@@ -1980,12 +2062,12 @@ function PC.receive(m)
 				else                                                        --  nothing: the same as its live bubble showed)
 					b.level, b.text, b.mumble, b.fracs = "mumble", "...", true, cutFracs
 				end
-				b.entry = {ch = mode, p = m.p, name = m.name, text = PC.histText(b), shout = b.shout, far = b.level ~= "full", me = m.p == me, voice = true}
+				b.entry = {ch = mode, p = m.p, name = m.name, text = PC.histText(b), shout = b.shout, far = b.level ~= "full", me = m.p == me, voice = true,
+					trF = PC.trShare(b), trSeed = b.seed or b.id or 0}
 				PC.addHist(b.entry)
-				if b.level == "full" then
-					heard = cutText
-					if PC.trWant then PC.trWant(b.entry, b) end                 -- (heard clear: translated, if Koetama translates)
-				end
+				if b.level == "full" then heard = cutText end
+				if PC.trWant then PC.trWant(b.entry, b) end                     -- (translated, if Koetama translates - garbled
+				                                                                --  as the line is: PC.trShare)
 			end
 			PC.updateBubble(m.p, b, b.t, true)
 		end
@@ -2034,12 +2116,13 @@ function PC.updateBubble(p, b, now, fresh)
 		if b.entry and b.entry.via and not b.entry.far and far then      -- (a device gave all of it: devices.lua)
 		elseif b.entry then
 			b.entry.text, b.entry.far, b.entry.shout = htext, far, b.shout
+			b.entry.trF, b.entry.trSeed = PC.trShare(b, b.bestF), b.seed or b.id or 0
 		else
 			b.entry = {ch = b.mode, p = p, name = b.name, text = htext, shout = b.shout, far = far, me = p == GetLocalPlayer(), voice = b.voice,
-				pad = b.pad}
+				pad = b.pad, trF = PC.trShare(b, b.bestF), trSeed = b.seed or b.id or 0}
 			PC.addHist(b.entry)
 		end
-		if b.level == "full" and PC.trWant then PC.trWant(b.entry, b) end   -- (every word made out now: translated, voice.lua)
+		if PC.trWant then PC.trWant(b.entry, b) end                      -- (translated, voice.lua; garbled as the line is)
 	end
 end
 
@@ -2117,6 +2200,8 @@ function PC.clientTick(dt)
 	PC.revealBubbles(now)
 	PC.babbleTick()
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
+	if PC.pingTick then PC.pingTick(now) end                           -- (ping.lua: the ping buttons, old pins go)
+	PC.noGlobalTick()                                                  -- (proxchat.noglobal: Global down to Speak)
 end
 
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
@@ -2668,6 +2753,7 @@ end
 function PC.modeCommand(m, rest)
 	local info = PC.modeInfo(m)
 	if PC.lobby() and m ~= "g" then PC.system("In the lobby everyone hears everything."); return end
+	if not PC.modeAllowed(m) then PC.system(PC.NO_GLOBAL); return end
 	if rest ~= "" then
 		PC.say(rest, m)
 	else
@@ -2728,7 +2814,7 @@ function PC.muteCommand(on, arg)
 	end
 end
 
--- ---- PER-PLAYER VOLUME (2026-10-10): each other player's voice, 0..2 (0-200 %), only for you: Koetama multiplies it on
+-- ---- PER-PLAYER VOLUME (2026-10-10): each other player's voice, 0..1.5 (0-150 %; was 0-200 until 2026-10-15), only for you: Koetama multiplies it on
 -- top of distance, walls and devices (the feed's speaker "volume", voice.lua), and their typed lines' babble is scaled by
 -- it too (PC.babbleSay). Saved in this player's own registry by the player's name as the chat cleans it (there is no
 -- Steam id for a script), so a friend's level carries over between sessions: savegame.mod.pcpvol.<hex of the name>.
@@ -2741,7 +2827,8 @@ function PC.playerVolKey(p)
 	return PC.cfg.save .. "pvol." .. name:gsub(".", function(ch) return string.format("%02x", ch:byte()) end), name
 end
 
--- player p's volume, 0..2 (1: as everyone else; anyone without a key: 1)
+-- player p's volume, 0..PC.PVOL_MAX (1: as everyone else; anyone without a key: 1)
+PC.PVOL_MAX = 1.5                                                    -- (a player's volume: 0..150 %, the user 2026-10-15; was 200)
 function PC.playerVolume(p)
 	local key = PC.playerVolKey(p)
 	if not key then return 1 end
@@ -2749,17 +2836,17 @@ function PC.playerVolume(p)
 	c.pvol = c.pvol or {}
 	local v = c.pvol[key]
 	if v == nil then
-		v = HasKey(key) and math.max(0, math.min(2, GetFloat(key))) or 1
+		v = HasKey(key) and math.max(0, math.min(PC.PVOL_MAX, GetFloat(key))) or 1
 		c.pvol[key] = v
 	end
 	return v
 end
 
--- set player p's volume (0..2, to 5 %); save ~= false: saved (the slider saves when let go). 1 clears the key.
+-- set player p's volume (0..PC.PVOL_MAX, to 5 %); save ~= false: saved (the slider saves when let go). 1 clears the key.
 function PC.setPlayerVolume(p, v, save)
 	local key = PC.playerVolKey(p)
 	if not key then return end
-	v = math.floor(math.max(0, math.min(2, tonumber(v) or 1)) * 20 + 0.5) / 20
+	v = math.floor(math.max(0, math.min(PC.PVOL_MAX, tonumber(v) or 1)) * 20 + 0.5) / 20
 	local c = PC.C()
 	c.pvol = c.pvol or {}
 	c.pvol[key] = v
@@ -2778,7 +2865,7 @@ function PC.otherPlayers()
 	return out
 end
 
--- /volume [name [0-200]]: a player's volume (only for you). The start of a name is enough (as /mute), #<number> picks
+-- /volume [name [0-150]]: a player's volume (only for you). The start of a name is enough (as /mute), #<number> picks
 -- one; alone: the players whose volume is not 100 %.
 function PC.volumeCommand(arg)
 	local c = PC.C()
@@ -2791,7 +2878,7 @@ function PC.volumeCommand(arg)
 			local v = PC.playerVolume(o.p)
 			if v ~= 1 then set[#set + 1] = o.name .. " " .. pct(v) end
 		end
-		PC.system("/volume <name> <0-200>: a player's voice and babble, only for you (100 = normal; also on the Voice page)."
+		PC.system("/volume <name> <0-150>: a player's voice and babble, only for you (100 = normal; also on the Voice page)."
 			.. (#set > 0 and (" Now: " .. table.concat(set, ", ") .. ".") or ""))
 		return
 	end
@@ -2800,7 +2887,7 @@ function PC.volumeCommand(arg)
 	local val
 	if num then
 		val = tonumber(num)
-		if not val or val < 0 or val > 200 then PC.system("The volume is a number from 0 to 200 (100 = normal)."); return end
+		if not val or val < 0 or val > PC.PVOL_MAX * 100 then PC.system("The volume is a number from 0 to 150 (100 = normal)."); return end
 	end
 	local want, exact, part = name:lower(), {}, {}
 	local byId = tonumber(name:match("^#(%d+)$"))
@@ -2824,7 +2911,7 @@ function PC.volumeCommand(arg)
 	local o = hits[1]
 	if val then PC.setPlayerVolume(o.p, val / 100) end
 	PC.system(o.name .. ": " .. pct(PC.playerVolume(o.p)) .. (val and " (only for you, saved)" or " (only for you; /volume "
-		.. o.name .. " <0-200> changes it)") .. muted(o.p) .. ".")
+		.. o.name .. " <0-150> changes it)") .. muted(o.p) .. ".")
 end
 
 function PC.command(text)
@@ -2880,7 +2967,7 @@ function PC.command(text)
 	elseif cmd == "help" or cmd == "h" or cmd == "?" then
 		local key = PC.keyName() ~= "" and (PC.keyName() .. ": chat window. ") or ""
 		PC.system("Enter: chat. Tab or the chips on the line: Whisper / Speak / Yell / Global. Settings (window header): voice and more. " .. key)
-		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /volume <name> <0-200>   /wheel (the quick-chat wheel)   /dummy [1|2|3|clear] (test speakers)")
+		PC.system("/s /w /y /g [text]   /voice [name]   /settings   /hint   /window (keep open)   /clear   /mute [name]   /volume <name> <0-150>   /wheel (the quick-chat wheel)   /dummy [1|2|3|clear] (test speakers)")
 		if PC.voiceHelperAlive and PC.voiceHelperAlive() then
 			PC.system("Voice: hold " .. PC.talkKeyName() .. " to talk; " .. PC.talkKeyName() .. " + Tab: Whisper / Speak / Yell / Global (Voice page: the key, Always on).")
 		end
@@ -3077,15 +3164,20 @@ function PC.drawLine(e, w, size, a, measureOnly)
 	local pw = prefix ~= "" and PC.textWidth(prefix, size) or 0
 	local iw = e.pad and math.floor(size * 0.95) or 0                  -- (the controller mark's room)
 	local tw = math.max(120, w - tagW - iw - pw)
-	UiFont(PC.chatFont(e.text), size)
+	-- (a translated line: the ORIGINAL smaller, the translation under it at full size - the user, 2026-10-16: the
+	--  translation is what the reader reads; the original stays on top, as said)
+	local os = e.tr and math.floor(size * PC.TR_ORIG + 0.5) or size
+	local odrop = math.floor((size - os) * 0.7 + 0.5)                   -- (down a little: level with the name's letters)
+	UiFont(PC.chatFont(e.text), os)
 	UiWordWrap(tw)
 	local vis = PC.chatVisual(e.text)
 	local _, th = UiGetTextSize(vis)
-	th = math.max(th or size, size)
+	th = math.max((th or os) + odrop, size)
 	local trVis, trH = nil, 0                                         -- (its translation, voice.lua: under the text, wrapped
-	if e.tr then                                                      --  the same, in its own font for its script)
-		trVis = PC.chatVisual(e.tr)
-		UiFont(PC.chatFont(e.tr), size)
+	local trText = PC.trHist(e)                                       --  the same, in its own font for its script; garbled
+	if trText then                                                    --  as the line is)
+		trVis = PC.chatVisual(trText)
+		UiFont(PC.chatFont(trText), size)
 		UiWordWrap(tw)
 		local _, h2 = UiGetTextSize(trVis)
 		trH = math.max(h2 or size, size) + 2
@@ -3118,14 +3210,17 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		elseif whisper then UiColor(0.8, 0.82, 1, fa)                    -- (lavender: readable, still not a Speak line)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
 		else UiColor(1, 1, 1, a) end
-		UiFont(PC.chatFont(e.text), size)
+		UiFont(PC.chatFont(e.text), os)
 		UiWordWrap(tw)
+		UiPush()
+		UiTranslate(0, odrop)
 		UiText(vis)
+		UiPop()
 		if trVis then
 			local col = PC.TR_COLOR
 			UiTranslate(0, th + 2)
-			UiColor(col[1], col[2], col[3], a)
-			UiFont(PC.chatFont(e.tr), size)
+			UiColor(col[1], col[2], col[3], e.far and 0.8 * a or a)
+			UiFont(PC.chatFont(trText), size)
 			UiWordWrap(tw)
 			UiText(trVis)
 		end
@@ -3135,8 +3230,27 @@ function PC.drawLine(e, w, size, a, measureOnly)
 end
 
 -- where a bubble goes for a speaker off screen: on the screen edge, in the speaker's direction
+-- -> x, y on the screen's edge, and a cue: "below" when the speaker is more than 45 degrees below you (your head; in
+-- front or behind - the user, 2026-10-15: behind you and below you both dock at the bottom, the cue tells them apart),
+-- else nil
+function PC.belowCue(pos)
+	local head = PC.listenerHead()
+	local v = VecSub(pos, head)
+	local flat = math.sqrt(v[1] * v[1] + v[3] * v[3])
+	return (v[2] < 0 and -v[2] >= flat) and "below" or nil
+end
+
 function PC.edgePoint(pos)
 	local lp = TransformToLocalPoint(GetCameraTransform(), pos)          -- (camera: x right, y up, -z ahead)
+	local cue = PC.belowCue(pos)
+	if lp[3] > 0 then
+		-- BEHIND the camera: the bottom edge (the usual convention: its tail points down, "behind you" - the user,
+		-- 2026-10-15; behind-right went to the right edge before), slid left / right by how far to that side they are:
+		-- dead behind the middle, right behind a shoulder near that corner
+		local hx = math.sqrt(lp[1] * lp[1] + lp[3] * lp[3])
+		local side = hx > 1e-3 and lp[1] / hx or 0                        -- (-1 .. 1: the sine of the angle off dead behind)
+		return UiWidth() / 2 + side * UiWidth() / 2, UiHeight(), cue
+	end
 	local dx, dy = lp[1], -lp[2]
 	local l = math.sqrt(dx * dx + dy * dy)
 	if l < 1e-3 then dx, dy, l = 0, 1, 1 end                              -- (right behind: the bottom)
@@ -3146,7 +3260,7 @@ function PC.edgePoint(pos)
 	local kx = math.abs(dx) > 1e-3 and (cx / math.abs(dx)) or 1e9      -- (to the very edge: the layout then keeps
 	local ky = math.abs(dy) > 1e-3 and (cy / math.abs(dy)) or 1e9      --  the whole bubble on screen)
 	local k = math.min(kx, ky)
-	return cx + dx * k, cy + dy * k
+	return cx + dx * k, cy + dy * k, cue
 end
 
 -- a speech bubble over player p, measured but not drawn yet. small: the "..." of someone typing (nil
@@ -3157,12 +3271,14 @@ PC.EDGE_MARGIN = 8
 -- a bubble text's font, shaped form and size, measured once and kept (every frame re-measuring every
 -- bubble cost the most of the drawing; a garbled text changes only when a letter turns)
 PC.measured, PC.measuredN = {}, 0
-function PC.measure(text)
+-- scale: the text's size share (PC.TR_ORIG: the original of a translated line, smaller than its translation)
+function PC.measure(text, scale)
 	local cfg = PC.cfg
-	local key = cfg.bubbleW .. "|" .. text
+	local key = cfg.bubbleW .. "|" .. (scale or 1) .. "|" .. text
 	local m = PC.measured[key]
 	if m then return m end
 	local font, size = PC.bubbleFont(text)
+	if scale then size = math.floor(size * scale + 0.5) end
 	local vis = PC.chatVisual(text)
 	UiPush()
 	PC.noWild()
@@ -3192,18 +3308,19 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
 	local sx, sy = x, y                                                   -- (where it comes from: the tail points there)
+	local cue                                                             -- ("below": a docked bubble's tag)
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
 	elseif small then
 		return nil                                                        -- (the typing "...": only over a speaker you see)
 	else
-		x, y = PC.edgePoint(head)                                         -- (off screen: on the edge, the speaker's side)
+		x, y, cue = PC.edgePoint(head)                                    -- (off screen: on the edge, the speaker's side)
 		docked = true
 		local cx, cy = UiWidth() / 2, UiHeight() / 2                      -- (the source: past that edge, the same way)
 		sx, sy = cx + (x - cx) * 2, cy + (y - cy) * 2
 	end
 	local s = scale * (shout and 1.15 or 1) * (small and 0.75 or (whisper and 0.88 or 1))
 	local cfg = PC.cfg
-	local mt = PC.measure(text)
+	local mt = PC.measure(text, (tr and tr ~= "" and not small) and PC.TR_ORIG or nil)   -- (translated: the original smaller)
 	local font, size, vis, tw, th, lh = mt.font, mt.size, mt.vis, mt.tw, mt.th, mt.lh
 	-- a long message: cfg.bubbleLines lines visible, scrolling down at reading pace from t0
 	local vh, off, scrollTime = th, 0, 0
@@ -3238,12 +3355,13 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	x = math.max(M + halfW + side, math.min(UiWidth() - M - halfW - side, x))   --  it cut off at the screen edge, 2026-10-15)
 	y = math.max(M + up, math.min(UiHeight() - M, y))
 	docked = docked or math.abs(x - x0) > 1 or math.abs(y - y0) > 1      -- (not over its speaker: no line to them)
-	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy,
+	return {p = p, x = x, y = y, s = s, w = w, h = h, th = th, vh = vh, off = off, scrollTime = scrollTime, sx = sx, sy = sy, cue = cue,
 		vis = vis, font = font, size = size, a = a, shout = shout, whisper = whisper, mumble = mumble, lift = 0, docked = docked, dist = dist,
 		tr = trm, trvh = trvh, troff = troff,
 		left = x - (w / 2 + 2) * s, right = x + (w / 2 + 2) * s, top = y - (h + 16) * s, bottom = y - 4 * s}
 end
 PC.TR_GAP = 10                                                         -- (px between a bubble's text and its translation)
+PC.TR_ORIG = 0.75                                                      -- (a translated line's original: this share of the size)
 
 -- THE TAIL points where the voice / text comes from (the user, 2026-10-15: "put the pointer around the bubble where the
 -- voice/text is actually coming from", moving with it): the side of the w x h box (its own units, top left 0, 0) that the
@@ -3353,6 +3471,20 @@ function PC.bubbleDraw(L)
 		UiFont(L.font, L.size)
 	end
 	if L.shout and not dev then UiColor(0.96, 0.45, 0.12, ab); UiRoundedRectOutline(w, h, 10, 4) end
+	if L.cue then                                                        -- (a docked bubble: "below" you)
+		UiPush()
+		UiFont("bold.ttf", 15)
+		local cw = (UiGetTextSize(L.cue) or 40) + 14
+		UiTranslate(w - cw + 8, -12)
+		UiColor(0.13, 0.12, 0.16, 0.92 * ab)
+		UiRoundedRect(cw, 20, 6)
+		UiTranslate(cw / 2, 10)
+		UiAlign("center middle")
+		UiColor(1, 0.82, 0.3, ab)
+		UiText(L.cue)
+		UiPop()
+		UiFont(L.font, L.size)
+	end
 	UiTranslate(15, 11)
 	if L.th > L.vh + 1 then                                               -- (scrolling: a bar on the right)
 		UiPush()
@@ -3486,7 +3618,8 @@ function PC.drawBubbles()
 			if (p ~= me or (third and not c.hideOwn)) and not b.hidden and PC.inReach(p, b) and not (b.voice and c.hideVoiceBubbles)
 				and not (PC.devCovers and PC.devCovers(p, b)) then                  -- (its holder's megaphone shows it: devices.lua)
 				local L = PC.bubbleLayout(p, PC.bubbleText(p, b, now), b.shout, math.max(0, math.min(1, (PC.bubbleLife(b) + (b.extra or 0) - (now - b.t)) / 1.2)), false, b.whisper, b.mumble, b.scrollT or b.t, b.liveHold,
-					b.level == "full" and b.tr or nil, b.trT)                       -- (its translation, voice.lua)
+					PC.trShown(b.tr, PC.trShare(b, PC.bufferF(p, b)), b.seed or b.id or 0, math.floor(now * 3)), b.trT)   -- (its translation, voice.lua:
+					                                                                --  garbled as the line is)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
 					L.age = age
@@ -3658,6 +3791,7 @@ function PC.drawSettings(W, H)
 		if PC.voiceHostRows then PC.voiceHostRows(rows) end            -- (voice.lua: where the voice room lives)
 	end
 	rows[#rows + 1] = {"set_vb", "Bubbles for spoken lines", not c.hideVoiceBubbles, "Show", "Hide", function(v) PC.setHideVoiceBubbles(not v) end}
+	if PC.pingRows then PC.pingRows(rows) end                         -- (ping.lua: the pins' size)
 	PC.drawRows(rows)
 	UiTranslate(0, #rows * 40 + 10)
 	PC.rangeBar(W, not PC.isHost())                                   -- (everyone sees the distances; the host sets them)
@@ -3672,13 +3806,46 @@ end
 -- fn(-1 / 1) for a controller's left / right instead of fn()), off (greyed out: shown, not usable - the Voice page
 -- without Koetama), sw (a slider's width, 400 unless given), reset (a slider row: a "Reset" button after the slider's
 -- value, calling reset()), size (the label's font size, 22 unless given). With a controller (PC.navFocus) each usable
--- row is an item.
+-- row is an item. A heading {id, label, "heading", [note]}: a subsection's title (and a quiet note after it) over a thin
+-- rule; a note {id, label, "note"}: a quiet line. Neither is an item.
+function PC.drawRowText(r)
+	UiPush()
+	UiAlign("left middle")
+	if r[3] == "heading" then
+		UiTranslate(0, 22)
+		UiFont("bold.ttf", 20)
+		UiColor(1, 0.82, 0.3, 0.9)
+		UiText(r[2])
+		if r[4] then
+			UiTranslate((UiGetTextSize(r[2]) or 0) + 14, 1)
+			UiFont("regular.ttf", 18)
+			UiColor(1, 1, 1, 0.5)
+			UiText(r[4])
+		end
+		UiPop()
+		UiPush()
+		UiTranslate(0, 37)
+		UiColor(1, 1, 1, 0.15)
+		UiRect(820, 1)
+	else
+		UiTranslate(0, 20)
+		UiFont("regular.ttf", 20)
+		UiColor(1, 1, 1, 0.5)
+		UiText(r[2])
+	end
+	UiPop()
+end
+
 function PC.drawRows(rows)
 	local c = PC.C()
 	local typing = c.typing
 	for k, r in ipairs(rows) do
 		UiPush()
 		UiTranslate(0, (k - 1) * 40)
+		if r[3] == "heading" or r[3] == "note" then
+			if r.off and UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end   -- (greyed with its page)
+			PC.drawRowText(r)
+		else
 		if r.off then
 			c.typing = false                                              -- (the widgets take no clicks)
 			if UiColorFilter then UiColorFilter(1, 1, 1, 0.35) end
@@ -3689,7 +3856,8 @@ function PC.drawRows(rows)
 		if act and (act.left or act.right or act.accept) then
 			local d = act.left and -1 or 1
 			if r[3] == "slider" then
-				r[5](math.max(0, math.min(1, math.floor(r[4] * 20 + 0.5) / 20 + d * 0.05)), true)
+				local n = r.steps or 20                                -- (one snap step: 5 %)
+				r[5](math.max(0, math.min(1, math.floor(r[4] * n + 0.5) / n + d / n)), true)
 			elseif r[3] == "cycle" then
 				if r.step then r.step(d) else r[5]() end
 			elseif type(r[3]) == "number" then
@@ -3710,7 +3878,7 @@ function PC.drawRows(rows)
 		UiPop()
 		UiTranslate(400, 0)
 		if r[3] == "slider" then                                          -- (0 .. 1, live while dragged, saved when let go;
-			local v, done = PC.slider(r[1], r[4], r.sw or 400, r[6])         --  r[6]: its value as text, else Off / n %)
+			local v, done = PC.slider(r[1], r[4], r.sw or 400, r[6], r.mark, r.steps)         --  r[6]: its value as text, else Off / n %)
 			if v then r[5](v, done) end
 			if r.reset then
 				UiPush()
@@ -3728,6 +3896,7 @@ function PC.drawRows(rows)
 			if v ~= nil then r[6](v) end
 		end
 		c.typing = typing
+		end
 		UiPop()
 	end
 end
@@ -3752,14 +3921,17 @@ end
 
 -- a 0..1 slider w px wide (a 36 px tall row): press anywhere on it and drag; snaps to 5 %. Returns
 -- the new value while dragging (nil when untouched) and true once let go.
-function PC.slider(id, value, w, fmt)
+-- mark: where 100 % is on the track (0..1; a tick - the players' sliders go to 150 %, the user 2026-10-15); steps: the
+-- positions it snaps to (20: 5 % of a 0-100 % slider; 30: 5 % of a 0-150 % one)
+function PC.slider(id, value, w, fmt, mark, steps)
 	local c = PC.C()
 	local out, done = nil, false
+	local n = steps or 20
 	local hover = c.typing and UiIsMouseInRect(w, 36)
 	if c.typing and not c.sdrag and PC.clicked(id, w, 36, hover) then c.sdrag = id end
 	if c.sdrag == id then
 		local mx = UiGetMousePos()
-		out = math.floor(math.max(0, math.min(1, mx / w)) * 20 + 0.5) / 20
+		out = math.floor(math.max(0, math.min(1, mx / w)) * n + 0.5) / n
 		if not (c.typing and InputDown("lmb")) then c.sdrag, done = nil, true end
 	end
 	local v = out or value
@@ -3770,6 +3942,13 @@ function PC.slider(id, value, w, fmt)
 	UiRoundedRect(w, 12, 6)
 	UiColor(1, 0.82, 0.3, 0.6)
 	if v > 0 then UiRoundedRect(math.max(12, w * v), 12, 6) end
+	if mark and mark > 0 and mark < 1 then                               -- (100 %: a tick across the track, under the knob)
+		UiPush()
+		UiTranslate(w * mark - 1.5, -6)
+		UiColor(1, 1, 1, 0.75)
+		UiRect(3, 24)
+		UiPop()
+	end
 	UiTranslate(w * v - 8, -10)
 	UiColor(0, 0, 0, 0.8)
 	UiRoundedRect(16, 32, 5)
@@ -4097,7 +4276,7 @@ function PC.drawTyping(L)
 	UiTranslate(W - 10 - chipsW, (IH - chh) / 2)
 	local cur, cx = PC.mode(), 0
 	for _, x in ipairs(PC.MODES) do
-		local dim = (PC.lobby() and x[1] ~= "g") or PC.dead()
+		local dim = (PC.lobby() and x[1] ~= "g") or PC.dead() or not PC.modeAllowed(x[1])
 		local on = x[1] == cur
 		local w = on and cw or cs
 		UiPush()
@@ -4187,8 +4366,9 @@ function PC.draw()
 	PC.preKeys()
 	UiPush()
 	PC.noWild()                                                         -- (no UiText "[[...]]" markup in anything the chat draws:
-	PC.drawBubbles()                                                    --  player text could hold a browser link; voice.lua's own
-	                                                                    --  Koetama link turns them on for itself)
+	if PC.pingDraw then PC.pingDraw() end                               --  player text could hold a browser link; voice.lua's own
+	PC.drawBubbles()                                                    --  Koetama link turns them on for itself; ping.lua's pins
+	                                                                    --  go under the bubbles)
 	if PC.voiceDraw then PC.voiceDraw() end
 	local L = PC.layout()
 	c.L = L                                                             -- (voice.lua's own live words sit by the input line)

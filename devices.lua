@@ -732,14 +732,17 @@ function PC.devUpdate(b, fresh)
 	c.devEntry = c.devEntry or {}
 	local e = direct or c.devEntry[b.id]
 	if e then
-		if e.far or not far then e.text, e.far, e.via = htext, far, b.kind end
+		if e.far or not far then
+			e.text, e.far, e.via = htext, far, b.kind
+			e.trF, e.trSeed = PC.trShare(b, b.bestF), b.seed or 0
+		end
 	else
 		e = {ch = b.mode, p = b.p, name = b.name, text = htext, far = far, me = false, voice = b.voice, via = b.kind,
-			shout = b.mode == "y"}
+			shout = b.mode == "y", trF = PC.trShare(b, b.bestF), trSeed = b.seed or 0}
 		PC.addHist(e)
 	end
 	c.devEntry[b.id] = e
-	if not far and PC.trWant then PC.trWant(e, b) end
+	if PC.trWant then PC.trWant(e, b) end                                -- (garbled lines too: their translation garbled as much)
 end
 
 -- (each tick) device bubbles: reveal by distance, gone with their time or their device
@@ -835,7 +838,7 @@ function PC.devDrawBubbles(add, now)
 				local life = PC.bubbleLife(b) + (b.extra or 0)
 				local a = math.max(0, math.min(1, (life - (now - b.t)) / 1.2))
 				local L = PC.bubbleLayout(b.p, text, false, a, false, b.mode == "w", b.level == "mumble", b.scrollT or b.t, b.liveHold,
-					b.level == "full" and b.tr or nil, b.trT, anchor)
+					PC.trShown(b.tr, PC.trShare(b, f), b.seed or 0, math.floor(now * 3)), b.trT, anchor)
 				if L then
 					b.extra = math.max(b.extra or 0, L.scrollTime)
 					L.dev = b.kind
