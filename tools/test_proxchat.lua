@@ -2239,11 +2239,16 @@ end)()
 	run(P1, 54); el = el + 54 / 60
 	sendTimed(P1, "l", 10, "alpha bravo charlie delta", {0.2, 0.6, 1.4, 1.8}, el)
 	run(P1, 20); el = el + 20 / 60
-	local live3 = nil
-	for _, t in ipairs(P3.texts) do if t:find("^alpha bravo ") then live3 = t end end
+	local live3, log3 = nil, nil
+	for _, t in ipairs(P3.texts) do
+		if t:find("^alpha bravo ") then
+			if t:find(" …$") then log3 = t else live3 = t end              -- (the chat log's live line ends in " …")
+		end
+	end
 	local GL = P3.PC.GARBLE[1]
 	check(live3 and live3:find(GL, 1, true) and not live3:find("charlie delta", 1, true),
 		"live: the words said while close stay clear, those said from the buffer are garbled (" .. tostring(live3) .. ")")
+	check(log3 and log3 == live3 .. " …", "... the chat log shows the same live words at its bottom, \"…\" at the end (" .. tostring(log3) .. ")")
 	run(P1, 18); el = el + 18 / 60
 	sendTimed(P1, "f", 10, "alpha bravo charlie delta echo", {0.2, 0.6, 1.4, 1.8, 2.4}, el)
 	run(P1, 3)
@@ -3449,6 +3454,17 @@ end)()
 	end
 	check(P3.PC.c.bubbles[2] and P3.PC.c.bubbles[2].level == "mumble" and dev3 and not direct3,
 		"P3 at 30 m (P2's own voice garbled there): only the megaphone's bubble, in full - not a second, garbled one")
+	-- a loudspeaker's / PA's bubble is bigger (heard from far off: at the normal size it was too small to read)
+	local sDev
+	for _, L in ipairs(P3.PC.drawOrder or {}) do if L.p == 2 and L.dev == "loudspeaker" then sDev = L.s end end
+	local far, farBig = P3.PC.bubbleLayout(2, "hello", false, 1, false, false, false, nil, nil, nil, nil, {pos = Vec(90, 0, 0)}),
+		P3.PC.bubbleLayout(2, "hello", false, 1, false, false, false, nil, nil, nil, nil, {pos = Vec(90, 0, 0), big = true})
+	local h3 = P3.PC.listenerHead()
+	local nearBig = P3.PC.bubbleLayout(2, "hello", false, 1, false, false, false, nil, nil, nil, nil, {pos = Vec(h3[1] + 2, h3[2], h3[3]), big = true})
+	check(nearBig and math.abs(nearBig.s - 1.25) < 1e-6, "... up close (2 m): 1.25 at most (" .. (nearBig and nearBig.s or -1) .. ")")
+	check(sDev and math.abs(sDev - 0.9 * 1.25) < 1e-6 and far and farBig and math.abs(far.s - 0.55) < 1e-6 and farBig.s > 2 * far.s,
+		string.format("the loudspeaker's bubble 30 m off: %.2f of full size (a voice's there: %.2f); 60 m off: %.2f vs %.2f",
+			sDev or -1, far and far.s or -1, farBig and farBig.s or -1, far and far.s or -1))
 	-- one bubble between P2 and its megaphone: the fuller one, the megaphone's when equal - finished lines and live words
 	local function overP2(m)
 		local n, kind = 0, nil
@@ -4492,6 +4508,46 @@ end)()
 	waitRate(); say(P2, "/g back to all"); steps(2)
 	check(hasLine(P4, "g", "back to all"), "... and Global lines reach everyone again")
 	P2.PC.setMode("s"); step()
+end)()
+
+-- ================================================================== live words in the chat log (2026-10-22): what a talker
+-- has said so far shows at the bottom of the log (the feed and the window's history), one line each, "…" at the end,
+-- growing; the finished line takes its place
+;(function()
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	for k in pairs(HOST.reg) do if k:find("^proxchat%.channel%.") or k:find("^proxchat%.lobby") then HOST.reg[k] = nil end end
+	for _, M in ipairs({P1, P2, P3, P4, P5}) do if M.PC.c.typing then press(M, "esc") end end
+	steps(2)
+	local function count(M, s) local n = 0; for _, t in ipairs(M.texts) do if t == s then n = n + 1 end end; return n end
+	-- two talk at once: P2 (4 m) and P5 (14 m) - two lines, each once, the one who began first above
+	P1.client.pc_live(2, 501, "hello from two", "s"); step()
+	P1.client.pc_live(5, 502, "and five says hi", "s"); step()
+	local lines = P1.PC.liveLines()
+	check(#lines == 2 and lines[1].p == 2 and lines[2].p == 5 and count(P1, "hello from two …") == 1 and count(P1, "and five says hi …") == 1,
+		"two talking at once: a live line each at the bottom of the feed, stacked (P2 began first: above), never one over the other")
+	P1.client.pc_live(2, 501, "hello from two and more words", "s"); step()
+	lines = P1.PC.liveLines()
+	check(#lines == 2 and lines[1].p == 2 and count(P1, "hello from two and more words …") == 1 and count(P1, "hello from two …") == 0,
+		"... P2 says more: their line grows in place (the order kept)")
+	-- the window's history: the same at its bottom; scrolled up - not there
+	press(P1, "return"); step()
+	check(count(P1, "hello from two and more words …") == 1 and count(P1, "and five says hi …") == 1, "the chat window: the live lines at the bottom of the history too")
+	press(P1, "esc"); step()
+	-- out of reach (P3, 30 m: Speak's buffer - garbled; P4, 60 m: nothing)
+	P1.client.pc_live(4, 503, "far away words", "s"); step()
+	check(#P1.PC.liveLines() == 2 and count(P1, "far away words …") == 0, "a talker out of reach (56 m): no live line")
+	P1.client.pc_live(4, 503, "", "s")
+	-- the finished line takes the live line's place; a late update of it is ignored
+	local T0 = P1.PC.serverNow() - 1
+	P1.client.pc_near(900201, 2, "P2", "s", "hello from two and more words done", nil, true, "00000032", T0, 501); step()
+	check(#P1.PC.liveLines() == 1 and P1.PC.liveLines()[1].p == 5 and hasLine(P1, "s", "hello from two and more words done")
+		and count(P1, "hello from two and more words …") == 0, "P2's finished line: in the log, their live line gone (P5's stays)")
+	P1.client.pc_live(2, 501, "hello from two and more words", "s"); step()
+	check(#P1.PC.liveLines() == 1, "... a late update of P2's words after it: ignored")
+	P1.client.pc_live(2, 504, "a new sentence", "s"); step()
+	check(#P1.PC.liveLines() == 2 and count(P1, "a new sentence …") == 1, "... P2's next sentence: a live line again")
+	P1.client.pc_live(2, 504, "", "s"); P1.client.pc_live(5, 502, "", "s"); step()
+	check(#P1.PC.liveLines() == 0, "they stop: no live lines")
 end)()
 
 -- (as the game: a ServerCall / ClientCall works only with its function's name as a string LITERAL in the source -
