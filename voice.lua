@@ -1458,10 +1458,13 @@ function client.pc_live(p, utt, text, ch, w, start, dv, dk)
 	if not p or p ~= p then return end
 	if not text or text == "" then
 		c.live[p] = nil
+	elseif c.liveDone and c.liveDone[p] == (tonumber(utt) or 0) then   -- (its finished line came first: late, ignored)
 	else
 		local us, times = PC.voiceTimed(text, w)
-		c.live[p] = {u = tonumber(utt) or 0, text = text, ch = PC.validMode(ch), t = GetTime(), us = us,
-			times = tonumber(start) and times or nil, start = tonumber(start), dv = dv, dk = dk}
+		local old, u = c.live[p], tonumber(utt) or 0
+		c.live[p] = {u = u, text = text, ch = PC.validMode(ch), t = GetTime(), us = us,
+			times = tonumber(start) and times or nil, start = tonumber(start), dv = dv, dk = dk,
+			t0 = (old and old.u == u and old.t0) or GetTime()}           -- (when this line began: the chat log's order)
 		c.liveSeen = c.liveSeen or {}                                     -- (its finished line then goes soon: PC.bubbleLife)
 		c.liveSeen[p] = tonumber(utt) or 0
 	end
@@ -1506,40 +1509,71 @@ end
 -- small "...". Your own in third person (Settings: your own bubble). The finished line then takes its place, already
 -- at its end, and goes after cfg.voiceHold s. None with Settings' "Bubbles for spoken lines: Hide". Returns the
 -- speakers drawn (no typing "..." for them then).
+-- what this player gets of speaker p's live words l now: "words", the text (only what they were in reach for, in the
+-- mode's buffer garbled as a typed line is), far (garbled); "dots" (in reach, nothing heard yet); nil (out of reach, or
+-- not shown: you, muted, a channel's). The bubble (PC.voiceLiveBubbles) and the chat log (PC.liveLines) alike.
+function PC.voiceLiveText(p, l, me)
+	local c = PC.C()
+	if p == me or c.muted[p] or not (PC.lobby() or PC.channelOf(p) == "") then return nil end
+	local d = PC.voiceHearsAll(p, l.ch) and 0 or PC.hearDist(p)
+	local inner, outer = PC.rangeOf(l.ch)
+	if not (d and d <= outer) then return nil end
+	local seen, fr = PC.voiceLiveSeen(p, l)
+	if not seen then return "dots" end
+	local text, far = seen, false
+	local garbled = false
+	for _, f in ipairs(fr or {}) do if f < 1 then garbled = true; break end end
+	if fr then                                                          -- (timed: each word exactly as heard when said -
+		if garbled then                                                 --  clear stays clear, garbled stays garbled)
+			text, far = PC.garble(text, 0, PC.voiceSeed(p, l.u), math.floor(GetTime() * 3), fr), true
+		end
+	elseif d > inner then                                               -- (untimed words: by where you are now)
+		text, far = PC.garble(text, PC.fracAt(d, l.ch) or 0, PC.voiceSeed(p, l.u), math.floor(GetTime() * 3)), true
+	end
+	return "words", text, far
+end
+
+-- (chat_core's history and feed) the live words of everyone talking now, as chat lines under the rest - growing as the
+-- bubble does, "…" at the end; the finished line takes their place (the user, 2026-10-22: "partial transcription
+-- should show on chat logs as well (shown at the bottom and then posted when the full transcription finished)").
+-- Oldest talker first. Entries are made each frame (never in the history).
+function PC.liveLines()
+	local c = PC.c
+	if not (c and c.live) then return {} end
+	local me, out = GetLocalPlayer(), {}
+	for p in pairs(c.live) do
+		local l = PC.voiceLiveOf(p)
+		if l then
+			local kind, text, far = PC.voiceLiveText(p, l, me)
+			if kind == "words" then
+				out[#out + 1] = {ch = l.ch, p = p, name = PC.nameOf(p), text = text .. " …", far = far, voice = true, live = true,
+					t = GetTime(), t0 = l.t0 or l.t}
+			end
+		end
+	end
+	table.sort(out, function(a, b) if a.t0 ~= b.t0 then return a.t0 < b.t0 end return a.p < b.p end)
+	return out
+end
+
 function PC.voiceLiveBubbles(add, me)
 	local c, cfg = PC.C(), PC.cfg
 	local done = {}
 	if c.hideVoiceBubbles then return done end
 	for p in pairs(c.live or {}) do
 		local l = PC.voiceLiveOf(p)
-		if l and p ~= me and not c.muted[p] and not (c.bubbles[p] and not c.bubbles[p].hidden)
-			and (PC.lobby() or PC.channelOf(p) == "") then
-			local d = PC.voiceHearsAll(p, l.ch) and 0 or PC.hearDist(p)
-			local inner, outer = PC.rangeOf(l.ch)
+		if l and not (c.bubbles[p] and not c.bubbles[p].hidden) then
 			local whisper = l.ch == "w"
-			if d and d <= outer then
-				local seen, fr = PC.voiceLiveSeen(p, l)
-				if seen then
-					local text, far = seen, false
-					local garbled = false
-					for _, f in ipairs(fr or {}) do if f < 1 then garbled = true; break end end
-					if fr then                                              -- (timed: each word exactly as heard when said -
-						if garbled then                                     --  clear stays clear, garbled stays garbled)
-							text, far = PC.garble(text, 0, PC.voiceSeed(p, l.u), math.floor(GetTime() * 3), fr), true
-						end
-					elseif d > inner then                                   -- (untimed words: by where you are now)
-						text, far = PC.garble(text, PC.fracAt(d, l.ch) or 0, PC.voiceSeed(p, l.u), math.floor(GetTime() * 3)), true
-					end
-					-- (one bubble between a talker and the megaphone they carry: the fuller one, the megaphone's when equal -
-					--  devices.lua's PC.devLiveWins)
-					if not (PC.devLiveWins and PC.devLiveWins(p, far and 1 or 2)) then
-						add(PC.bubbleLayout(p, text, l.ch == "y", 1, false, whisper, far, nil, true))
-					end
-				elseif not (PC.devLiveWins and PC.devLiveWins(p, 0.5)) then
-					add(PC.bubbleLayout(p, "...", l.ch == "y", 0.75, true, whisper))
+			local kind, text, far = PC.voiceLiveText(p, l, me)
+			if kind == "words" then
+				-- (one bubble between a talker and the megaphone they carry: the fuller one, the megaphone's when equal -
+				--  devices.lua's PC.devLiveWins)
+				if not (PC.devLiveWins and PC.devLiveWins(p, far and 1 or 2)) then
+					add(PC.bubbleLayout(p, text, l.ch == "y", 1, false, whisper, far, nil, true))
 				end
-				done[p] = true
+			elseif kind == "dots" and not (PC.devLiveWins and PC.devLiveWins(p, 0.5)) then
+				add(PC.bubbleLayout(p, "...", l.ch == "y", 0.75, true, whisper))
 			end
+			if kind then done[p] = true end
 		end
 	end
 	local vo = c.voice
