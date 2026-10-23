@@ -52,7 +52,8 @@ do
 		devSlack = 10,           -- m past a device's far the host still sends a line to (room to walk in while it is up)
 		devBubbles = 3,          -- device bubbles a line gets at most (the nearest devices)
 		bigBubbleMin = 0.9,      -- a loudspeaker's / PA's bubble: never smaller than this (others: 0.55 far off, by distance)
-		bigBubbleBoost = 1.25,   --   and this much bigger than a voice's at the same distance
+		bigBubbleBoost = 1.25,   --   and this much bigger than a voice's at the same distance,
+		bigBubbleMax = 1.25,     --   up to this up close (the user, 2026-10-22: 1.375 was too big)
 		devMaxVia = 8,           -- via entries per speaker (Koetama: at most 8)
 		devMaxPts = 16,          -- positions per device (Koetama: at most 16)
 		devMax = 64,             -- devices read from the registry at most
