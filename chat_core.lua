@@ -3321,6 +3321,9 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	-- depth (along the view) shrinks toward the screen edges, and the camera (third person) swings around
 	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
+	if at and at.big then                                                 -- (a loudspeaker's / PA's: heard from far off, so
+		scale = math.max(PC.cfg.bigBubbleMin, scale) * PC.cfg.bigBubbleBoost   --  bigger: devices.lua's PC.devAnchor)
+	end
 	local sx, sy = x, y                                                   -- (where it comes from: the tail points there)
 	local cue                                                             -- ("below": a docked bubble's tag)
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
