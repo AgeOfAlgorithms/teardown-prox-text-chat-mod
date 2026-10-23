@@ -51,6 +51,9 @@ do
 		hornBack = 0.15,         -- a carried loudspeaker's (megaphone's) loudness straight behind it (Koetama's "back")
 		devSlack = 10,           -- m past a device's far the host still sends a line to (room to walk in while it is up)
 		devBubbles = 3,          -- device bubbles a line gets at most (the nearest devices)
+		bigBubbleMin = 0.9,      -- a loudspeaker's / PA's bubble: never smaller than this (others: 0.55 far off, by distance)
+		bigBubbleBoost = 1.25,   --   and this much bigger than a voice's at the same distance,
+		bigBubbleMax = 1.25,     --   up to this up close (the user, 2026-10-22: 1.375 was too big)
 		devMaxVia = 8,           -- via entries per speaker (Koetama: at most 8)
 		devMaxPts = 16,          -- positions per device (Koetama: at most 16)
 		devMax = 64,             -- devices read from the registry at most
@@ -807,15 +810,18 @@ end
 
 -- where a device bubble goes, in the world over the device: {pos = the device (its distance), top = where the bubble
 -- points}. A carried one: over its carrier's head, as their own bubbles are. The listener's OWN walkie: as the own-bubble
--- rule (third person, Settings' "Your own bubble"); in first person none (the chat's feed shows the line). nil: none
+-- rule (third person, Settings' "Your own bubble"); in first person none (the chat's feed shows the line). nil: none.
+-- big: a loudspeaker's or a PA's - heard from far off, its bubble was too small to read (the user, 2026-10-22: "the speech
+-- bubbles from speakerphone should be bigger than others"): PC.bubbleLayout sizes it up (cfg.bigBubbleMin / Boost)
 function PC.devAnchor(dev, pt)
+	local big = dev.kind == "loudspeaker" or dev.kind == "pa"
 	local holder = carried(dev)
 	if holder then
 		if holder == GetLocalPlayer() and not (GetBool("game.thirdperson") and not PC.C().hideOwn) then return nil end
 		local f = PC.speakerPos(holder)
-		return f and {pos = pt, top = VecAdd(f, Vec(0, 2.25, 0))} or nil
+		return f and {pos = pt, top = VecAdd(f, Vec(0, 2.25, 0)), big = big} or nil
 	end
-	return {pos = pt}
+	return {pos = pt, big = big}
 end
 
 -- (chat_core's drawBubbles) the device bubbles, each in its device's style, over the device; in reach only

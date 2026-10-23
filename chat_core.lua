@@ -2017,6 +2017,14 @@ function PC.receive(m)
 	local pad = m.v == "pad"                                            -- (typed on a controller: the mark in the history)
 	if m.v ~= true then m.v = nil end
 	local heard, far
+	if m.v and m.p then                                                 -- (a finished spoken line: its live words leave the
+		if m.vu then                                                    --  chat log - this line takes their place - and a late
+			c.liveDone = c.liveDone or {}                               --  update of them is ignored: voice.lua; without its
+			c.liveDone[m.p] = m.vu                                      --  number, whatever they were saying)
+		end
+		local l = c.live and c.live[m.p]
+		if l and (not m.vu or l.u == m.vu) then c.live[m.p] = nil end
+	end
 	if m.p and m.name then
 		local function bare(n) return (tostring(n):gsub(" #%d+$", "")) end         -- (the " #p" a same-name clash adds comes and goes)
 		if c.muted[m.p] and bare(c.muted[m.p]) ~= bare(m.name) then c.muted[m.p] = nil end   -- (another player with that number now)
@@ -3214,6 +3222,7 @@ function PC.drawLine(e, w, size, a, measureOnly)
 		elseif e.shout then UiColor(1, 0.62, 0.32, a)
 		elseif whisper then UiColor(0.8, 0.82, 1, fa)                    -- (lavender: readable, still not a Speak line)
 		elseif e.far then UiColor(0.85, 0.85, 0.85, 0.8 * a)
+		elseif e.live then UiColor(1, 1, 1, 0.75 * a)                 -- (live words, still coming: a little dimmer)
 		else UiColor(1, 1, 1, a) end
 		UiFont(PC.chatFont(e.text), os)
 		UiWordWrap(tw)
@@ -3312,6 +3321,10 @@ function PC.bubbleLayout(p, text, shout, a, small, whisper, mumble, t0, atEnd, t
 	-- depth (along the view) shrinks toward the screen edges, and the camera (third person) swings around
 	-- as you turn - both changed the size when turning on the spot
 	local scale, docked = math.max(0.55, math.min(1.1, 9 / math.max(1, dist))), false
+	if at and at.big then                                                 -- (a loudspeaker's / PA's: heard from far off, so
+		scale = math.min(PC.cfg.bigBubbleMax, math.max(PC.cfg.bigBubbleMin, scale) * PC.cfg.bigBubbleBoost)   --  bigger:
+	                                                                      --  devices.lua's PC.devAnchor; at most bigBubbleMax)
+	end
 	local sx, sy = x, y                                                   -- (where it comes from: the tail points there)
 	local cue                                                             -- ("below": a docked bubble's tag)
 	if d and d > 0 and x >= 0 and x <= UiWidth() and y >= 0 and y <= UiHeight() then
@@ -3984,8 +3997,11 @@ function PC.drawHistory(W, H)
 		UiText("Nothing yet. Whisper: " .. cfg.whisperR .. " m, Speak: " .. cfg.chatR .. " m, Yell: " .. cfg.shoutR .. " m, Global: all players.")
 		UiPop()
 	end
-	for i = #h - c.scroll, 1, -1 do
-		local e = h[i]
+	-- (scrolled to the end: the live words of whoever is talking, at the bottom - one line each, stacked: voice.lua)
+	local live = (c.scroll == 0 and PC.liveLines) and PC.liveLines() or {}
+	local n = #h - c.scroll
+	for i = n + #live, 1, -1 do
+		local e = i > n and live[i - n] or h[i]
 		local lh = PC.drawLine(e, w, PC.textPx(24), 1, true)
 		if y - lh < top then break end
 		y = y - lh
@@ -4247,9 +4263,11 @@ function PC.drawFeed(L)
 	UiTextShadow(0, 0, 0, 0.85, 1.5)
 	local y = L.y + L.H
 	local shown = 0
-	for i = #c.hist, 1, -1 do
+	local live = PC.liveLines and PC.liveLines() or {}                 -- (the live words, under the rest: voice.lua)
+	local n = #c.hist
+	for i = n + #live, 1, -1 do
 		if shown >= cfg.feedLines then break end
-		local e = c.hist[i]
+		local e = i > n and live[i - n] or c.hist[i]
 		if now - e.t >= cfg.life then break end
 		local a = math.max(0, math.min(1, (cfg.life - (now - e.t)) / 1.5))
 		local lh = PC.drawLine(e, L.W, size, a, true)
