@@ -892,7 +892,7 @@ function PC.trWant(e, b)
 	end
 	if tr.asked[ck] and now - tr.asked[ck] < cfg.trSame then e.trId = -1; return end
 	local p = e.p
-	local local_ = PC.isDummy(p) or PC.isVoiceDummy(p)
+	local local_ = PC.isDummy(p) or PC.isVoiceDummy(p) or (PC.isAgentP and PC.isAgentP(p))   -- (an agent: agents.lua)
 	if not local_ then
 		local real = false
 		for _, q in ipairs(PC.allPlayers()) do if q == p then real = true; break end end

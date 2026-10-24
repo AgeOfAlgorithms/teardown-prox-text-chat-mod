@@ -27,11 +27,18 @@
 --
 -- HOW: the host's server hears every line said (server.pc_say -> PC.agentHear) and hands an agent's to the host's own
 -- game (client.pc_agentline); that game reads the definitions, writes them and the lines into Koetama's feed
--- (PC.agentFeed), reads the replies (PC.agentReply), says them through the host (server.pc_agentsay: the players in
--- the reply's reach get it, client.pc_agentsay) and writes the calls for the mod.
+-- (PC.agentFeed), reads the replies (PC.agentReply), says them through the host (server.pc_agentsay) and writes the
+-- calls for the mod.
+-- AN AGENT SPEAKS AS ANYONE DOES (the user, 2026-10-24: "Why shouldn't the NPC characters share the same prox comm
+-- features as other players?"): each agent gets a speaker number (PC.AGENT_P0 + k, proxchat.agent.<id>.player for the
+-- mod) and its reply is an ordinary line from it (PC.deliver): its bubble over it (PC.speakerPos: the top of it), heard
+-- in its mode's range, garbled across the buffer, muffled by walls, its babble from where it is (proxchat.agent.<id>.voice:
+-- one of the chat's voices), in the chat log, translated, muted with /mute <name>, and a proxchat.said event (.agent set).
+-- An agent hears only players (never another agent: no endless talk between them).
 
 do
 	local defaults = {
+		agentMax = 64,           -- agents at most (speaker numbers PC.AGENT_P0 ..)
 		agentLineLife = 60,      -- s a line waits for its reply before it is dropped
 		agentLinesMax = 32,      -- lines waiting at most (the oldest go)
 		agentSendFor = 5,        -- s the definitions go in the feed after a hello or a change
@@ -43,6 +50,8 @@ do
 	end
 end
 PC.AGENT_CALLS = 16                                                  -- (the calls' ring)
+PC.AGENT_P0 = 3000                                                   -- (agents' speaker numbers: 3000.. - the test dummies are
+                                                                     --  1000.., the voice dummies 2000..)
 PC.AGENT_HEARS = {near = true, named = true, all = true, none = true}
 PC.AGENT_MODES = {whisper = "w", w = "w", speak = "s", s = "s", yell = "y", shout = "y", y = "y", global = "g", g = "g"}
 
@@ -77,10 +86,43 @@ function PC.agentPos(at)
 	return p, VecAdd(p, Vec(0, 0.35, 0))
 end
 
+-- an agent's speaker number?
+function PC.isAgentP(p)
+	return type(p) == "number" and p >= PC.AGENT_P0 and p < PC.AGENT_P0 + PC.cfg.agentMax
+end
+
+-- (every game, the host's server too) shared.pcAgents by speaker number, read every 0.5 s (a read of shared on a client
+-- is a copy): p -> {id, name, at, mode}
+function PC.agentByP(p)
+	local c = PC.agentCache or {t = -1e9}
+	PC.agentCache = c
+	local now = GetTime()
+	if now - c.t >= 0.5 or now < c.t then
+		c.t, c.byP = now, {}
+		for id, a in pairs(shared.pcAgents or {}) do
+			if type(a) == "table" and type(a.p) == "number" then c.byP[a.p] = {id = id, name = a.name, at = a.at, mode = a.mode} end
+		end
+	end
+	return c.byP[p]
+end
+
+-- agent p's "feet": where its speech bubble hangs 2.25 m above (the top of it - PC.speakerPos, PC.speakerFeet); nil: nowhere
+function PC.agentFeet(p)
+	local a = PC.agentByP(p)
+	if not a then return nil end
+	local _, top = PC.agentPos(a.at)                                   -- (not "a and PC.agentPos(...)": that keeps one value)
+	return top and VecSub(top, Vec(0, 2.25, 0)) or nil
+end
+
+function PC.agentName(p)
+	local a = PC.agentByP(p)
+	return a and a.name or "?"
+end
+
 -- ---- THE HOST'S SERVER: the agents, who hears what, the replies said
 
--- (server) the agents from the registry (every 0.5 s): {name, at, mode, hears}; their name, place and mode in
--- shared.pcAgents for every game (the bubbles)
+-- (server) the agents from the registry (every 0.5 s): {name, at, mode, hears, p}; their name, place, mode and speaker
+-- number in shared.pcAgents for every game, their babble voice in shared.pcVoice
 function PC.agentServerTick()
 	local s = PC.S()
 	if s.time - (s.agentReadT or -1e9) < 0.5 then return end
@@ -92,17 +134,29 @@ function PC.agentServerTick()
 			local b = base(id)
 			local name = PC.utf8Head(PC.clean(GetString(b .. ".name")), 32)
 			local hears = GetString(b .. ".hears"):lower()
-			local a = {name = name ~= "" and name or id, at = GetString(b .. ".at"),
-				mode = PC.AGENT_MODES[GetString(b .. ".mode"):lower()] or "s", hears = PC.AGENT_HEARS[hears] and hears or "near"}
-			list[id] = a
-			pub[id] = {name = a.name, at = a.at, mode = a.mode}
-			sig[#sig + 1] = id .. "|" .. a.name .. "|" .. a.at .. "|" .. a.mode
+			s.agentP = s.agentP or {}
+			if not s.agentP[id] then                                      -- (its speaker number, for the session)
+				s.agentNext = (s.agentNext or 0) + 1
+				if s.agentNext <= PC.cfg.agentMax then s.agentP[id] = PC.AGENT_P0 + s.agentNext - 1 end
+			end
+			local p = s.agentP[id]
+			if p then
+				local a = {name = name ~= "" and name or id, at = GetString(b .. ".at"), p = p,
+					mode = PC.AGENT_MODES[GetString(b .. ".mode"):lower()] or "s", hears = PC.AGENT_HEARS[hears] and hears or "near"}
+				list[id] = a
+				pub[id] = {name = a.name, at = a.at, mode = a.mode, p = p}
+				sig[#sig + 1] = id .. "|" .. a.name .. "|" .. a.at .. "|" .. a.mode
+				if GetInt(b .. ".player") ~= p then SetInt(b .. ".player", p) end   -- (for the mod: the said events, ...)
+				local vn = GetString(b .. ".voice")
+				local v = vn ~= "" and PC.findVoice and PC.findVoice(vn) or nil
+				if v and (shared.pcVoice or {})[p] ~= v then PC.setShared("pcVoice", p, v) end
+			end
 		end
 	end
 	s.agents = list
 	table.sort(sig)
 	local str = table.concat(sig, "\n")
-	if str ~= s.agentsSig then s.agentsSig = str; shared.pcAgents = pub end
+	if str ~= s.agentsSig then s.agentsSig = str; shared.pcAgents = pub; PC.agentCache = nil end
 end
 
 local function hostId()
@@ -145,8 +199,8 @@ function PC.agentHear(p, ch, text, chan)
 	end
 end
 
--- (the host's game) an agent's reply: said to the players in its reach (its mode's, the buffer and a slack; global, or
--- nowhere: everyone; the dead: everyone), and its last line for the mod
+-- (the host's game) an agent's reply: a line from its speaker number, as a player's (PC.deliver: the players in its
+-- mode's reach, everything a line gets), and its last line for the mod
 function server.pc_agentsay(p, tok, id, text)
 	local s, cfg = PC.S(), PC.cfg
 	p = PC.who(p, tok)
@@ -157,69 +211,9 @@ function server.pc_agentsay(p, tok, id, text)
 	if not a then return end
 	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
 	if text == "" then return end
-	s.agentN = (s.agentN or 0) + 1
-	local pos = PC.agentPos(a.at)
-	local _, outer = PC.rangeOf(a.mode)
-	for _, q in ipairs(PC.allPlayers()) do
-		local to = a.mode == "g" or not pos or s.chan[q] ~= nil
-		if not to then
-			local okQ, tq = pcall(GetPlayerTransform, q)
-			to = okQ and tq and tq.pos and VecLength(VecSub(tq.pos, pos)) <= outer + cfg.speakSlack
-		end
-		if to then ClientCall(q, "client.pc_agentsay", id, a.name, text, a.mode, s.agentN) end
-	end
+	PC.deliver(a.p, a.name, a.mode, text, {agent = id})
 	SetString(base(id) .. ".reply", text)
-	SetInt(base(id) .. ".replyn", s.agentN)
-end
-
--- ---- EVERY GAME: an agent's reply, shown
-
--- (client) agent id (name) says text in mode: in the chat, and a bubble over it - garbled from its mode's buffer, as a
--- typed line is (fixed as heard when it came)
-function client.pc_agentsay(id, name, text, mode, n)
-	local c = PC.C()
-	if type(id) ~= "string" or type(text) ~= "string" or text == "" then return end
-	mode = (mode == "w" or mode == "y" or mode == "g") and mode or "s"
-	name = type(name) == "string" and name ~= "" and name or id
-	local a = (shared.pcAgents or {})[id]
-	local pos = a and PC.agentPos(a.at)
-	local shown, far = text, false
-	if pos and mode ~= "g" and not PC.dead() then
-		local inner, outer = PC.rangeOf(mode)
-		local head = PC.listenerHead()
-		local d = head and VecLength(VecSub(head, pos)) or 0
-		if d > outer then return end                                   -- (sent with the slack, walked off since)
-		if d > inner then
-			shown, far = PC.garble(text, PC.fracAt(d, mode) or 0, (tonumber(n) or 0) + 7919, 0), true
-		end
-	end
-	PC.addHist({ch = mode, name = name, text = shown, far = far, agent = id})
-	if pos then
-		c.agentB = c.agentB or {}
-		c.agentB[id] = {text = shown, t = GetTime(), mode = mode, far = far}
-	end
-end
-
--- (chat_core's drawBubbles) the agents' bubbles over them, for their time (as a typed line's), fading at the end
-function PC.agentBubbles(add, now)
-	local c, cfg = PC.C(), PC.cfg
-	for id, b in pairs(c.agentB or {}) do
-		local life = math.min(cfg.lifeMax, cfg.lifeMin + PC.utf8Len(b.text) * cfg.lifePerChar) + (b.extra or 0)
-		if now - b.t > life then
-			c.agentB[id] = nil
-		else
-			local a = (shared.pcAgents or {})[id]
-			local pos, top = a and PC.agentPos(a.at)
-			if pos then
-				local L = PC.bubbleLayout("agent:" .. id, b.text, b.mode == "y", math.max(0, math.min(1, (life - (now - b.t)) / 1.2)),
-					false, b.mode == "w", b.far, b.t, false, nil, nil, {pos = pos, top = top})
-				if L then
-					b.extra = math.max(b.extra or 0, L.scrollTime)
-					add(L)
-				end
-			end
-		end
-	end
+	SetInt(base(id) .. ".replyn", s.n)
 end
 
 -- ---- THE HOST'S GAME: the definitions, the lines and calls, Koetama's feed

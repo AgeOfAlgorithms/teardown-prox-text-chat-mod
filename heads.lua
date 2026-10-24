@@ -39,7 +39,8 @@ end
 -- (A spoken line bobbed while it was said - "started talking" until the line: nothing more after it.)
 function PC.bobSaid(p, mode, text, voice)
 	local cfg = PC.cfg
-	if voice or type(p) ~= "number" or PC.isDummy(p) or PC.isVoiceDummy(p) or mode == "g" or mode == "d" then return end
+	if voice or type(p) ~= "number" or PC.isDummy(p) or PC.isVoiceDummy(p) or (PC.isAgentP and PC.isAgentP(p)) or mode == "g"
+		or mode == "d" then return end                                 -- (an agent has no player head: agents.lua)
 	local d = PC.distTo(p)
 	if p ~= GetLocalPlayer() and not (d and d <= cfg.bobFar) then return end
 	PC.bobStart(p, PC.babbleLength(p, text, mode), mode)

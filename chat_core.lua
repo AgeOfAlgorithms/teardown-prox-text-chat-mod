@@ -585,6 +585,7 @@ end
 -- (server) the name everyone sees for player p: cleaned; when another player's folds the same ("Bob" / "Воb", two
 -- "Bob"s), " #<p>" after it, so each can be told apart and muted (/mute #p)
 function PC.nameOf(p)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentName(p) end   -- (agents.lua: an AI character's)
 	local name = PC.cleanName(GetPlayerName(p), p)
 	local key = PC.nameKey(name)
 	for _, q in ipairs(PC.allPlayers()) do
@@ -1314,11 +1315,27 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 	if s.time - (s.last[p] or -10) < cfg.rate then return end            -- (no spamming: the resend gets in later)
 	s.last[p] = s.time
 	if seq then pcAck(p, seq) end
+	PC.deliver(p, PC.nameOf(p), ch, text, {vflag = vflag, voice = voice, vw = vw, vs = vs, vu = vu})
+end
+
+-- (server) speaker p's feet: a player's, or an agent's (agents.lua: an AI character speaks as anyone does); nil: unknown
+function PC.speakerFeet(p)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentFeet(p) end
+	local ok, tr = pcall(GetPlayerTransform, p)
+	return ok and tr and tr.pos or nil
+end
+
+-- (server) one accepted line from speaker p (a player, or an agent - agents.lua) delivered: to its channel, to the
+-- players in reach (Whisper / Speak / Yell) or to everyone (Global, in shared); the event for other mods. o: vflag (what
+-- the games get for voice / pad), voice, vw / vs / vu (a spoken line's word times), agent (an agent's id)
+function PC.deliver(p, name, ch, text, o)
+	local s, cfg = PC.S(), PC.cfg
+	local vflag, voice, vw, vs, vu = o.vflag or false, o.voice, o.vw, o.vs, o.vu
+	local dv, dk
 	s.n = s.n + 1
-	local name = PC.nameOf(p)
 	local chan = not PC.inLobby() and s.chan[p] or nil
-	if PC.agentHear then PC.agentHear(p, ch, text, chan) end           -- (agents.lua: the AI characters that hear it)
-	if chan then
+	if not o.agent and PC.agentHear then PC.agentHear(p, ch, text, chan) end   -- (agents.lua: the AI characters that hear
+	if chan then                                                             --  it - a player's, never another agent's)
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
 		for _, q in ipairs(PC.allPlayers()) do
@@ -1338,10 +1355,10 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		if vs and ch ~= "w" then                                          -- (a spoken Speak / Yell line with word times: who was
 			reach = reach + cfg.walkSpeed * math.min(30, s.time - vs)   --  near when it began may have walked off since; their
 		end                                                              --  game shows only the words they were in reach for)
-		local okT, tr = pcall(GetPlayerTransform, p)
+		local feet = PC.speakerFeet(p)
 		for _, q in ipairs(PC.allPlayers()) do
 			local okQ, tq = pcall(GetPlayerTransform, q)
-			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= reach) then
+			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (feet and okQ and tq and VecLength(VecSub(tq.pos, feet)) <= reach) then
 				if ch == "w" then
 					ClientCall(q, "client.pc_whisper", s.n, p, name, text, vflag, vw, vs, vu, dv, dk)
 				else                                                     -- (t: when it was said - a late one is timed from it)
@@ -1358,7 +1375,7 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		while #list > cfg.keepShared do table.remove(list, 1) end
 		shared.pcMsgs = list
 	end
-	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk)
+	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk, o.agent)
 	if voice and PC.voiceLiveDone then PC.voiceLiveDone(p) end           -- (voice.lua: the line replaces the live words)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d%s", p, ch, #text, chan and (" channel=" .. chan) or ""))
 end
@@ -1375,18 +1392,19 @@ end
 --   ... .channel  the speaker's channel ("dead", "dead red"...: only it heard), else ""
 --   ... .time     GetTime() on the host when it was said (a line from before this level: larger than now)
 --   ... .voice    bool: spoken, not typed (the voice helper's transcript of what the player said)
+--   ... .agent    an AI character's id when it was one speaking (agents.lua; player: its speaker number), else ""
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
-function PC.publishSaid(p, ch, text, channel, voice, tx, device)
+function PC.publishSaid(p, ch, text, channel, voice, tx, device, agent)
 	local s, cfg = PC.S(), PC.cfg
 	local base = cfg.reg .. ".said."
 	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
 	local k = base .. (s.said % PC.SAID_RING) .. "."
 	local mode = ch == "w" and "whisper" or (ch == "g" and "global" or (ch == "y" and "yell" or "speak"))
 	local shout = mode == "yell"
-	local okT, tr = pcall(GetPlayerTransform, p)
-	local pos = okT and tr and tr.pos or Vec(0, 0, 0)
+	local pos = PC.speakerFeet(p) or Vec(0, 0, 0)
 	SetInt(k .. "player", p)
+	SetString(k .. "agent", agent or "")
 	SetString(k .. "mode", mode)
 	SetBool(k .. "yell", shout)
 	SetString(k .. "text", text)
@@ -1850,6 +1868,7 @@ function PC.speakerPos(p)
 	local c = PC.c
 	if PC.isDummy(p) then local d = PC.dummyOf(p); return d and d.pos or nil end
 	if PC.isVoiceDummy and PC.isVoiceDummy(p) then local d = PC.voiceDummyOf(p); return d and d.pos or nil end   -- (voice.lua)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentFeet(p) end   -- (agents.lua: an AI character)
 	local ok, tr = pcall(GetPlayerTransform, p)
 	return ok and tr and tr.pos or nil
 end
@@ -3652,7 +3671,6 @@ function PC.drawBubbles()
 			end
 		end
 	end
-	if PC.agentBubbles then PC.agentBubbles(add, now) end               -- (agents.lua: the AI characters' replies)
 	if PC.devLiveBubbles then PC.devLiveBubbles(add) end                -- (devices.lua: live words over the devices - a
 	local live = PC.voiceLiveBubbles and PC.voiceLiveBubbles(add, me) or {}   --  talker's own megaphone's held back for the
 	if PC.devLiveFlush then PC.devLiveFlush(add) end                    --  talker's live bubble to compare; voice.lua: words
