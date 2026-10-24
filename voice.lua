@@ -2051,6 +2051,7 @@ function PC.voiceFeed(vo, off)
 	if room and PC.devTransmit then f.transmit = PC.devTransmit() end   -- (my voice into a device now: devices.lua)
 	if placed and PC.devListener then f.listener = PC.devListener() end
 	if not off then f.to_translate = PC.trFeed(vo) end                  -- (translation: the lines waiting)
+	if not off and PC.agentFeed then PC.agentFeed(vo, f) end            -- (agents.lua: the mods' agents, their lines)
 	SetString(PC.VOICE_FEED, PC.voiceFeedString(f))
 end
 
@@ -2161,6 +2162,7 @@ function PC.voiceMessage(vo, obj)
 		end
 		vo.h.hello = {app = type(obj.app) == "string" and obj.app or "", version = type(obj.version) == "string" and obj.version or "",
 			protocol = tonumber(obj.protocol), features = feats}
+		if PC.agentHello then PC.agentHello(vo) end                      -- (agents.lua: the host's language model; send again)
 		if PC.koetamaNewer(vo) and vo.h.newerSaid ~= vo.h.hello.protocol then
 			vo.h.newerSaid = vo.h.hello.protocol                          -- (said once per protocol number, not per reconnect)
 			PC.system(PC.KOETAMA_NEWER)
@@ -2189,6 +2191,10 @@ function PC.voiceMessage(vo, obj)
 		if id then PC.trReply(id, type(obj.text) == "string" and obj.text or "") end   -- (under its line, never said)
 	elseif t == "translations_status" then
 		PC.trStatus(obj)                                                 -- (into + the pairs' state: the Translate tab)
+	elseif t == "agent_reply" then
+		if PC.agentReply then PC.agentReply(obj) end                     -- (agents.lua: said, its calls to the mod)
+	elseif t == "agent_status" then
+		if PC.agentStatus then PC.agentStatus(obj) end
 	end
 end
 

@@ -782,7 +782,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 16                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 17                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -796,7 +796,8 @@ PC.API_VERSION = 16                                                -- (3: proxch
                                                                     --  14: proxchat.pingto.<p> - pins to a game's list;
                                                                     --  15: pins follow the pinger's mode (Whisper / Speak /
                                                                     --     Yell's reach, none in Global); ping= and pingto gone;
-                                                                    --  16: proxchat.pinganon.<p> - pins without a name)
+                                                                    --  16: proxchat.pinganon.<p> - pins without a name;
+                                                                    --  17: agents - a mod's AI characters, agents.lua)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1061,6 +1062,7 @@ PC.SEND = {
 	pc_talk = function(...) ServerCall("server.pc_talk", ...) end,
 	pc_room = function(...) ServerCall("server.pc_room", ...) end,
 	pc_ping = function(...) ServerCall("server.pc_ping", ...) end,     -- (ping.lua)
+	pc_agentsay = function(...) ServerCall("server.pc_agentsay", ...) end,   -- (agents.lua: the host's game only)
 }
 
 function PC.call(name, ...)
@@ -1315,6 +1317,7 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 	s.n = s.n + 1
 	local name = PC.nameOf(p)
 	local chan = not PC.inLobby() and s.chan[p] or nil
+	if PC.agentHear then PC.agentHear(p, ch, text, chan) end           -- (agents.lua: the AI characters that hear it)
 	if chan then
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
@@ -1488,6 +1491,7 @@ function PC.serverTick(dt)
 		shared.pcChan = t
 	end
 	if PC.devServerTick then PC.devServerTick() end                   -- (devices.lua: devices, tx, effects)
+	if PC.agentServerTick then PC.agentServerTick() end               -- (agents.lua: the mods' AI characters)
 	-- a map or game mode may set its distances: SetString("proxchat.ranges", "whisper,speak,yell")
 	local reg = GetString(PC.cfg.reg .. ".ranges")
 	if reg ~= "" and reg ~= s.regRanges then
@@ -2215,6 +2219,7 @@ function PC.clientTick(dt)
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
 	if PC.pingTick then PC.pingTick(now) end                           -- (ping.lua: the ping buttons, old pins go)
 	PC.noGlobalTick()                                                  -- (proxchat.noglobal: Global down to Speak)
+	if PC.agentTick then PC.agentTick(now) end                         -- (agents.lua: the host's game - the mods' agents)
 end
 
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
@@ -3554,7 +3559,7 @@ function PC.layoutBubbles(list, avoid)
 	table.sort(list, function(u, v)
 		if u.y ~= v.y then return u.y > v.y end                        -- (lowest speaker first; a speaker's newest
 		if (u.age or 1) ~= (v.age or 1) then return (u.age or 1) < (v.age or 1) end   --  bubble first: nearest the head)
-		return u.p < v.p
+		return tostring(u.p) < tostring(v.p)                           -- (a player's id, or an agent's "agent:<id>")
 	end)
 	local placed = {}
 	local blocks = {}                                                     -- (what a bubble must not cover: the games'
@@ -3647,6 +3652,7 @@ function PC.drawBubbles()
 			end
 		end
 	end
+	if PC.agentBubbles then PC.agentBubbles(add, now) end               -- (agents.lua: the AI characters' replies)
 	if PC.devLiveBubbles then PC.devLiveBubbles(add) end                -- (devices.lua: live words over the devices - a
 	local live = PC.voiceLiveBubbles and PC.voiceLiveBubbles(add, me) or {}   --  talker's own megaphone's held back for the
 	if PC.devLiveFlush then PC.devLiveFlush(add) end                    --  talker's live bubble to compare; voice.lua: words
