@@ -17,6 +17,8 @@
 --   proxchat.agent.<id>.functions   its functions, a JSON array of {name, description, parameters (JSON Schema)}
 --   proxchat.agent.<id>.state       what it should know now, sent with each line (up to 2 KB)
 --   proxchat.agent.<id>.max_words   the longest reply (default 80); .character false: not a character (a director)
+--   proxchat.agent.<id>.stream      false: no live words (by default its words show as the model writes them - Koetama's
+--                                   "stream", 2026-10-24: live words from its speaker number, as a talking player's)
 --   proxchat.agent.<id>.event       a line for it to hear from the game ("the alarm went off"): read and cleared
 --   proxchat.agent.<id>.forget      true: its conversation starts over (read and cleared)
 -- THE CHAT SETS (host): proxchat.agents (off / ready / busy / budget / error - "off": no Koetama, or the host hasn't
@@ -212,8 +214,35 @@ function server.pc_agentsay(p, tok, id, text)
 	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
 	if text == "" then return end
 	PC.deliver(a.p, a.name, a.mode, text, {agent = id})
+	ClearKey(base(id) .. ".live")
 	SetString(base(id) .. ".reply", text)
 	SetInt(base(id) .. ".replyn", s.n)
+end
+
+-- (the host's game) a streaming agent's words so far: live words from its speaker number (client.pc_live, as a talking
+-- player's) to the players in its mode's reach - its bubble growing, a live line in their chat - until its reply, which
+-- takes their place (PC.receive). Global: none (as for players). .live for the mod (cleared by the reply)
+function server.pc_agentlive(p, tok, id, utt, text)
+	local s, cfg = PC.S(), PC.cfg
+	p = PC.who(p, tok)
+	if not p then return end
+	local okH, isHost = pcall(IsPlayerHost, p)
+	if not (okH and isHost == true) then return end
+	local a = s.agents and type(id) == "string" and s.agents[id]
+	utt = PC.finite(utt)
+	if not a or not utt or a.mode == "g" then return end
+	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
+	if text == "" then return end
+	local feet = PC.speakerFeet(a.p)
+	local _, outer = PC.rangeOf(a.mode)
+	local reach = outer + (a.mode == "w" and cfg.whisperSlack or (a.mode == "y" and cfg.shoutSlack or cfg.speakSlack))
+	for _, q in ipairs(PC.allPlayers()) do
+		local okQ, tq = pcall(GetPlayerTransform, q)
+		if s.chan[q] or (a.mode ~= "w" and s.hearAll[q]) or (feet and okQ and tq and VecLength(VecSub(tq.pos, feet)) <= reach) then
+			ClientCall(q, "client.pc_live", a.p, math.floor(utt), text, a.mode)
+		end
+	end
+	SetString(base(id) .. ".live", text)
 end
 
 -- ---- THE HOST'S GAME: the definitions, the lines and calls, Koetama's feed
@@ -283,10 +312,12 @@ function PC.agentTick(now)
 			local fns = GetString(b .. ".functions")
 			local mw = GetString(b .. ".max_words")
 			local ch = GetString(b .. ".character")
-			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch
+			local stream = GetString(b .. ".stream")
+			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream
 			local d = st.defs[id]
 			if not d or d.sig ~= sig then
 				local def = {id = id, version = (d and d.def.version or 0) + 1, persona = persona, character = ch ~= "0" and ch ~= "false",
+					stream = stream ~= "0" and stream ~= "false",
 					max_words = math.max(1, math.min(1000, math.floor(tonumber(mw) or 80)))}
 				if fns ~= "" then
 					local list = PC.jsonDecode(fns)
@@ -345,6 +376,16 @@ end
 -- written for the mod (the ring); an error for the mod. A follow-up reply (to the same lines) ends their results
 function PC.agentReply(obj)
 	local st, reg = A(), PC.cfg.reg
+	st.utt = st.utt or {}
+	if obj.final == false then                                       -- (a streaming agent's words so far: live words, as a
+		local id, text = obj.agent, type(obj.text) == "string" and obj.text or ""   --  talking player's; its lines wait for
+		if PC.agentIdOk(id) and text ~= "" then                       --  the final reply)
+			st.utt[id] = st.utt[id] or 1
+			PC.call("pc_agentlive", id, st.utt[id], text)
+		end
+		return
+	end
+	if PC.agentIdOk(obj.agent) then st.utt[obj.agent] = (st.utt[obj.agent] or 1) + 1 end   -- (its next reply: new live words)
 	local ids = {}
 	for _, x in ipairs(type(obj.ids) == "table" and obj.ids or {}) do if tonumber(x) then ids[tonumber(x)] = true end end
 	for i = #st.lines, 1, -1 do if ids[st.lines[i].id] then table.remove(st.lines, i) end end

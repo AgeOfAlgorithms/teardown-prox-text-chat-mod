@@ -1064,6 +1064,7 @@ PC.SEND = {
 	pc_room = function(...) ServerCall("server.pc_room", ...) end,
 	pc_ping = function(...) ServerCall("server.pc_ping", ...) end,     -- (ping.lua)
 	pc_agentsay = function(...) ServerCall("server.pc_agentsay", ...) end,   -- (agents.lua: the host's game only)
+	pc_agentlive = function(...) ServerCall("server.pc_agentlive", ...) end,
 }
 
 function PC.call(name, ...)
@@ -2040,10 +2041,12 @@ function PC.receive(m)
 	local pad = m.v == "pad"                                            -- (typed on a controller: the mark in the history)
 	if m.v ~= true then m.v = nil end
 	local heard, far
-	if m.v and m.p then                                                 -- (a finished spoken line: its live words leave the
-		if m.vu then                                                    --  chat log - this line takes their place - and a late
-			c.liveDone = c.liveDone or {}                               --  update of them is ignored: voice.lua; without its
-			c.liveDone[m.p] = m.vu                                      --  number, whatever they were saying)
+	-- (a finished spoken line, or an agent's reply - agents.lua: its live words leave the chat log, this line takes their
+	--  place, and a late update of them is ignored - voice.lua; without its number, whatever they were saying)
+	if (m.v or (PC.isAgentP and PC.isAgentP(m.p))) and m.p then
+		if m.vu then
+			c.liveDone = c.liveDone or {}
+			c.liveDone[m.p] = m.vu
 		end
 		local l = c.live and c.live[m.p]
 		if l and (not m.vu or l.u == m.vu) then c.live[m.p] = nil end
