@@ -187,6 +187,14 @@ local function machine(me, isHost, presetReg, prePC)
 	end
 	api.QueryRejectAnimator = function(a) env.rejected = a end
 	api.QueryRejectVehicle = function() end
+	-- (bodies, agents.lua: W.abodies[h] = {pos, lo, hi}; no rotation - the devices' tests use W.bodies their own way)
+	api.GetBodyTransform = function(h) local b = W.abodies and W.abodies[h]; if b then return {pos = deep(b.pos)} end return {pos = Vec()} end
+	api.GetBodyBounds = function(h)
+		local b = W.abodies and W.abodies[h]
+		if not b then return Vec(3.4e38, 3.4e38, 3.4e38), Vec(-3.4e38, -3.4e38, -3.4e38) end
+		return deep(b.lo), deep(b.hi)
+	end
+	api.TransformToParentPoint = function(t, v) return api.VecAdd(t.pos, v) end
 	api.QueryRejectBody = function(b) env.rejectedBodies = env.rejectedBodies or {}; env.rejectedBodies[#env.rejectedBodies + 1] = b end
 	api.GetPlayerVehicle = function() return 0 end
 	env.uiSounds = {}
@@ -4059,7 +4067,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 16, "proxchat.version 16")
+	check(M.reg["proxchat.version"] == 18, "proxchat.version 18")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4548,6 +4556,291 @@ end)()
 	check(#P1.PC.liveLines() == 2 and count(P1, "a new sentence …") == 1, "... P2's next sentence: a live line again")
 	P1.client.pc_live(2, 504, "", "s"); P1.client.pc_live(5, 502, "", "s"); step()
 	check(#P1.PC.liveLines() == 0, "they stop: no live lines")
+end)()
+
+-- ================================================================== agents (agents.lua, API 17, 2026-10-24): a mod's AI
+-- characters through the host's Koetama - defined by registry keys on the host, hearing what is said near them, their
+-- replies as bubbles and chat lines, their function calls to the mod and its results back
+;(function()
+	local IO, M = "MOD/../pcvx_", P1                                     -- (the host runs Koetama)
+	W.pos[1], W.pos[2], W.pos[3], W.pos[4], W.pos[5] = Vec(0, 0, 0), Vec(4, 0, 0), Vec(30, 0, 0), Vec(60, 0, 0), Vec(14, 0, 0)
+	for k in pairs(HOST.reg) do if k:find("^proxchat%.channel%.") or k:find("^proxchat%.lobby") or k:find("^proxchat%.agent") then HOST.reg[k] = nil end end
+	for _, m in ipairs({P1, P2, P3, P4, P5}) do if m.PC.c.typing then press(m, "esc") end end
+	M.files = M.files or {}
+	local helperOn, ping = true, nil
+	local function helperStep()
+		if not helperOn then return end
+		M.files[IO .. "on"] = true
+		local p = M.reg["savegame.mod.pcvx.f"] and W.feed(M).ping
+		if p and p ~= ping then
+			if ping then M.files[IO .. "p" .. (ping % 1000)] = nil end
+			ping = p
+			M.files[IO .. "p" .. (p % 1000)] = true
+		end
+	end
+	local function run(k) for _ = 1, k do helperStep(); step() end end
+	local function sendObj(obj) local vo = M.PC.c.voice; M.files[IO .. "t" .. ((vo and vo.ack or 0) + 1) .. ".xml"] = W.msg(obj) end
+	local function feed() local f = W.feed(M); return f and f.raw or {} end
+	local function lineFor(agent, text)
+		for _, l in ipairs(feed().to_agent or {}) do if l.agent == agent and (not text or l.text == text) then return l end end
+		return nil
+	end
+	local function said(m, name, text)
+		for _, e in ipairs(hist(m)) do if e.name == name and e.text == text then return e end end
+		return nil
+	end
+	run(60 * 16)                                                          -- (an earlier test's Koetama left: the 15 s retry)
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm"}}); run(5)
+	-- a dog that obeys when called by name, and a baker who talks with anyone near
+	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a loyal dog. You obey simple commands."
+	HOST.reg["proxchat.agent.rex.name"] = "Rex"
+	HOST.reg["proxchat.agent.rex.at"] = "6,0,0"
+	HOST.reg["proxchat.agent.rex.hears"] = "named"
+	HOST.reg["proxchat.agent.rex.max_words"] = "8"
+	HOST.reg["proxchat.agent.rex.functions"] = '[{"name":"follow","description":"Follow a player","parameters":{"type":"object","properties":{"player":{"type":"string"}},"required":["player"]}}]'
+	HOST.reg["proxchat.agent.baker.persona"] = "You are the village baker, friendly and chatty."
+	HOST.reg["proxchat.agent.baker.name"] = "Baker"
+	HOST.reg["proxchat.agent.baker.at"] = "20,0,0"
+	HOST.reg["proxchat.agent.baker.state"] = "the bread is in the oven"
+	run(40)
+	local defs = {}
+	for _, d in ipairs(feed().agents or {}) do defs[d.id] = d end
+	local rex = defs.rex
+	check(rex and defs.baker and rex.version == 1 and rex.persona:find("loyal dog") and rex.max_words == 8 and rex.character == true
+		and rex.functions and rex.functions[1].name == "follow" and rex.functions[1].parameters.required[1] == "player"
+		and HOST.reg["proxchat.agents"] == "ready" and HOST.PC.S().agents.rex.name == "Rex",
+		"a mod's agents (proxchat.agent.<id>.*): in Koetama's feed (persona, functions, max_words), proxchat.agents = ready")
+	-- who hears what: Rex (at 6) only when named, near; the Baker (at 20) anyone near
+	waitRate(); say(P2, "Rex, follow me"); run(3)
+	local lr = lineFor("rex", "Rex, follow me")
+	check(lr and lr.from and lr.from.name == "P2" and lr.from.id == "2" and lineFor("baker", "Rex, follow me") and lineFor("baker").state == "the bread is in the oven",
+		"P2 (2 m from Rex): \"Rex, follow me\" goes to Rex (from P2) and to the Baker (16 m, Speak's 25) with its state")
+	waitRate(); say(P2, "nice weather today"); run(3)
+	check(lineFor("baker", "nice weather today") and not lineFor("rex", "nice weather today"), "\"nice weather today\": the Baker hears it, Rex (not named) doesn't")
+	waitRate(); say(P4, "/y Rex, come here"); run(3)
+	check(not lineFor("rex", "Rex, come here") and lineFor("baker", "Rex, come here"), "P4 yelling (Yell 40): Rex 54 m off doesn't hear it, the Baker 40 m off does")
+	waitRate(); say(P5, "/w rex sit"); run(3)
+	check(lineFor("rex", "rex sit"), "P5 whispering from 8 m (Whisper 8): Rex hears it")
+	W.pos[5] = Vec(17, 0, 0); waitRate(); say(P5, "/w rex down"); run(3)
+	check(not lineFor("rex", "rex down"), "... from 11 m: not")
+	W.pos[5] = Vec(14, 0, 0)
+	-- the reply: said near Rex (bubble + chat); the call written for the mod
+	local rexId = lr.id
+	HOST.reg["proxchat.agent.rex.voice"] = "robot"; run(40)
+	P2.sounds = {}
+	sendObj({type = "agent_reply", ids = {rexId}, agent = "rex", text = "Woof! Following you.",
+		calls = {{call = "c1", name = "follow", args = {player = "P2", speed = 2}}}, error = ""}); run(3)
+	local k = HOST.reg["proxchat.agentcall.last"] % 16
+	local cb = "proxchat.agentcall." .. k .. "."
+	local RP = HOST.reg["proxchat.agent.rex.player"]                     -- (Rex's speaker number: 3000..)
+	check(said(P2, "Rex", "Woof! Following you.") and said(P1, "Rex", "Woof! Following you.") and said(P3, "Rex", "Woof! Following you.")
+		and not said(P4, "Rex", "Woof! Following you.") and RP and RP >= 3000 and P2.PC.c.bubbles[RP] and P2.PC.c.bubbles[RP].full == "Woof! Following you."
+		and drawn(P2, "^Woof! Following you%.$") and not lineFor("rex", "Rex, follow me") and HOST.reg["proxchat.agent.rex.reply"] == "Woof! Following you."
+		and HOST.PC.S().agentP.rex == RP,
+		"Rex's reply, a line from his speaker number (proxchat.agent.rex.player, 3000..): his bubble and a chat line for P1, P2, P3 (24 m) - not P4 (54 m); .reply for the mod")
+	run(40)
+	local sl = HOST.reg["proxchat.said.last"] % 16
+	local robot = P2.PC.findVoice("robot")
+	local atRex = 0                                                      -- (his babble: sounds where he is, in his voice)
+	for _, snd in ipairs(P2.sounds) do
+		if math.abs(snd.pos[1] - 6) < 0.6 and math.abs(snd.pos[3]) < 0.6 and clipOf(P2, snd):find("robot") then atRex = atRex + 1 end
+	end
+	check(atRex > 0 and P2.PC.voiceOf(RP) == robot and HOST.reg["proxchat.said." .. sl .. ".agent"] == "rex"
+		and HOST.reg["proxchat.said." .. sl .. ".player"] == RP and HOST.reg["proxchat.said." .. sl .. ".x"] == 6,
+		"... as anyone's line: babbled from where Rex is, in his voice (proxchat.agent.rex.voice robot), a proxchat.said event (.agent rex, at x 6)")
+	check(not lineFor("baker", "Woof! Following you."), "... the Baker 14 m off doesn't hear Rex (agents hear only players)")
+	check(HOST.reg[cb .. "name"] == "follow" and HOST.reg[cb .. "agent"] == "rex" and HOST.reg[cb .. "arg.player"] == "P2"
+		and HOST.reg[cb .. "arg.speed"] == "2" and HOST.reg[cb .. "args"]:find('"player":"P2"', 1, true),
+		"its call for the mod: proxchat.agentcall.<k>: name follow, agent rex, arg.player P2, arg.speed 2, args (JSON)")
+	HOST.reg[cb .. "result"] = "ok: following P2"; run(3)
+	local res = (feed().agent_results or {})[1]
+	check(res and res.call == "c1" and res.result == "ok: following P2" and HOST.reg[cb .. "result"] == nil,
+		"the mod answers (.result \"ok: following P2\"): in agent_results for Koetama, the key cleared")
+	sendObj({type = "agent_reply", ids = {rexId}, agent = "rex", text = "", calls = {}, error = ""}); run(3)
+	check(feed().agent_results == nil, "the follow-up reply to the same lines: the results are done")
+	-- the mod's events and forgets
+	HOST.reg["proxchat.agent.baker.event"] = "the oven caught fire"; run(20)
+	local ev = lineFor("baker", "the oven caught fire")
+	check(ev and ev.from == nil and HOST.reg["proxchat.agent.baker.event"] == nil, "proxchat.agent.baker.event: a line from the game (no from), the key cleared")
+	HOST.reg["proxchat.agent.baker.forget"] = true; run(20)
+	check((feed().agent_forget or {})[1] == "baker" and HOST.reg["proxchat.agent.baker.forget"] == nil, "proxchat.agent.baker.forget: agent_forget, cleared")
+	-- errors and status
+	sendObj({type = "agent_reply", ids = {ev.id}, agent = "baker", text = "", calls = {}, error = "budget"}); run(3)
+	check(HOST.reg["proxchat.agent.baker.error"] == "budget" and not lineFor("baker", "the oven caught fire"), "an error (\"budget\"): .error for the mod, the line done")
+	sendObj({type = "agent_status", state = "busy"}); run(3)
+	check(HOST.reg["proxchat.agents"] == "busy", "agent_status busy: proxchat.agents = busy")
+	-- streaming (Koetama's "final": false replies): Rex's words as the model writes them - live words from his speaker
+	-- number, as a talking player's: his bubble growing, a live line in the chat; the final reply takes their place
+	local streamDef = M.PC.c.agent.defs.rex and M.PC.c.agent.defs.rex.def
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Woof", calls = {}, error = "", final = false}); run(3)
+	local l2 = P2.PC.c.live and P2.PC.c.live[RP]
+	check(l2 and l2.text == "Woof" and HOST.reg["proxchat.agent.rex.live"] == "Woof" and #P4.PC.liveLines() == 0
+		and not said(P2, "Rex", "Woof"), "a streaming reply's first words (final false): live words from Rex for P2 (not P4, 54 m off), .live for the mod - no chat line yet")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Woof woof, coming", calls = {}, error = "", final = false}); run(3)
+	local ll = P2.PC.liveLines()
+	check(ll[1] and ll[1].p == RP and ll[1].text == "Woof woof, coming …" and drawn(P2, "^Woof woof, coming …$"),
+		"... more words: they grow, in Rex's live line at the bottom of P2's chat")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Woof woof, coming!", calls = {}, error = "", final = true}); run(3)
+	check(not (P2.PC.c.live and P2.PC.c.live[RP]) and said(P2, "Rex", "Woof woof, coming!") and HOST.reg["proxchat.agent.rex.live"] == nil
+		and #P2.PC.liveLines() == 0, "the final reply: the chat line takes the live words' place (.live cleared)")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Grr", calls = {}, error = "", final = false}); run(3)
+	check(P2.PC.c.live and P2.PC.c.live[RP] and P2.PC.c.live[RP].text == "Grr", "... his next reply's words: live again")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Grr.", calls = {}, error = "", final = true}); run(3)
+	HOST.reg["proxchat.agent.baker.stream"] = "false"; run(20)
+	local bakerDef = M.PC.c.agent.defs.baker and M.PC.c.agent.defs.baker.def
+	check(streamDef and streamDef.stream == true and bakerDef and bakerDef.stream == false, "stream: on by default; proxchat.agent.<id>.stream \"false\": off")
+	-- API 18 (Mochi the Corgi's requests) ----------------------------------------------------------------------------------
+	-- a body with no voxels left: its position (said to the mod once); a body gone: where it was last; never nobody
+	W.abodies = {[77] = {pos = Vec(6, 0.4, 0), lo = Vec(5.8, 0.2, -0.2), hi = Vec(6.2, 0.6, 0.2)}}
+	for _, m in ipairs(MACHINES) do                                      -- (the devices' tests replaced it on each machine)
+		m.GetBodyTransform = function(h) local b = W.abodies and W.abodies[h]; if b then return {pos = {b.pos[1], b.pos[2], b.pos[3]}} end return nil end
+	end
+	HOST.reg["proxchat.agent.rex.at"] = "body:77"; run(40)
+	local function rexSays(text) sendObj({type = "agent_reply", ids = {}, agent = "rex", text = text, calls = {}, error = "", final = true}); run(3) end
+	local function flush()                                               -- (every waiting line answered: the feed carries 8)
+		local byAgent = {}
+		for _, l in ipairs(M.PC.c.agent.lines) do byAgent[l.agent] = byAgent[l.agent] or {}; table.insert(byAgent[l.agent], l.id) end
+		for ag, ids in pairs(byAgent) do sendObj({type = "agent_reply", ids = ids, agent = ag, text = "", calls = {}, error = "", final = true}); run(3) end
+	end
+	rexSays("Woof from the anchor")
+	check(said(P2, "Rex", "Woof from the anchor") and HOST.reg["proxchat.agent.rex.heard"] >= 3, "at=body:77: heard by " .. tostring(HOST.reg["proxchat.agent.rex.heard"]) .. " players (.heard)")
+	W.abodies[77].lo, W.abodies[77].hi = Vec(3.4e38, 3.4e38, 3.4e38), Vec(-3.4e38, -3.4e38, -3.4e38)
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}; run(40)
+	rexSays("Woof from an empty body")
+	local sk = "proxchat.said." .. (HOST.reg["proxchat.said.last"] % 16) .. "."
+	check(said(P2, "Rex", "Woof from an empty body") and HOST.reg["proxchat.agent.rex.heard"] >= 3 and math.abs(HOST.reg[sk .. "y"]) < 100
+		and table.concat(HOST.debug, " "):find("no voxels left", 1, true),
+		"its body emptied (bounds +-3.4e38): its position instead - still heard, the said event at a real height - and the mod told")
+	W.abodies[77] = nil; run(40)
+	rexSays("Woof from where I was")
+	check(said(P2, "Rex", "Woof from where I was") and HOST.reg["proxchat.agent.rex.heard"] >= 3, "its body gone: where it was last - never to nobody")
+	W.abodies[78] = {pos = Vec(6, 0.4, 0), lo = Vec(5, 0, -1), hi = Vec(7, 1, 1)}
+	local op = P2.PC.agentPos("body:78+0,1.5,0")
+	check(op and math.abs(op[2] - 1.9) < 1e-6 and math.abs(op[1] - 6) < 1e-6, "at=body:<h>+x,y,z: an offset in the body's frame (its head on a rig)")
+	HOST.reg["proxchat.agent.rex.at"] = "6,0,0"; run(40)
+	-- .live cleared by a final reply without words (only calls), and by an error
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Let me", calls = {}, error = "", final = false}); run(3)
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "", calls = {{call = "c20", name = "follow", args = {player = "P2"}}}, error = "", final = true}); run(3)
+	check(HOST.reg["proxchat.agent.rex.live"] == nil and not (P2.PC.c.live and P2.PC.c.live[RP]), "a final reply with no words (only a call): .live and the live words cleared")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Hmm", calls = {}, error = "", final = false}); run(3)
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "", calls = {}, error = "failed", why = "x", final = true}); run(3)
+	check(HOST.reg["proxchat.agent.rex.live"] == nil and not (P2.PC.c.live and P2.PC.c.live[RP]), "... and by an error")
+	flush()
+	-- who a reply and its calls answer: .replyfrom / .replylines, the call's .from / .lines
+	waitRate(); say(P2, "Rex, sit"); run(3)
+	local ls = lineFor("rex", "Rex, sit")
+	sendObj({type = "agent_reply", ids = {ls.id}, agent = "rex", text = "Woof (sits)", calls = {{call = "c21", name = "stay", args = {}}}, error = "", final = true}); run(3)
+	local kc = "proxchat.agentcall." .. (HOST.reg["proxchat.agentcall.last"] % 16) .. "."
+	check(HOST.reg[kc .. "from"] == "2" and HOST.reg[kc .. "lines"] == tostring(ls.id) and HOST.reg["proxchat.agent.rex.replyfrom"] == "2"
+		and HOST.reg["proxchat.agent.rex.replylines"] == tostring(ls.id),
+		"the call's .from \"2\" and .lines (P2's line); the reply's .replyfrom / .replylines the same")
+	flush()
+	-- hears = engaged: named lines, then anything from a player it answered (or who named it) for 30 s
+	HOST.reg["proxchat.agent.rex.hears"] = "engaged"; run(40)
+	waitRate(); say(P2, "Rex, come here"); run(3)
+	waitRate(); say(P2, "good boy"); run(3)
+	W.pos[1] = Vec(4, 0, 2); waitRate(); say(P1, "hello there"); run(3)
+	check(lineFor("rex", "Rex, come here") and lineFor("rex", "good boy") and not lineFor("rex", "hello there"),
+		"hears engaged: \"Rex, come here\", then P2's \"good boy\" (engaged) - not P1's \"hello there\" (a stranger, 2 m off)")
+	W.pos[1] = Vec(0, 0, 0)
+	run(60 * 31); waitRate(); say(P2, "who's a good boy"); run(3)
+	check(not lineFor("rex", "who's a good boy"), "... 31 s later, unnamed: not heard")
+	flush()
+	-- .note: rides with the next line (an event in the same turn), exactly once
+	HOST.reg["proxchat.agent.rex.note"] = "Alex petted you"; run(20)
+	check(not lineFor("rex", "Alex petted you"), ".note alone: no request of its own")
+	waitRate(); say(P2, "Rex, roll"); run(3)
+	local ln, lr2 = lineFor("rex", "Alex petted you"), lineFor("rex", "Rex, roll")
+	check(ln and lr2 and ln.from == nil and ln.id < lr2.id and HOST.reg["proxchat.agent.rex.note"] == nil, ".note: an event just before P2's next line, cleared")
+	flush()
+	-- .say: spoken without the model, as a reply; the model hears of it with the next line
+	HOST.reg["proxchat.agent.rex.say"] = "Bark bark!"; run(20)
+	check(said(P2, "Rex", "Bark bark!") and HOST.reg["proxchat.agent.rex.say"] == nil and HOST.reg["proxchat.agent.rex.heard"] >= 3
+		and not lineFor("rex", "you said: Bark bark!"), ".say: Rex says it (bubble, chat, .heard) without the model, the key cleared")
+	flush(); waitRate(); say(P2, "Rex, again"); run(3)
+	check(lineFor("rex", "you said: Bark bark!"), "... and the model hears of it with his next line ([you said: Bark bark!])")
+	HOST.reg["proxchat.agent.rex.hears"] = "named"; run(40)
+	-- /mute Rex: nothing of his, as for a player
+	say(P2, "/mute Rex"); step()
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "Woof woof!", calls = {}, error = ""}); run(3)
+	check(said(P1, "Rex", "Woof woof!") and not said(P2, "Rex", "Woof woof!"), "/mute Rex on P2: P2 gets none of his lines (P1 does)")
+	say(P2, "/unmute Rex"); step()
+	-- a changed persona: version 2, sent again
+	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a lazy dog."; run(20)
+	local rex2
+	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rex2 = d end end
+	check(rex2 and rex2.version == 2 and rex2.persona:find("lazy"), "a changed persona: version 2, in the feed again")
+	-- only the host speaks for an agent
+	waitRate(); P2.PC.call("pc_agentsay", "rex", "I am a fake Rex"); run(3)
+	check(not said(P1, "Rex", "I am a fake Rex") and not said(P2, "Rex", "I am a fake Rex"), "a player's game can't speak as an agent (the host only)")
+	-- KOETAMA 0.5.10: agents_known - only the definitions it lacks (or has older) go in the feed
+	local AG = M.PC.c.agent
+	sendObj({type = "agents_known", agents = {{id = "rex", version = AG.defs.rex.def.version}, {id = "baker", version = AG.defs.baker.def.version}}}); run(3)
+	check(feed().agents == nil, "agents_known lists both at their versions: no definitions in the feed")
+	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a sleepy dog."; run(20)
+	local only = {}
+	for _, d in ipairs(feed().agents or {}) do only[#only + 1] = d.id .. ":" .. d.version end
+	check(#only == 1 and only[1] == "rex:" .. AG.defs.rex.def.version, "Rex changed: only his new version goes (" .. table.concat(only, " ") .. ")")
+	sendObj({type = "agents_known", agents = {{id = "rex", version = AG.defs.rex.def.version}, {id = "baker", version = AG.defs.baker.def.version}}}); run(3)
+	check(feed().agents == nil, "... and stops once Koetama lists it")
+	do                                                                   -- (every waiting line answered: the feed carries 8)
+		local byAgent = {}
+		for _, l in ipairs(AG.lines) do byAgent[l.agent] = byAgent[l.agent] or {}; table.insert(byAgent[l.agent], l.id) end
+		for ag, ids in pairs(byAgent) do sendObj({type = "agent_reply", ids = ids, agent = ag, text = "", calls = {}, error = "", final = true}); run(3) end
+	end
+	-- received: the lines and results Koetama has stop going in the feed (and still wait for their reply)
+	waitRate(); say(P2, "Rex, roll over"); run(3)
+	local lro = lineFor("rex", "Rex, roll over")
+	sendObj({type = "received", to_agent = {lro and lro.id or -1}}); run(3)
+	local kept = false
+	for _, l in ipairs(AG.lines) do if lro and l.id == lro.id then kept = true end end
+	check(lro and not lineFor("rex", "Rex, roll over") and kept, "received to_agent: the line leaves the feed, still waiting for its reply")
+	sendObj({type = "agent_reply", ids = {lro.id}, agent = "rex", text = "", calls = {{call = "c9", name = "follow", args = {player = "P2"}}}, error = "", final = true}); run(3)
+	local k9 = "proxchat.agentcall." .. (HOST.reg["proxchat.agentcall.last"] % 16) .. "."
+	HOST.reg[k9 .. "result"] = "ok: rolling"; run(3)
+	local r9 = (feed().agent_results or {})[1]
+	sendObj({type = "received", agent_results = {"c9"}}); run(3)
+	kept = #AG.lines == 0 or true
+	check(r9 and r9.call == "c9" and feed().agent_results == nil, "received agent_results: the result leaves the feed")
+	-- the translation requests too
+	local vo = M.PC.voice()
+	vo.tr.into = "en"
+	vo.tr.reqs = {{id = 901, text = "hola", t = W.time}, {id = 902, text = "adios", t = W.time}}
+	sendObj({type = "received", to_translate = {901}}); run(3)
+	local rq = W.feed(M).reqs
+	check(#rq == 1 and rq[1].id == 902, "received to_translate: that request leaves the feed (the other stays)")
+	vo.tr.reqs, vo.tr.into = {}, nil
+	-- error codes: unknown_agent - the definition and the line again (a new id), once; cancelled - nothing; others for the mod
+	local old = {}                                                       -- (the Baker's lines answered: the feed carries 8)
+	for _, l in ipairs(AG.lines) do old[#old + 1] = l.id end
+	sendObj({type = "agent_reply", ids = old, agent = "baker", text = "", calls = {}, error = "", final = true}); run(3)
+	waitRate(); say(P2, "Rex, jump"); run(3)
+	local lj = lineFor("rex", "Rex, jump")
+	HOST.reg["proxchat.agent.rex.error"] = ""
+	sendObj({type = "agent_reply", ids = {lj.id}, agent = "rex", text = "", calls = {}, error = "unknown_agent", why = "no agent \"rex\"", final = true}); run(3)
+	local lj2 = lineFor("rex", "Rex, jump")
+	local resent = false
+	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then resent = true end end
+	check(lj2 and lj2.id ~= lj.id and resent and HOST.reg["proxchat.agent.rex.error"] == "",
+		"unknown_agent: Rex's definition in the feed again, the line again under a new id - no error for the mod")
+	sendObj({type = "agent_reply", ids = {lj2.id}, agent = "rex", text = "", calls = {}, error = "unknown_agent", why = "still unknown", final = true}); run(3)
+	check(not lineFor("rex", "Rex, jump") and HOST.reg["proxchat.agent.rex.error"] == "unknown_agent", "... unknown again: given up, .error unknown_agent")
+	HOST.reg["proxchat.agent.rex.error"] = ""
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "", calls = {}, error = "cancelled", why = "forgotten", final = true}); run(3)
+	check(HOST.reg["proxchat.agent.rex.error"] == "", "cancelled: nothing for the mod")
+	sendObj({type = "agent_reply", ids = {}, agent = "rex", text = "", calls = {}, error = "failed", why = "the model timed out", final = true}); run(3)
+	check(HOST.reg["proxchat.agent.rex.error"] == "failed" and HOST.reg["proxchat.agent.rex.why"] == "the model timed out",
+		"failed: .error failed and .why (in words, for logs)")
+	-- the host hasn't allowed its language model: off, nothing queued
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate"}}); run(5)
+	waitRate(); say(P2, "Rex, sit"); run(3)
+	check(HOST.reg["proxchat.agents"] == "off" and not lineFor("rex", "Rex, sit") and feed().agents == nil, "no llm in the hello: proxchat.agents off, no agents or lines in the feed")
+	-- the API checker knows the keys
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}; run(150)
+	local saidP = table.concat(HOST.debug, " | ")
+	check(not saidP:find("agent", 1, true), "apicheck: proxchat.agent.*, proxchat.agents, proxchat.agentcall.* are known keys (" .. saidP .. ")")
+	for k2 in pairs(HOST.reg) do if k2:find("^proxchat%.agent") then HOST.reg[k2] = nil end end
+	helperOn = false; M.files = {}; run(5)
 end)()
 
 -- (as the game: a ServerCall / ClientCall works only with its function's name as a string LITERAL in the source -
