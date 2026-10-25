@@ -11,6 +11,7 @@
 #include "apicheck.lua"
 #include "padui.lua"
 #include "ping.lua"
+#include "agents.lua"
 
 -- Working with any game mode (mods cannot call each other; the registry is shared by every script):
 --   a game sets   SetBool("proxchat.lobby", true)   while its lobby / menu is up: everything said is heard by

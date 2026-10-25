@@ -585,6 +585,7 @@ end
 -- (server) the name everyone sees for player p: cleaned; when another player's folds the same ("Bob" / "Воb", two
 -- "Bob"s), " #<p>" after it, so each can be told apart and muted (/mute #p)
 function PC.nameOf(p)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentName(p) end   -- (agents.lua: an AI character's)
 	local name = PC.cleanName(GetPlayerName(p), p)
 	local key = PC.nameKey(name)
 	for _, q in ipairs(PC.allPlayers()) do
@@ -782,7 +783,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 16                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 18                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -796,7 +797,10 @@ PC.API_VERSION = 16                                                -- (3: proxch
                                                                     --  14: proxchat.pingto.<p> - pins to a game's list;
                                                                     --  15: pins follow the pinger's mode (Whisper / Speak /
                                                                     --     Yell's reach, none in Global); ping= and pingto gone;
-                                                                    --  16: proxchat.pinganon.<p> - pins without a name)
+                                                                    --  16: proxchat.pinganon.<p> - pins without a name;
+                                                                    --  17: agents - a mod's AI characters, agents.lua;
+                                                                    --  18: agents' note, say, heard, replyfrom, from, engaged,
+                                                                    --     at= offsets - Mochi the Corgi's requests)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1061,6 +1065,8 @@ PC.SEND = {
 	pc_talk = function(...) ServerCall("server.pc_talk", ...) end,
 	pc_room = function(...) ServerCall("server.pc_room", ...) end,
 	pc_ping = function(...) ServerCall("server.pc_ping", ...) end,     -- (ping.lua)
+	pc_agentsay = function(...) ServerCall("server.pc_agentsay", ...) end,   -- (agents.lua: the host's game only)
+	pc_agentlive = function(...) ServerCall("server.pc_agentlive", ...) end,
 }
 
 function PC.call(name, ...)
@@ -1312,14 +1318,33 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 	if s.time - (s.last[p] or -10) < cfg.rate then return end            -- (no spamming: the resend gets in later)
 	s.last[p] = s.time
 	if seq then pcAck(p, seq) end
+	PC.deliver(p, PC.nameOf(p), ch, text, {vflag = vflag, voice = voice, vw = vw, vs = vs, vu = vu})
+end
+
+-- (server) speaker p's feet: a player's, or an agent's (agents.lua: an AI character speaks as anyone does); nil: unknown
+function PC.speakerFeet(p)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentFeet(p) end
+	local ok, tr = pcall(GetPlayerTransform, p)
+	return ok and tr and tr.pos or nil
+end
+
+-- (server) one accepted line from speaker p (a player, or an agent - agents.lua) delivered: to its channel, to the
+-- players in reach (Whisper / Speak / Yell) or to everyone (Global, in shared); the event for other mods. o: vflag (what
+-- the games get for voice / pad), voice, vw / vs / vu (a spoken line's word times), agent (an agent's id). Returns how
+-- many players it was sent to
+function PC.deliver(p, name, ch, text, o)
+	local s, cfg = PC.S(), PC.cfg
+	local vflag, voice, vw, vs, vu = o.vflag or false, o.voice, o.vw, o.vs, o.vu
+	local dv, dk
+	local sent = 0
 	s.n = s.n + 1
-	local name = PC.nameOf(p)
 	local chan = not PC.inLobby() and s.chan[p] or nil
-	if chan then
+	if not o.agent and PC.agentHear then PC.agentHear(p, ch, text, chan) end   -- (agents.lua: the AI characters that hear
+	if chan then                                                             --  it - a player's, never another agent's)
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
 		for _, q in ipairs(PC.allPlayers()) do
-			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, vflag) end
+			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, vflag); sent = sent + 1 end
 		end
 	elseif ch ~= "g" then
 		-- Whisper, Speak and Yell: sent only to the players within reach, never in shared (a whisper stays private; Speak /
@@ -1335,10 +1360,11 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		if vs and ch ~= "w" then                                          -- (a spoken Speak / Yell line with word times: who was
 			reach = reach + cfg.walkSpeed * math.min(30, s.time - vs)   --  near when it began may have walked off since; their
 		end                                                              --  game shows only the words they were in reach for)
-		local okT, tr = pcall(GetPlayerTransform, p)
+		local feet = PC.speakerFeet(p)
 		for _, q in ipairs(PC.allPlayers()) do
 			local okQ, tq = pcall(GetPlayerTransform, q)
-			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (okT and okQ and tr and tq and VecLength(VecSub(tq.pos, tr.pos)) <= reach) then
+			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (feet and okQ and tq and VecLength(VecSub(tq.pos, feet)) <= reach) then
+				sent = sent + 1
 				if ch == "w" then
 					ClientCall(q, "client.pc_whisper", s.n, p, name, text, vflag, vw, vs, vu, dv, dk)
 				else                                                     -- (t: when it was said - a late one is timed from it)
@@ -1354,10 +1380,12 @@ function server.pc_say(p, tok, ch, text, seq, voice, vt)
 		list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time, v = vflag or nil, vw = vw, vs = vs, vu = vw and vu or nil}
 		while #list > cfg.keepShared do table.remove(list, 1) end
 		shared.pcMsgs = list
+		sent = #PC.allPlayers()
 	end
-	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk)
+	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk, o.agent)
 	if voice and PC.voiceLiveDone then PC.voiceLiveDone(p) end           -- (voice.lua: the line replaces the live words)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d%s", p, ch, #text, chan and (" channel=" .. chan) or ""))
+	return sent
 end
 
 -- ---- the event API for other mods (server / host): every accepted message is written to the registry,
@@ -1372,18 +1400,19 @@ end
 --   ... .channel  the speaker's channel ("dead", "dead red"...: only it heard), else ""
 --   ... .time     GetTime() on the host when it was said (a line from before this level: larger than now)
 --   ... .voice    bool: spoken, not typed (the voice helper's transcript of what the player said)
+--   ... .agent    an AI character's id when it was one speaking (agents.lua; player: its speaker number), else ""
 -- Read it each tick from your server script: for n = seen + 1 .. last (at most 16 back), then seen = last.
 PC.SAID_RING = 16
-function PC.publishSaid(p, ch, text, channel, voice, tx, device)
+function PC.publishSaid(p, ch, text, channel, voice, tx, device, agent)
 	local s, cfg = PC.S(), PC.cfg
 	local base = cfg.reg .. ".said."
 	s.said = math.max(s.said or 0, GetInt(base .. "last")) + 1
 	local k = base .. (s.said % PC.SAID_RING) .. "."
 	local mode = ch == "w" and "whisper" or (ch == "g" and "global" or (ch == "y" and "yell" or "speak"))
 	local shout = mode == "yell"
-	local okT, tr = pcall(GetPlayerTransform, p)
-	local pos = okT and tr and tr.pos or Vec(0, 0, 0)
+	local pos = PC.speakerFeet(p) or Vec(0, 0, 0)
 	SetInt(k .. "player", p)
+	SetString(k .. "agent", agent or "")
 	SetString(k .. "mode", mode)
 	SetBool(k .. "yell", shout)
 	SetString(k .. "text", text)
@@ -1488,6 +1517,7 @@ function PC.serverTick(dt)
 		shared.pcChan = t
 	end
 	if PC.devServerTick then PC.devServerTick() end                   -- (devices.lua: devices, tx, effects)
+	if PC.agentServerTick then PC.agentServerTick() end               -- (agents.lua: the mods' AI characters)
 	-- a map or game mode may set its distances: SetString("proxchat.ranges", "whisper,speak,yell")
 	local reg = GetString(PC.cfg.reg .. ".ranges")
 	if reg ~= "" and reg ~= s.regRanges then
@@ -1846,6 +1876,7 @@ function PC.speakerPos(p)
 	local c = PC.c
 	if PC.isDummy(p) then local d = PC.dummyOf(p); return d and d.pos or nil end
 	if PC.isVoiceDummy and PC.isVoiceDummy(p) then local d = PC.voiceDummyOf(p); return d and d.pos or nil end   -- (voice.lua)
+	if PC.isAgentP and PC.isAgentP(p) then return PC.agentFeet(p) end   -- (agents.lua: an AI character)
 	local ok, tr = pcall(GetPlayerTransform, p)
 	return ok and tr and tr.pos or nil
 end
@@ -2017,10 +2048,12 @@ function PC.receive(m)
 	local pad = m.v == "pad"                                            -- (typed on a controller: the mark in the history)
 	if m.v ~= true then m.v = nil end
 	local heard, far
-	if m.v and m.p then                                                 -- (a finished spoken line: its live words leave the
-		if m.vu then                                                    --  chat log - this line takes their place - and a late
-			c.liveDone = c.liveDone or {}                               --  update of them is ignored: voice.lua; without its
-			c.liveDone[m.p] = m.vu                                      --  number, whatever they were saying)
+	-- (a finished spoken line, or an agent's reply - agents.lua: its live words leave the chat log, this line takes their
+	--  place, and a late update of them is ignored - voice.lua; without its number, whatever they were saying)
+	if (m.v or (PC.isAgentP and PC.isAgentP(m.p))) and m.p then
+		if m.vu then
+			c.liveDone = c.liveDone or {}
+			c.liveDone[m.p] = m.vu
 		end
 		local l = c.live and c.live[m.p]
 		if l and (not m.vu or l.u == m.vu) then c.live[m.p] = nil end
@@ -2215,6 +2248,7 @@ function PC.clientTick(dt)
 	if PC.voiceTick then PC.voiceTick(now) end                         -- (voice.lua: the feed for the voice helper)
 	if PC.pingTick then PC.pingTick(now) end                           -- (ping.lua: the ping buttons, old pins go)
 	PC.noGlobalTick()                                                  -- (proxchat.noglobal: Global down to Speak)
+	if PC.agentTick then PC.agentTick(now) end                         -- (agents.lua: the host's game - the mods' agents)
 end
 
 -- ---- the test dummies: /dummy puts three figures in a row in front of you - a whisperer, a speaker
@@ -3554,7 +3588,7 @@ function PC.layoutBubbles(list, avoid)
 	table.sort(list, function(u, v)
 		if u.y ~= v.y then return u.y > v.y end                        -- (lowest speaker first; a speaker's newest
 		if (u.age or 1) ~= (v.age or 1) then return (u.age or 1) < (v.age or 1) end   --  bubble first: nearest the head)
-		return u.p < v.p
+		return tostring(u.p) < tostring(v.p)                           -- (a player's id, or an agent's "agent:<id>")
 	end)
 	local placed = {}
 	local blocks = {}                                                     -- (what a bubble must not cover: the games'

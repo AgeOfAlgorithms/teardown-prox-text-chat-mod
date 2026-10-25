@@ -892,7 +892,7 @@ function PC.trWant(e, b)
 	end
 	if tr.asked[ck] and now - tr.asked[ck] < cfg.trSame then e.trId = -1; return end
 	local p = e.p
-	local local_ = PC.isDummy(p) or PC.isVoiceDummy(p)
+	local local_ = PC.isDummy(p) or PC.isVoiceDummy(p) or (PC.isAgentP and PC.isAgentP(p))   -- (an agent: agents.lua)
 	if not local_ then
 		local real = false
 		for _, q in ipairs(PC.allPlayers()) do if q == p then real = true; break end end
@@ -965,8 +965,10 @@ end
 function PC.trFeed(vo)
 	if not PC.trSend(vo) or #vo.tr.reqs == 0 then return nil end
 	local reqs = PC.jsonArray({})
-	for i, r in ipairs(vo.tr.reqs) do reqs[i] = {id = r.id, text = r.text} end
-	return reqs
+	for _, r in ipairs(vo.tr.reqs) do                                  -- (not those Koetama said it received: Koetama 0.5.10)
+		if not r.received then reqs[#reqs + 1] = {id = r.id, text = r.text} end
+	end
+	return reqs[1] and reqs or nil
 end
 
 -- (each tick) lines without a reply for cfg.trWait s are dropped
@@ -2051,6 +2053,7 @@ function PC.voiceFeed(vo, off)
 	if room and PC.devTransmit then f.transmit = PC.devTransmit() end   -- (my voice into a device now: devices.lua)
 	if placed and PC.devListener then f.listener = PC.devListener() end
 	if not off then f.to_translate = PC.trFeed(vo) end                  -- (translation: the lines waiting)
+	if not off and PC.agentFeed then PC.agentFeed(vo, f) end            -- (agents.lua: the mods' agents, their lines)
 	SetString(PC.VOICE_FEED, PC.voiceFeedString(f))
 end
 
@@ -2161,6 +2164,7 @@ function PC.voiceMessage(vo, obj)
 		end
 		vo.h.hello = {app = type(obj.app) == "string" and obj.app or "", version = type(obj.version) == "string" and obj.version or "",
 			protocol = tonumber(obj.protocol), features = feats}
+		if PC.agentHello then PC.agentHello(vo) end                      -- (agents.lua: the host's language model; send again)
 		if PC.koetamaNewer(vo) and vo.h.newerSaid ~= vo.h.hello.protocol then
 			vo.h.newerSaid = vo.h.hello.protocol                          -- (said once per protocol number, not per reconnect)
 			PC.system(PC.KOETAMA_NEWER)
@@ -2189,6 +2193,17 @@ function PC.voiceMessage(vo, obj)
 		if id then PC.trReply(id, type(obj.text) == "string" and obj.text or "") end   -- (under its line, never said)
 	elseif t == "translations_status" then
 		PC.trStatus(obj)                                                 -- (into + the pairs' state: the Translate tab)
+	elseif t == "agent_reply" then
+		if PC.agentReply then PC.agentReply(obj) end                     -- (agents.lua: said, its calls to the mod)
+	elseif t == "agent_status" then
+		if PC.agentStatus then PC.agentStatus(obj) end
+	elseif t == "agents_known" then
+		if PC.agentKnown then PC.agentKnown(obj) end                     -- (agents.lua: send only what Koetama lacks)
+	elseif t == "received" then                                          -- (Koetama has these: stop sending them)
+		local got = {}
+		for _, x in ipairs(type(obj.to_translate) == "table" and obj.to_translate or {}) do if tonumber(x) then got[tonumber(x)] = true end end
+		for _, r in ipairs(vo.tr.reqs) do if got[r.id] then r.received = true end end
+		if PC.agentReceived then PC.agentReceived(obj) end
 	end
 end
 
