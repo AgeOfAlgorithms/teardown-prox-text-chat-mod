@@ -965,8 +965,10 @@ end
 function PC.trFeed(vo)
 	if not PC.trSend(vo) or #vo.tr.reqs == 0 then return nil end
 	local reqs = PC.jsonArray({})
-	for i, r in ipairs(vo.tr.reqs) do reqs[i] = {id = r.id, text = r.text} end
-	return reqs
+	for _, r in ipairs(vo.tr.reqs) do                                  -- (not those Koetama said it received: Koetama 0.5.10)
+		if not r.received then reqs[#reqs + 1] = {id = r.id, text = r.text} end
+	end
+	return reqs[1] and reqs or nil
 end
 
 -- (each tick) lines without a reply for cfg.trWait s are dropped
@@ -2195,6 +2197,13 @@ function PC.voiceMessage(vo, obj)
 		if PC.agentReply then PC.agentReply(obj) end                     -- (agents.lua: said, its calls to the mod)
 	elseif t == "agent_status" then
 		if PC.agentStatus then PC.agentStatus(obj) end
+	elseif t == "agents_known" then
+		if PC.agentKnown then PC.agentKnown(obj) end                     -- (agents.lua: send only what Koetama lacks)
+	elseif t == "received" then                                          -- (Koetama has these: stop sending them)
+		local got = {}
+		for _, x in ipairs(type(obj.to_translate) == "table" and obj.to_translate or {}) do if tonumber(x) then got[tonumber(x)] = true end end
+		for _, r in ipairs(vo.tr.reqs) do if got[r.id] then r.received = true end end
+		if PC.agentReceived then PC.agentReceived(obj) end
 	end
 end
 

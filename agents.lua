@@ -22,7 +22,8 @@
 --   proxchat.agent.<id>.event       a line for it to hear from the game ("the alarm went off"): read and cleared
 --   proxchat.agent.<id>.forget      true: its conversation starts over (read and cleared)
 -- THE CHAT SETS (host): proxchat.agents (off / ready / busy / budget / error - "off": no Koetama, or the host hasn't
--- allowed its language model for Teardown), proxchat.agent.<id>.reply / .replyn (its last line, a counter) and .error;
+-- allowed its language model for Teardown), proxchat.agent.<id>.reply / .replyn (its last line, a counter), .error (a
+-- code: budget, queue_full, failed, ... - Koetama 0.5.10) and .why (what went wrong, in words: for logs);
 -- function calls in a ring of 16: proxchat.agentcall.last (a counter) and proxchat.agentcall.<n % 16>.n / .agent /
 -- .name / .args (JSON) / .arg.<parameter> (each plain value as text); the mod answers each with
 -- SetString(proxchat.agentcall.<k>.result, "ok: ..." or "error: ..."), which the chat sends back to the model.
@@ -31,6 +32,10 @@
 -- game (client.pc_agentline); that game reads the definitions, writes them and the lines into Koetama's feed
 -- (PC.agentFeed), reads the replies (PC.agentReply), says them through the host (server.pc_agentsay) and writes the
 -- calls for the mod.
+-- KOETAMA 0.5.10 (2026-10-24): "agents_known" says which definitions (and versions) it has - only the missing or older
+-- ones go in the feed (before it comes: for a few seconds after each hello and change, as with an older Koetama);
+-- "received" says which lines and results it has - they stop being sent (and still wait for their reply); an
+-- "unknown_agent" error: the definition and those lines go again (new ids), once; "cancelled": nothing.
 -- AN AGENT SPEAKS AS ANYONE DOES (the user, 2026-10-24: "Why shouldn't the NPC characters share the same prox comm
 -- features as other players?"): each agent gets a speaker number (PC.AGENT_P0 + k, proxchat.agent.<id>.player for the
 -- mod) and its reply is an ordinary line from it (PC.deliver): its bubble over it (PC.speakerPos: the top of it), heard
@@ -327,7 +332,8 @@ function PC.agentTick(now)
 					end
 				end
 				st.defs[id] = {sig = sig, def = def}
-				st.sentAt = now                                          -- (a change: in the feed for a few seconds)
+				st.sentAt = now                                          -- (a change: in the feed for a few seconds - at once)
+				if on and PC.voiceFeedNow then PC.voiceFeedNow(vo) end
 			end
 			local ev = GetString(b .. ".event")
 			if ev ~= "" then
@@ -344,28 +350,52 @@ function PC.agentTick(now)
 	for i = #st.forget, 1, -1 do if now - st.forget[i].t > 3 then table.remove(st.forget, i) end end
 end
 
--- (voice.lua's hello) Koetama's hello: the definitions go again (it keeps them only for its session)
+-- (voice.lua's hello) Koetama's hello: the definitions go again (it keeps them only for its session); what it knows is
+-- unknown until its agents_known
 function PC.agentHello(vo)
 	vo.llm = vo.h.hello and vo.h.hello.features.llm == true or false
-	A().sentAt = GetTime()
+	local st = A()
+	st.sentAt, st.known = GetTime(), nil
+end
+
+-- (voice.lua) agents_known: the definitions Koetama has, {id, version} each (it replaces what was known)
+function PC.agentKnown(obj)
+	local known = {}
+	for _, a in ipairs(type(obj.agents) == "table" and obj.agents or {}) do
+		if type(a) == "table" and PC.agentIdOk(a.id) and tonumber(a.version) then known[a.id] = tonumber(a.version) end
+	end
+	A().known = known
+end
+
+-- (voice.lua) received: the lines and results Koetama has (ids, call ids): no longer sent, still waiting for their reply
+function PC.agentReceived(obj)
+	local st = A()
+	local got, calls = {}, {}
+	for _, x in ipairs(type(obj.to_agent) == "table" and obj.to_agent or {}) do if tonumber(x) then got[tonumber(x)] = true end end
+	for _, x in ipairs(type(obj.agent_results) == "table" and obj.agent_results or {}) do if type(x) == "string" then calls[x] = true end end
+	for _, l in ipairs(st.lines) do if got[l.id] then l.received = true end end
+	for _, r in ipairs(st.results) do if calls[r.call] then r.received = true end end
 end
 
 -- (voice.lua's PC.voiceFeed) the agents' fields of the feed (the host's game, its language model on)
 function PC.agentFeed(vo, f)
 	if not (vo.llm and PC.c and PC.c.agent) then return end
 	local st, now = A(), GetTime()
-	if now - st.sentAt < PC.cfg.agentSendFor then
-		local defs = PC.jsonArray({})
-		for _, d in pairs(st.defs) do if #defs < 32 then defs[#defs + 1] = d.def end end
-		if #defs > 0 then f.agents = defs end
+	local defs = PC.jsonArray({})                                    -- (what Koetama lacks, or has older; before its
+	for _, d in pairs(st.defs) do                                    --  agents_known: for a few seconds after a change)
+		local want
+		if st.known then local kv = st.known[d.def.id]; want = kv == nil or kv < d.def.version
+		else want = now - st.sentAt < PC.cfg.agentSendFor end
+		if want and #defs < 32 then defs[#defs + 1] = d.def end
 	end
+	if #defs > 0 then f.agents = defs end
 	local lines = PC.jsonArray({})
-	for _, l in ipairs(st.lines) do
-		if #lines < 8 then lines[#lines + 1] = {id = l.id, agent = l.agent, text = l.text, from = l.from, state = l.state} end
+	for _, l in ipairs(st.lines) do                                  -- (not those Koetama said it received)
+		if #lines < 8 and not l.received then lines[#lines + 1] = {id = l.id, agent = l.agent, text = l.text, from = l.from, state = l.state} end
 	end
 	if #lines > 0 then f.to_agent = lines end
 	local res = PC.jsonArray({})
-	for _, r in ipairs(st.results) do res[#res + 1] = {call = r.call, result = r.result} end
+	for _, r in ipairs(st.results) do if not r.received then res[#res + 1] = {call = r.call, result = r.result} end end
 	if #res > 0 then f.agent_results = res end
 	local fg = PC.jsonArray({})
 	for _, x in ipairs(st.forget) do fg[#fg + 1] = x.id end
@@ -388,14 +418,36 @@ function PC.agentReply(obj)
 	if PC.agentIdOk(obj.agent) then st.utt[obj.agent] = (st.utt[obj.agent] or 1) + 1 end   -- (its next reply: new live words)
 	local ids = {}
 	for _, x in ipairs(type(obj.ids) == "table" and obj.ids or {}) do if tonumber(x) then ids[tonumber(x)] = true end end
-	for i = #st.lines, 1, -1 do if ids[st.lines[i].id] then table.remove(st.lines, i) end end
+	local answered = {}
+	for i = #st.lines, 1, -1 do if ids[st.lines[i].id] then table.insert(answered, 1, table.remove(st.lines, i)) end end
 	for i = #st.results, 1, -1 do                                      -- (the follow-up came: their results are read)
 		for _, x in ipairs(st.results[i].ids or {}) do if ids[x] then table.remove(st.results, i); break end end
 	end
 	local id = obj.agent
 	if not PC.agentIdOk(id) then return end
 	local err = type(obj.error) == "string" and obj.error or ""
+	local why = type(obj.why) == "string" and obj.why or ""
+	if err == "cancelled" then return end                            -- (our own agent_forget dropped them: nothing)
+	if err == "unknown_agent" or err:find("^no agent") then          -- (Koetama lost it: the definition and the lines again,
+		if st.known then st.known[id] = nil end                       --  under new ids - once)
+		st.sentAt = GetTime()
+		local again = false
+		for _, l in ipairs(answered) do
+			if not l.retried then
+				st.n = st.n + 1
+				l.id, l.received, l.retried, again = st.n, nil, true, true
+				st.lines[#st.lines + 1] = l
+			end
+		end
+		if again then
+			local vo = PC.c and PC.c.voice
+			if vo and PC.voiceFeedNow then PC.voiceFeedNow(vo) end         -- (at once)
+			return
+		end
+		err = "unknown_agent"
+	end
 	SetString(base(id) .. ".error", err)
+	SetString(base(id) .. ".why", why)
 	if err ~= "" then return end
 	local text = type(obj.text) == "string" and obj.text or ""
 	if text ~= "" then PC.call("pc_agentsay", id, text) end
