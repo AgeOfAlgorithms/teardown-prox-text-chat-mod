@@ -783,7 +783,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 17                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 18                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -798,7 +798,9 @@ PC.API_VERSION = 17                                                -- (3: proxch
                                                                     --  15: pins follow the pinger's mode (Whisper / Speak /
                                                                     --     Yell's reach, none in Global); ping= and pingto gone;
                                                                     --  16: proxchat.pinganon.<p> - pins without a name;
-                                                                    --  17: agents - a mod's AI characters, agents.lua)
+                                                                    --  17: agents - a mod's AI characters, agents.lua;
+                                                                    --  18: agents' note, say, heard, replyfrom, from, engaged,
+                                                                    --     at= offsets - Mochi the Corgi's requests)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1328,11 +1330,13 @@ end
 
 -- (server) one accepted line from speaker p (a player, or an agent - agents.lua) delivered: to its channel, to the
 -- players in reach (Whisper / Speak / Yell) or to everyone (Global, in shared); the event for other mods. o: vflag (what
--- the games get for voice / pad), voice, vw / vs / vu (a spoken line's word times), agent (an agent's id)
+-- the games get for voice / pad), voice, vw / vs / vu (a spoken line's word times), agent (an agent's id). Returns how
+-- many players it was sent to
 function PC.deliver(p, name, ch, text, o)
 	local s, cfg = PC.S(), PC.cfg
 	local vflag, voice, vw, vs, vu = o.vflag or false, o.voice, o.vw, o.vs, o.vu
 	local dv, dk
+	local sent = 0
 	s.n = s.n + 1
 	local chan = not PC.inLobby() and s.chan[p] or nil
 	if not o.agent and PC.agentHear then PC.agentHear(p, ch, text, chan) end   -- (agents.lua: the AI characters that hear
@@ -1340,7 +1344,7 @@ function PC.deliver(p, name, ch, text, o)
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
 		for _, q in ipairs(PC.allPlayers()) do
-			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, vflag) end
+			if q == p or s.chan[q] == chan then ClientCall(q, "client.pc_dead", s.n, p, name, text, chan, vflag); sent = sent + 1 end
 		end
 	elseif ch ~= "g" then
 		-- Whisper, Speak and Yell: sent only to the players within reach, never in shared (a whisper stays private; Speak /
@@ -1360,6 +1364,7 @@ function PC.deliver(p, name, ch, text, o)
 		for _, q in ipairs(PC.allPlayers()) do
 			local okQ, tq = pcall(GetPlayerTransform, q)
 			if q == p or s.chan[q] or (ch ~= "w" and s.hearAll[q]) or devQ[q] or (feet and okQ and tq and VecLength(VecSub(tq.pos, feet)) <= reach) then
+				sent = sent + 1
 				if ch == "w" then
 					ClientCall(q, "client.pc_whisper", s.n, p, name, text, vflag, vw, vs, vu, dv, dk)
 				else                                                     -- (t: when it was said - a late one is timed from it)
@@ -1375,10 +1380,12 @@ function PC.deliver(p, name, ch, text, o)
 		list[#list + 1] = {id = s.n, p = p, name = name, ch = ch, text = text, t = s.time, v = vflag or nil, vw = vw, vs = vs, vu = vw and vu or nil}
 		while #list > cfg.keepShared do table.remove(list, 1) end
 		shared.pcMsgs = list
+		sent = #PC.allPlayers()
 	end
 	PC.publishSaid(p, ch, text, chan or "", voice, dv, dk, o.agent)
 	if voice and PC.voiceLiveDone then PC.voiceLiveDone(p) end           -- (voice.lua: the line replaces the live words)
 	PC.log(string.format("proxchat say p=%d ch=%s len=%d%s", p, ch, #text, chan and (" channel=" .. chan) or ""))
+	return sent
 end
 
 -- ---- the event API for other mods (server / host): every accepted message is written to the registry,

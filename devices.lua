@@ -423,7 +423,15 @@ function PC.devPoints(dev)
 			if not (okV and valid) then return {} end
 		end
 		local okB, lo, hi = pcall(GetBodyBounds, at.h)
-		if okB and type(lo) == "table" and type(hi) == "table" then return {VecScale(VecAdd(lo, hi), 0.5)} end
+		local function fine(v)                                             -- (a body with no voxels left: bounds of +-3.4e38,
+			for i = 1, 3 do                                                --  their middle the map's origin - 2026-10-24, Mochi)
+				if type(v[i]) ~= "number" or v[i] ~= v[i] or math.abs(v[i]) > 1e7 then return false end
+			end
+			return true
+		end
+		if okB and type(lo) == "table" and type(hi) == "table" and fine(lo) and fine(hi) and lo[1] <= hi[1] and lo[2] <= hi[2] and lo[3] <= hi[3] then
+			return {VecScale(VecAdd(lo, hi), 0.5)}
+		end
 		local okT, t = pcall(GetBodyTransform, at.h)
 		if okT and type(t) == "table" and t.pos then return {t.pos} end
 	end

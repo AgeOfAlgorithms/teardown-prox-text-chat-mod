@@ -8,11 +8,13 @@
 -- A MOD SETS (server script, host; API.md "Agents"):
 --   proxchat.agent.<id>.persona     who it is (the system prompt; up to 8 KB) - the agent exists while this is set
 --   proxchat.agent.<id>.name        its name in bubbles and the chat (default: the id)
---   proxchat.agent.<id>.at          where it is: player:<id>, body:<handle> or x,y,z (devices.lua's PC.devParseAt);
+--   proxchat.agent.<id>.at          where it is: player:<id>, body:<handle> or x,y,z (devices.lua's PC.devParseAt), and
+--                                   +x,y,z after it: an offset (a body's: in the body's own frame - its head on a rig);
 --                                   none: nowhere (it hears only events or everything; its replies go to everyone)
 --   proxchat.agent.<id>.hears       near (default: lines said within the line's mode range of it - Whisper 8 m, Speak 25,
---                                   Yell 40), named (near, and its name in the line), all (every line but the dead's),
---                                   none (only the mod's events)
+--                                   Yell 40), named (near, and its name in the line), engaged (named, and anything near
+--                                   from a player it answered in the last cfg.agentEngaged s), all (every line but the
+--                                   dead's), none (only the mod's events)
 --   proxchat.agent.<id>.mode        how far its replies carry: whisper / speak (default) / yell / global
 --   proxchat.agent.<id>.functions   its functions, a JSON array of {name, description, parameters (JSON Schema)}
 --   proxchat.agent.<id>.state       what it should know now, sent with each line (up to 2 KB)
@@ -20,12 +22,18 @@
 --   proxchat.agent.<id>.stream      false: no live words (by default its words show as the model writes them - Koetama's
 --                                   "stream", 2026-10-24: live words from its speaker number, as a talking player's)
 --   proxchat.agent.<id>.event       a line for it to hear from the game ("the alarm went off"): read and cleared
+--   proxchat.agent.<id>.note        what it should know with the next line it gets (a player's or an event), exactly once:
+--                                   read and cleared when that line goes (no request of its own)
+--   proxchat.agent.<id>.say         it says this without the model (scripted lines, a fallback): read and cleared,
+--                                   delivered as a reply; the model hears of it with its next line ("[you said: ...]")
 --   proxchat.agent.<id>.forget      true: its conversation starts over (read and cleared)
 -- THE CHAT SETS (host): proxchat.agents (off / ready / busy / budget / error - "off": no Koetama, or the host hasn't
--- allowed its language model for Teardown), proxchat.agent.<id>.reply / .replyn (its last line, a counter), .error (a
--- code: budget, queue_full, failed, ... - Koetama 0.5.10) and .why (what went wrong, in words: for logs);
+-- allowed its language model for Teardown), proxchat.agent.<id>.reply / .replyn (its last line, a counter) with
+-- .replyfrom / .replylines (the players, and the line ids, it answered) and .heard (how many players got it), .live,
+-- .error (a code: budget, queue_full, failed, ... - Koetama 0.5.10) and .why (what went wrong, in words: for logs);
 -- function calls in a ring of 16: proxchat.agentcall.last (a counter) and proxchat.agentcall.<n % 16>.n / .agent /
--- .name / .args (JSON) / .arg.<parameter> (each plain value as text); the mod answers each with
+-- .name / .args (JSON) / .arg.<parameter> (each plain value as text) / .from (the players whose lines it answers, ids
+-- separated by spaces; "" for game events alone) / .lines (those lines' ids); the mod answers each with
 -- SetString(proxchat.agentcall.<k>.result, "ok: ..." or "error: ..."), which the chat sends back to the model.
 --
 -- HOW: the host's server hears every line said (server.pc_say -> PC.agentHear) and hands an agent's to the host's own
@@ -51,6 +59,7 @@ do
 		agentSendFor = 5,        -- s the definitions go in the feed after a hello or a change
 		agentRead = 0.25,        -- s between reads of the mods' keys (the host)
 		agentReplyMax = 600,     -- characters of a reply said
+		agentEngaged = 30,       -- s a player it answered (or who named it) stays heard by an agent that hears "engaged"
 	}
 	for k, v in pairs(defaults) do
 		if PC.cfg[k] == nil then PC.cfg[k] = v end
@@ -59,7 +68,7 @@ end
 PC.AGENT_CALLS = 16                                                  -- (the calls' ring)
 PC.AGENT_P0 = 3000                                                   -- (agents' speaker numbers: 3000.. - the test dummies are
                                                                      --  1000.., the voice dummies 2000..)
-PC.AGENT_HEARS = {near = true, named = true, all = true, none = true}
+PC.AGENT_HEARS = {near = true, named = true, engaged = true, all = true, none = true}
 PC.AGENT_MODES = {whisper = "w", w = "w", speak = "s", s = "s", yell = "y", shout = "y", y = "y", global = "g", g = "g"}
 
 -- an agent id as Koetama takes it: 1-64 of A-Z a-z 0-9 _ . : -
@@ -69,28 +78,73 @@ end
 
 local function base(id) return PC.cfg.reg .. ".agent." .. id end
 
--- where an agent is now: its middle (for distances) and the top of it (where its bubble points), or nil
-function PC.agentPos(at)
-	local spec = PC.devParseAt and PC.devParseAt(at)
-	if not spec then return nil end
+-- a usable point: three finite numbers, not the huge ones an empty body's bounds give (+-3.4e38)
+local function okV(v)
+	if type(v) ~= "table" then return false end
+	for i = 1, 3 do
+		local x = v[i]
+		if type(x) ~= "number" or x ~= x or math.abs(x) > 1e7 then return false end
+	end
+	return true
+end
+
+-- the place of an at= (without its offset), and whether a body's bounds were empty
+local function placeOf(spec, off)
 	if spec.t == "player" then
 		local ok, t = pcall(GetPlayerTransform, spec.p)
 		if not (ok and t and t.pos) then return nil end
+		if off then local p = VecAdd(t.pos, off); return p, VecAdd(p, Vec(0, 0.35, 0)) end
 		return VecAdd(t.pos, Vec(0, 1, 0)), VecAdd(t.pos, Vec(0, 2.25, 0))
 	elseif spec.t == "body" then
+		local okT, t = pcall(GetBodyTransform, spec.h)
+		if off then                                                     -- (an offset: in the body's own frame)
+			if not (okT and t and t.pos and TransformToParentPoint) then return nil end
+			local p = TransformToParentPoint(t, off)
+			return p, VecAdd(p, Vec(0, 0.35, 0))
+		end
+		local empty = false
 		if GetBodyBounds then
 			local ok, lo, hi = pcall(GetBodyBounds, spec.h)
-			if ok and lo and hi then
+			if ok and okV(lo) and okV(hi) and lo[1] <= hi[1] and lo[2] <= hi[2] and lo[3] <= hi[3] then
 				local mid = VecScale(VecAdd(lo, hi), 0.5)
 				return mid, Vec(mid[1], hi[2] + 0.35, mid[3])
 			end
+			empty = ok                                                  -- (bounds, but none to speak of: no voxels left)
 		end
-		local ok, t = pcall(GetBodyTransform, spec.h)
-		if not (ok and t and t.pos) then return nil end
-		return t.pos, VecAdd(t.pos, Vec(0, 0.8, 0))
+		if not (okT and t and t.pos) then return nil, nil, empty end
+		return t.pos, VecAdd(t.pos, Vec(0, 0.8, 0)), empty
 	end
 	local p = spec.pts[1]
+	if off then p = VecAdd(p, off) end
 	return p, VecAdd(p, Vec(0, 0.35, 0))
+end
+
+-- where an agent is now: its middle (for distances) and the top of it (where its bubble points), or nil. at: its at=,
+-- with "+x,y,z" an offset. Can't be found now: where it was last (never nowhere while it was somewhere once). id: say a
+-- body with no voxels left to the mod (once - the host)
+PC.agentLast = PC.agentLast or {}
+function PC.agentPos(at, id)
+	at = tostring(at or "")
+	local spec, off = at, nil
+	local b, o = at:match("^(.-)%+(%-?[%d%.]+,%-?[%d%.]+,%-?[%d%.]+)$")
+	if b then
+		local x, y, z = o:match("^(.-),(.-),(.-)$")
+		spec, off = b, Vec(tonumber(x), tonumber(y), tonumber(z))
+	end
+	local parsed = PC.devParseAt and PC.devParseAt(spec)
+	local pos, top, empty
+	if parsed then pos, top, empty = placeOf(parsed, off) end
+	if empty and id and PC.problem then
+		PC.problem(PC.cfg.reg .. ".agent." .. id .. ".at", PC.problemValue(at) .. ": the body has no voxels left (it was destroyed?) - " ..
+			"using its position; anchor the agent to a body that can't be emptied (unbreakable), or to its rig: body:<handle>+x,y,z")
+	end
+	if okV(pos) and okV(top) then
+		PC.agentLast[at] = {pos, top}
+		return pos, top
+	end
+	local last = PC.agentLast[at]
+	if last then return last[1], last[2] end
+	return nil
 end
 
 -- an agent's speaker number?
@@ -150,6 +204,7 @@ function PC.agentServerTick()
 			if p then
 				local a = {name = name ~= "" and name or id, at = GetString(b .. ".at"), p = p,
 					mode = PC.AGENT_MODES[GetString(b .. ".mode"):lower()] or "s", hears = PC.AGENT_HEARS[hears] and hears or "near"}
+				if a.at ~= "" then PC.agentPos(a.at, id) end              -- (a body with no voxels left: said to the mod)
 				list[id] = a
 				pub[id] = {name = a.name, at = a.at, mode = a.mode, p = p}
 				sig[#sig + 1] = id .. "|" .. a.name .. "|" .. a.at .. "|" .. a.mode
@@ -196,19 +251,27 @@ function PC.agentHear(p, ch, text, chan)
 	if not host then return end
 	local okT, tr = pcall(GetPlayerTransform, p)
 	local name = PC.nameOf(p)
+	s.agentEng = s.agentEng or {}
 	for id, a in pairs(s.agents) do
 		local hear = a.hears == "all"
-		if (a.hears == "near" or (a.hears == "named" and PC.agentNamed(text, a.name))) and ch ~= "g" and okT and tr and tr.pos then
+		local named = (a.hears == "named" or a.hears == "engaged") and PC.agentNamed(text, a.name)
+		local eng = s.agentEng[id] and s.agentEng[id][p]
+		local engaged = a.hears == "engaged" and eng ~= nil and s.time - eng <= PC.cfg.agentEngaged
+		if (a.hears == "near" or named or engaged) and ch ~= "g" and okT and tr and tr.pos then
 			local pos = PC.agentPos(a.at)
 			hear = pos ~= nil and VecLength(VecSub(pos, tr.pos)) <= PC.rangeOf(ch) + 1   -- (+1: from the feet to its middle)
 		end
-		if hear then ClientCall(host, "client.pc_agentline", id, p, name, text) end
+		if hear then
+			if named then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][p] = s.time end   -- (named it: engaged)
+			ClientCall(host, "client.pc_agentline", id, p, name, text)
+		end
 	end
 end
 
 -- (the host's game) an agent's reply: a line from its speaker number, as a player's (PC.deliver: the players in its
--- mode's reach, everything a line gets), and its last line for the mod
-function server.pc_agentsay(p, tok, id, text)
+-- mode's reach, everything a line gets), and its last line for the mod (.heard: how many players got it). from: the
+-- players whose lines it answered (ids, spaces between) - engaged with it now; text "": only that (a reply of calls)
+function server.pc_agentsay(p, tok, id, text, from)
 	local s, cfg = PC.S(), PC.cfg
 	p = PC.who(p, tok)
 	if not p then return end
@@ -216,12 +279,18 @@ function server.pc_agentsay(p, tok, id, text)
 	if not (okH and isHost == true) then return end
 	local a = s.agents and type(id) == "string" and s.agents[id]
 	if not a then return end
+	s.agentEng = s.agentEng or {}
+	for q in tostring(type(from) == "string" and from or ""):gmatch("%d+") do
+		q = PC.validId(q)
+		if q then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][q] = s.time end
+	end
 	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
 	if text == "" then return end
-	PC.deliver(a.p, a.name, a.mode, text, {agent = id})
+	local n = PC.deliver(a.p, a.name, a.mode, text, {agent = id})
 	ClearKey(base(id) .. ".live")
 	SetString(base(id) .. ".reply", text)
 	SetInt(base(id) .. ".replyn", s.n)
+	SetInt(base(id) .. ".heard", n or 0)
 end
 
 -- (the host's game) a streaming agent's words so far: live words from its speaker number (client.pc_live, as a talking
@@ -237,7 +306,13 @@ function server.pc_agentlive(p, tok, id, utt, text)
 	utt = PC.finite(utt)
 	if not a or not utt or a.mode == "g" then return end
 	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
-	if text == "" then return end
+	if text == "" then                                                 -- (its reply ended without words, or failed: the live
+		for _, q in ipairs(PC.allPlayers()) do                          --  words go everywhere, and .live)
+			ClientCall(q, "client.pc_live", a.p, math.floor(utt), "", a.mode)
+		end
+		ClearKey(base(id) .. ".live")
+		return
+	end
 	local feet = PC.speakerFeet(a.p)
 	local _, outer = PC.rangeOf(a.mode)
 	local reach = outer + (a.mode == "w" and cfg.whisperSlack or (a.mode == "y" and cfg.shoutSlack or cfg.speakSlack))
@@ -256,20 +331,32 @@ local function A()
 	local c = PC.C()
 	if not c.agent then
 		c.agent = {defs = {}, lines = {}, results = {}, forget = {}, pending = {}, n = 0, sentAt = -1e9, readT = -1e9,
-			callN = GetInt(PC.cfg.reg .. ".agentcall.last")}
+			callN = GetInt(PC.cfg.reg .. ".agentcall.last"), lineFrom = {}, saidNotes = {}, liveOn = {}, utt = {}}
 	end
 	return c.agent
 end
 
 -- (client.pc_agentline / events) a line for agent id waits in the feed until its reply (the host's game; with the host's
--- language model on)
-local function queue(id, text, from)
+-- language model on). Before it, as events in the same turn: what the agent said without the model (.say) and the
+-- mod's note (.note), each once. raw: a note itself
+local function queue(id, text, from, raw)
 	local vo, st = PC.c and PC.c.voice, A()
 	if not (vo and vo.llm and vo.h and vo.h.alive) then return end
 	text = PC.utf8Head(tostring(text or ""), 400)
 	while #text > 400 do text = PC.utf8Head(text, PC.utf8Len(text) - 1) end
 	if text == "" then return end
+	if not raw then
+		for _, said in ipairs(st.saidNotes[id] or {}) do queue(id, "you said: " .. said, nil, true) end
+		st.saidNotes[id] = nil
+		local note = GetString(base(id) .. ".note")
+		if note ~= "" then
+			ClearKey(base(id) .. ".note")
+			for line in (note .. "\n"):gmatch("([^\n]*)\n") do if line ~= "" then queue(id, line, nil, true) end end
+		end
+	end
 	st.n = st.n + 1
+	st.lineFrom[st.n] = from and from.id or ""                       -- (who each line was from: a reply's .replyfrom, a
+	st.lineFrom[st.n - 300] = nil                                    --  call's .from - the newest 300)
 	local state = GetString(base(id) .. ".state")
 	if #state > 2048 then state = state:sub(1, 2048):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") end
 	st.lines[#st.lines + 1] = {id = st.n, agent = id, text = text, from = from, state = state ~= "" and state or nil, t = GetTime()}
@@ -334,6 +421,18 @@ function PC.agentTick(now)
 				st.defs[id] = {sig = sig, def = def}
 				st.sentAt = now                                          -- (a change: in the feed for a few seconds - at once)
 				if on and PC.voiceFeedNow then PC.voiceFeedNow(vo) end
+			end
+			local sy = GetString(b .. ".say")
+			if sy ~= "" then                                             -- (it says this without the model; the model hears of it
+				ClearKey(b .. ".say")                                     --  with its next line)
+				for line in (sy .. "\n"):gmatch("([^\n]*)\n") do
+					if line ~= "" then
+						PC.call("pc_agentsay", id, line, "")
+						st.saidNotes[id] = st.saidNotes[id] or {}
+						table.insert(st.saidNotes[id], line)
+						while #st.saidNotes[id] > 3 do table.remove(st.saidNotes[id], 1) end
+					end
+				end
 			end
 			local ev = GetString(b .. ".event")
 			if ev ~= "" then
@@ -406,16 +505,24 @@ end
 -- written for the mod (the ring); an error for the mod. A follow-up reply (to the same lines) ends their results
 function PC.agentReply(obj)
 	local st, reg = A(), PC.cfg.reg
-	st.utt = st.utt or {}
 	if obj.final == false then                                       -- (a streaming agent's words so far: live words, as a
 		local id, text = obj.agent, type(obj.text) == "string" and obj.text or ""   --  talking player's; its lines wait for
 		if PC.agentIdOk(id) and text ~= "" then                       --  the final reply)
 			st.utt[id] = st.utt[id] or 1
+			st.liveOn[id] = true
 			PC.call("pc_agentlive", id, st.utt[id], text)
 		end
 		return
 	end
-	if PC.agentIdOk(obj.agent) then st.utt[obj.agent] = (st.utt[obj.agent] or 1) + 1 end   -- (its next reply: new live words)
+	if PC.agentIdOk(obj.agent) then
+		local id = obj.agent
+		local final = type(obj.text) == "string" and obj.text or ""
+		if st.liveOn[id] and (final == "" or (type(obj.error) == "string" and obj.error ~= "")) then
+			PC.call("pc_agentlive", id, st.utt[id] or 1, "")           -- (no words to take the live words' place: they go)
+		end
+		st.liveOn[id] = nil
+		st.utt[id] = (st.utt[id] or 1) + 1                             -- (its next reply: new live words)
+	end
 	local ids = {}
 	for _, x in ipairs(type(obj.ids) == "table" and obj.ids or {}) do if tonumber(x) then ids[tonumber(x)] = true end end
 	local answered = {}
@@ -450,9 +557,20 @@ function PC.agentReply(obj)
 	SetString(base(id) .. ".why", why)
 	if err ~= "" then return end
 	local text = type(obj.text) == "string" and obj.text or ""
-	if text ~= "" then PC.call("pc_agentsay", id, text) end
 	local idList = {}
 	for x in pairs(ids) do idList[#idList + 1] = x end
+	table.sort(idList)
+	local from, seenFrom = {}, {}                                    -- (the players whose lines it answers, in order)
+	for _, x in ipairs(idList) do
+		local f = st.lineFrom[x]
+		if f and f ~= "" and not seenFrom[f] then seenFrom[f] = true; from[#from + 1] = f end
+	end
+	local fromS, linesS = table.concat(from, " "), table.concat(idList, " ")
+	if text ~= "" then
+		SetString(base(id) .. ".replyfrom", fromS)
+		SetString(base(id) .. ".replylines", linesS)
+	end
+	if text ~= "" or fromS ~= "" then PC.call("pc_agentsay", id, text, fromS) end   -- (said; who it answered: engaged)
 	for _, call in ipairs(type(obj.calls) == "table" and obj.calls or {}) do
 		if type(call) == "table" and type(call.name) == "string" and type(call.call) == "string" then
 			st.callN = st.callN + 1
@@ -462,6 +580,8 @@ function PC.agentReply(obj)
 			SetInt(b .. ".n", st.callN)
 			SetString(b .. ".agent", id)
 			SetString(b .. ".name", call.name)
+			SetString(b .. ".from", fromS)
+			SetString(b .. ".lines", linesS)
 			local args = type(call.args) == "table" and call.args or {}
 			SetString(b .. ".args", PC.jsonEncode(args))
 			for key, v in pairs(args) do                                -- (plain values, each as text: easy for Lua)
