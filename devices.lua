@@ -817,19 +817,40 @@ function PC.devBabble(b, text)
 end
 
 -- where a device bubble goes, in the world over the device: {pos = the device (its distance), top = where the bubble
--- points}. A carried one: over its carrier's head, as their own bubbles are. The listener's OWN walkie: as the own-bubble
--- rule (third person, Settings' "Your own bubble"); in first person none (the chat's feed shows the line). nil: none.
--- big: a loudspeaker's or a PA's - heard from far off, its bubble was too small to read (the user, 2026-10-22: "the speech
--- bubbles from speakerphone should be bigger than others"): PC.bubbleLayout sizes it up (cfg.bigBubbleMin / Boost)
-function PC.devAnchor(dev, pt)
+-- points}. A carried one: over its carrier's head, as their own bubbles are. The listener's OWN device: a walkie playing
+-- SOMEONE ELSE's line always shows (the user, 2026-11-03: "otherwise, player won't be able to read any messages from the
+-- walkie talkie") - in first person in the hand (PC.devHandAnchor: low right in front of the view), in third person over
+-- the head even with "Your own bubble: Hide" (that is about your own lines); anything else of yours (your own voice
+-- through your megaphone) as the own-bubble rule: third person and not hidden, else none. talker: whose line it is.
+-- nil: none. big: a loudspeaker's or a PA's - heard from far off, its bubble was too small to read (the user, 2026-10-22:
+-- "the speech bubbles from speakerphone should be bigger than others"): PC.bubbleLayout sizes it up
+function PC.devAnchor(dev, pt, talker)
 	local big = dev.kind == "loudspeaker" or dev.kind == "pa"
 	local holder = carried(dev)
 	if holder then
-		if holder == GetLocalPlayer() and not (GetBool("game.thirdperson") and not PC.C().hideOwn) then return nil end
+		if holder == GetLocalPlayer() then
+			local others = dev.kind == "radio" and talker ~= holder         -- (my walkie, someone else talking)
+			if not GetBool("game.thirdperson") then
+				if others then return PC.devHandAnchor(big) end
+				return nil
+			end
+			if PC.C().hideOwn and not others then return nil end
+		end
 		local f = PC.speakerPos(holder)
 		return f and {pos = pt, top = VecAdd(f, Vec(0, 2.25, 0)), big = big} or nil
 	end
 	return {pos = pt, big = big}
+end
+
+-- (first person) where the walkie in your hand would be: in front of the view, low and to the right - the bubble over it,
+-- its tail pointing down at it
+function PC.devHandAnchor(big)
+	local cam = GetCameraTransform()
+	local fwd = TransformToParentVec(cam, Vec(0, 0, -1))
+	local right = TransformToParentVec(cam, Vec(1, 0, 0))
+	local up = TransformToParentVec(cam, Vec(0, 1, 0))
+	local hand = VecAdd(cam.pos, VecAdd(VecScale(fwd, 1), VecAdd(VecScale(right, 0.35), VecScale(up, -0.4))))
+	return {pos = hand, top = VecAdd(hand, VecScale(up, 0.1)), big = big, hand = true}
 end
 
 -- (chat_core's drawBubbles) the device bubbles, each in its device's style, over the device; in reach only
@@ -842,7 +863,7 @@ function PC.devDrawBubbles(add, now)
 			local level, f = PC.devHeardNow(b)
 			local dev = PC.devOf(key)
 			local pt = dev and PC.devNearest(dev, PC.listenerHead())
-			local anchor = level and pt and PC.devAnchor(dev, pt)
+			local anchor = level and pt and PC.devAnchor(dev, pt, b.p)
 			if anchor then
 				local text = b.text
 				if b.level == "mumble" then
@@ -880,7 +901,7 @@ function PC.devLiveBubbles(add)
 			local pt = PC.devNearest(t.dev, PC.listenerHead())
 			local inner, outer = PC.devRanges(t.dev)
 			local d = pt and PC.devHearDist(t.name, t.dev, pt)
-			local anchor = d and d <= outer and PC.reachOk(p, t.dev.kind, pt) and PC.devAnchor(t.dev, pt)
+			local anchor = d and d <= outer and PC.reachOk(p, t.dev.kind, pt) and PC.devAnchor(t.dev, pt, p)
 			if anchor then
 				local text, fr = live.text, nil
 				if live.times and live.start then
