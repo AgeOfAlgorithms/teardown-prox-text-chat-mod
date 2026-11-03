@@ -3322,10 +3322,15 @@ end)()
 	local nRadio = 0
 	for _, s in ipairs(P3.sounds) do if P3.loads[s.h]:find("radio") then nRadio = nRadio + 1 end end
 	check(nRadio > 0, "... it babbles from the walkie with the band-passed clips (" .. nRadio .. ")")
-	check(shownAt(P3, "w3") == nil, "P3's own walkie, first person: no bubble (as P3's own bubbles: the chat's feed shows the line)")
+	local shf = shownAt(P3, "w3")
+	check(shf and shf.kind == "radio" and vnear(shf.at, 500.35, 1.4, 49),
+		"P3's own walkie, first person, someone else talking: its bubble in P3's hand - low right in front of the view (so it can be read)")
 	P3.reg["game.thirdperson"] = true; step()
 	local sh = shownAt(P3, "w3")
 	check(sh and sh.kind == "radio" and vnear(sh.at, 500, 2.25, 50), "... third person: over P3's own walkie, above P3's head (walkie style)")
+	P3.PC.setHideOwn(true); step()
+	check(shownAt(P3, "w3") ~= nil, "... with \"Your own bubble: Hide\" too (that is about P3's own lines, not others' through the walkie)")
+	P3.PC.setHideOwn(false)
 	P3.reg["game.thirdperson"] = nil
 	-- someone else's walkie: P5 stands by P4, who carries one
 	HOST.reg["proxchat.device.w4"] = "radio channel=team at=player:4"
