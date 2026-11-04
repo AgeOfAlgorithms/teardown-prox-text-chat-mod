@@ -4072,7 +4072,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 19, "proxchat.version 19")
+	check(M.reg["proxchat.version"] == 20, "proxchat.version 20")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4656,7 +4656,7 @@ end)()
 	check(atRex > 0 and P2.PC.voiceOf(RP) == robot and HOST.reg["proxchat.said." .. sl .. ".agent"] == "rex"
 		and HOST.reg["proxchat.said." .. sl .. ".player"] == RP and HOST.reg["proxchat.said." .. sl .. ".x"] == 6,
 		"... as anyone's line: babbled from where Rex is, in his voice (proxchat.agent.rex.voice robot), a proxchat.said event (.agent rex, at x 6)")
-	check(not lineFor("baker", "Woof! Following you."), "... the Baker 14 m off doesn't hear Rex (agents hear only players)")
+	check(not lineFor("baker", "Woof! Following you."), "... the Baker 14 m off doesn't hear Rex (agents hear only players unless .hearagents)")
 	check(HOST.reg[cb .. "name"] == "follow" and HOST.reg[cb .. "agent"] == "rex" and HOST.reg[cb .. "arg.player"] == "P2"
 		and HOST.reg[cb .. "arg.speed"] == "2" and HOST.reg[cb .. "args"]:find('"player":"P2"', 1, true),
 		"its call for the mod: proxchat.agentcall.<k>: name follow, agent rex, arg.player P2, arg.speed 2, args (JSON)")
@@ -4818,6 +4818,35 @@ end)()
 	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
 	check(feed().agent_decisions == nil and next(M.PC.c.agent.scorePending) == nil,
 		"a new Koetama's hello: the old one's decisions and waiting turns dropped (its turn numbers start again)")
+	flush()
+	-- API 20: agents hear agents (.hearagents N: up to N agent lines in a row; a player's line or an event starts over),
+	-- after a pause to read the line; never their own
+	HOST.reg["proxchat.agent.rex.hearagents"], HOST.reg["proxchat.agent.baker.hearagents"] = "2", "2"
+	HOST.reg["proxchat.agent.rex.hears"] = "near"; run(40)
+	local rexP, bakerP = tostring(HOST.reg["proxchat.agent.rex.player"]), tostring(HOST.reg["proxchat.agent.baker.player"])
+	HOST.reg["proxchat.agent.rex.event"] = "a cat walks by"; run(20)
+	local e1 = lineFor("rex", "a cat walks by")
+	sendObj({type = "agent_reply", ids = {e1.id}, agent = "rex", text = "Woof! A cat!", calls = {}, error = "", final = true}); run(3)
+	check(said(P2, "Rex", "Woof! A cat!") and not lineFor("baker", "Woof! A cat!"), "Rex answers the event (count 1): the Baker not yet (time to read it)")
+	run(60 * 2)
+	local b1 = lineFor("baker", "Woof! A cat!")
+	check(b1 and b1.from and b1.from.id == rexP and b1.from.name == "Rex" and not lineFor("rex", "Woof! A cat!"),
+		"... then the Baker (.hearagents 2, 14 m off) hears it, from Rex's speaker number; Rex doesn't hear itself")
+	sendObj({type = "agent_reply", ids = {b1.id}, agent = "baker", text = "Shoo, cat!", calls = {}, error = "", final = true}); run(60 * 2)
+	local r2 = lineFor("rex", "Shoo, cat!")
+	check(r2 and r2.from.id == bakerP and HOST.reg["proxchat.agent.baker.replyfrom"] == rexP,
+		"the Baker's answer (count 2) reaches Rex (.hearagents 2); the Baker's .replyfrom is Rex's speaker number")
+	sendObj({type = "agent_reply", ids = {r2.id}, agent = "rex", text = "Grr, my cat!", calls = {}, error = "", final = true}); run(60 * 5)
+	check(said(P2, "Rex", "Grr, my cat!") and not lineFor("baker", "Grr, my cat!"), "Rex's next (count 3): past the Baker's 2 - their talk ends")
+	waitRate(); say(P2, "Rex, good boy"); run(3)
+	local r3 = lineFor("rex", "Rex, good boy")
+	sendObj({type = "agent_reply", ids = {r3.id}, agent = "rex", text = "Happy woof!", calls = {}, error = "", final = true}); run(60 * 2)
+	check(lineFor("baker", "Happy woof!"), "a player speaks: the count starts over (Rex's answer to P2 reaches the Baker)")
+	HOST.reg["proxchat.agent.baker.hearagents"] = nil; run(40)
+	HOST.reg["proxchat.agent.rex.say"] = "Bark!"; run(60 * 2)
+	check(not lineFor("baker", "Bark!"), "without .hearagents: the Baker hears no agent (nor Rex's .say)")
+	HOST.reg["proxchat.agent.rex.hearagents"], HOST.reg["proxchat.agent.rex.hears"] = nil, "named"; run(40)
+	M.PC.c.agent.saidNotes.rex = nil
 	flush()
 	HOST.reg["proxchat.agent.rex.criteria"] = '[{"name":"Topic!","description":"x"}]'; run(20)
 	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rg = d end end

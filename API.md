@@ -72,7 +72,7 @@ Server keys are checked on the host, so that's the screen to watch.
 ## `proxchat.version`, `proxchat.alive`
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
-`proxchat.version` is the API version (19 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone), 16 `proxchat.pinganon.<player>`, 17 [agents](#agents-ai-characters), 18 their `note`, `say`, `heard`, who a reply answers, `hears = "engaged"`, `at=` offsets, 19 their [scores](#scores-your-mod-decides-whether-an-agent-answers)), `proxchat.alive` the `GetTime()` of its last
+`proxchat.version` is the API version (20 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone), 16 `proxchat.pinganon.<player>`, 17 [agents](#agents-ai-characters), 18 their `note`, `say`, `heard`, who a reply answers, `hears = "engaged"`, `at=` offsets, 19 their [scores](#scores-your-mod-decides-whether-an-agent-answers), 20 [agents hearing agents](#agents-talking-among-themselves)), `proxchat.alive` the `GetTime()` of its last
 tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
 make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
@@ -169,6 +169,7 @@ speak with `.say`: give them fallback lines.
 | `proxchat.agent.<id>.character` | `"false"` for an agent that is not a character in the world (a director, a narrator, a command parser): the persona is then the whole prompt |
 | `proxchat.agent.<id>.event` | a line for it to hear from the game ("the alarm went off"): a request of its own. The chat reads and clears it; several at once: one per line |
 | `proxchat.agent.<id>.note` | since 18: what it should know with the **next** line it gets ("Alex petted you", "you were hit"). No request of its own: it goes as an event in the same turn as the next line (a player's or an event), exactly once, then the chat clears it |
+| `proxchat.agent.<id>.hearagents` | since 20: a number from 1 to 50 - it **hears the other agents too** (by its own `.hears` rule: near, named, ...), for up to that many agent lines in a row. See [Agents talking among themselves](#agents-talking-among-themselves). Not set or 0: it hears players only |
 | `proxchat.agent.<id>.say` | since 18: it says this **without the model** (scripted lines, reactions that shouldn't cost a request, your fallback while `proxchat.agents` isn't ready). Read and cleared; said like a reply (bubble, babble, chat, `.reply`, `.heard`). The model hears of it with its next line (`[you said: ...]`) |
 | `proxchat.agent.<id>.forget` | `true`: its conversation starts over (a new round, it died). Read and cleared |
 | `proxchat.agent.<id>.criteria` | since 19: **what your mod wants each turn scored on before the agent answers**, so YOUR script decides whether it answers: a JSON array of up to 8 `{"name", "description"}` (names `a-z 0-9 _`, descriptions up to 300 bytes): `[{"name": "topic", "description": "Rex is the topic: someone talks to him or about him"}, {"name": "danger", "description": "someone is hurt or in danger"}]`. Before each turn of players' lines, Koetama asks the model for a score from 0 to 1 on each (a short, cheap request) and the turn waits for your decision - see [Scores](#scores-your-mod-decides-whether-an-agent-answers). Your `.event` lines and function results are never scored (they always get an answer); `.note`s ride along as context. Pairs well with `hears = "near"`. Needs a Koetama that scores: `proxchat.agentscores` is `true` (without it the key does nothing) |
@@ -177,7 +178,7 @@ speak with `.say`: give them fallback lines.
 `proxchat.agent.<id>.player`, 3000 and up): a speech bubble over it and a line in the chat for the players within
 its mode's reach, garbled from the edge of it, muffled by walls, babbled from where it stands in its voice,
 translated, hidden by `/mute <name>`, and a [chat event](#proxchatsaid-chat-events) with `.agent` set to its id (so
-your monsters can hear NPCs too). Agents hear only players, never each other. Your mod also gets its last line in
+your monsters can hear NPCs too). Agents hear only players unless you let them hear each other (since 20: [`.hearagents`](#agents-talking-among-themselves)). Your mod also gets its last line in
 `proxchat.agent.<id>.reply`, with a counter in `proxchat.agent.<id>.replyn` (for a bark, a mouth that moves); since 18
 `.heard` (how many players it reached: 0 means nobody was near enough) and `.replyfrom` / `.replylines` (the players,
 ids separated by spaces, and the line ids it answered: a reply can answer several lines at once); since 19 `.skipn`
@@ -247,6 +248,34 @@ end
 function server.tick(dt)
 	SetString("proxchat.agent.shop.state", "it is " .. timeOfDay() .. "; the store is " .. (storeOpen and "open" or "closed"))
 end
+```
+
+### Agents talking among themselves
+
+**Since 20.** Agents hear only players unless you set `proxchat.agent.<id>.hearagents` on the one that should listen:
+it then also hears the other agents' lines, by its own `.hears` rule (a `near` agent hears an agent talking near it, a
+`named` one only when that agent says its name). An agent never hears itself.
+
+**Their talk is counted, so it ends.** A player's line and your `.event` lines start the count at 0. An agent's answer
+to them is agent line 1; another agent answering that is line 2, and so on (a `.say` counts as 1). An agent hears an
+agent's line only while its number is at most its `.hearagents`. So with `.hearagents` 4 on both, after a player talks to
+one of two NPCs (or your mod gives one an `.event`) it answers, they answer each other four times, then they stop until
+someone speaks again: each
+line is a model request, and this keeps them from spending the host's budget forever. To keep a scene going (a tavern's
+background chatter), give one of them an `.event` now and then ("Tell Gus about the storm").
+
+An agent's line reaches the listening agents a moment after it is said (1 to 4 s, longer for longer lines), so the
+players can read it before the answer comes. Your mod's keys name agents by speaker number: `.replyfrom` and a
+call's `.from` hold `proxchat.agent.<id>.player` numbers (3000 and up) for the agents it answered, next to players'
+ids. With [scores](#scores-your-mod-decides-whether-an-agent-answers), agents' lines are scored like players'
+(`.scorefrom` names them the same way).
+
+```lua
+-- two villagers who chat when a player greets one of them: they answer each other up to six times
+SetString("proxchat.agent.gus.hears", "near")
+SetString("proxchat.agent.gus.hearagents", "6")
+SetString("proxchat.agent.mira.hears", "near")
+SetString("proxchat.agent.mira.hearagents", "6")
 ```
 
 ### Scores: your mod decides whether an agent answers
