@@ -15,7 +15,12 @@
 --                                   Yell 40), named (near, and its name in the line), engaged (named, and anything near
 --                                   from a player it answered in the last cfg.agentEngaged s), all (every line but the
 --                                   dead's), none (only the mod's events)
---   proxchat.agent.<id>.mode        how far its replies carry: whisper / speak (default) / yell / global
+--   proxchat.agent.<id>.hearagents  (API 20) N, 1 to 50: it hears the other agents' lines too (by its .hears), up to N agent
+--                                   lines in a row - a player's line or a mod's .event starts the count over (each agent
+--                                   line answering one counts one more; .say is 1), so agents talk among themselves for
+--                                   a while and stop. 0 / unset: players only. An agent's line reaches them after a
+--                                   pause to read it (cfg.agentPause*)
+--   proxchat.agent.<id>.mode       how far its replies carry: whisper / speak (default) / yell / global
 --   proxchat.agent.<id>.functions   its functions, a JSON array of {name, description, parameters (JSON Schema)}
 --   proxchat.agent.<id>.state       what it should know now, sent with each line (up to 2 KB)
 --   proxchat.agent.<id>.max_words   the longest reply (default 80); .character false: not a character (a director)
@@ -58,7 +63,10 @@
 -- mod) and its reply is an ordinary line from it (PC.deliver): its bubble over it (PC.speakerPos: the top of it), heard
 -- in its mode's range, garbled across the buffer, muffled by walls, its babble from where it is (proxchat.agent.<id>.voice:
 -- one of the chat's voices), in the chat log, translated, muted with /mute <name>, and a proxchat.said event (.agent set).
--- An agent hears only players (never another agent: no endless talk between them).
+-- An agent hears only players, unless its mod lets it hear agents (.hearagents, API 20; the user, 2026-11-04: "I want
+-- agents to be able to have conversations by themselves") - counted, so their talk ends unless a player or the mod
+-- speaks: no endless talk spending the host's model budget. Their ids in .replyfrom / a call's .from are then speaker
+-- numbers (.player, 3000..) too.
 
 do
 	local defaults = {
@@ -69,6 +77,10 @@ do
 		agentRead = 0.25,        -- s between reads of the mods' keys (the host)
 		agentReplyMax = 600,     -- characters of a reply said
 		agentEngaged = 30,       -- s a player it answered (or who named it) stays heard by an agent that hears "engaged"
+		agentPauseMin = 1,       -- s an agent's line waits before other agents hear it (time to read it): at least,
+		agentPausePerChar = 0.04,--  per character,
+		agentPauseMax = 4,       --  at most
+		agentHearAgentsMax = 50, -- .hearagents at most
 	}
 	for k, v in pairs(defaults) do
 		if PC.cfg[k] == nil then PC.cfg[k] = v end
@@ -212,7 +224,8 @@ function PC.agentServerTick()
 			local p = s.agentP[id]
 			if p then
 				local a = {name = name ~= "" and name or id, at = GetString(b .. ".at"), p = p,
-					mode = PC.AGENT_MODES[GetString(b .. ".mode"):lower()] or "s", hears = PC.AGENT_HEARS[hears] and hears or "near"}
+					mode = PC.AGENT_MODES[GetString(b .. ".mode"):lower()] or "s", hears = PC.AGENT_HEARS[hears] and hears or "near",
+					hearAgents = math.max(0, math.min(PC.cfg.agentHearAgentsMax, math.floor(tonumber(GetString(b .. ".hearagents")) or 0)))}
 				if a.at ~= "" then PC.agentPos(a.at, id) end              -- (a body with no voxels left: said to the mod)
 				list[id] = a
 				pub[id] = {name = a.name, at = a.at, mode = a.mode, p = p}
@@ -251,36 +264,41 @@ function PC.agentNamed(text, name)
 	end
 end
 
--- (server.pc_say) player p said text in mode ch (chan: a channel - the dead talk to no agent): the agents that hear it
--- get it, on the host's own game
-function PC.agentHear(p, ch, text, chan)
+-- (PC.deliver) speaker p said text in mode ch (chan: a channel - the dead talk to no agent): the agents that hear it
+-- get it, on the host's own game. p a player: depth 0; p an agent (its id: by): depth = its line's count of agent
+-- lines in a row (1..) - only the others whose .hearagents reaches it hear it
+function PC.agentHear(p, ch, text, chan, depth, by)
 	local s = PC.S()
 	if chan or not s.agents or next(s.agents) == nil then return end
 	local host = hostId()
 	if not host then return end
-	local okT, tr = pcall(GetPlayerTransform, p)
+	depth = depth or 0
+	local feet = PC.speakerFeet(p)
 	local name = PC.nameOf(p)
 	s.agentEng = s.agentEng or {}
 	for id, a in pairs(s.agents) do
-		local hear = a.hears == "all"
-		local named = (a.hears == "named" or a.hears == "engaged") and PC.agentNamed(text, a.name)
-		local eng = s.agentEng[id] and s.agentEng[id][p]
-		local engaged = a.hears == "engaged" and eng ~= nil and s.time - eng <= PC.cfg.agentEngaged
-		if (a.hears == "near" or named or engaged) and ch ~= "g" and okT and tr and tr.pos then
-			local pos = PC.agentPos(a.at)
-			hear = pos ~= nil and VecLength(VecSub(pos, tr.pos)) <= PC.rangeOf(ch) + 1   -- (+1: from the feet to its middle)
-		end
-		if hear then
-			if named then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][p] = s.time end   -- (named it: engaged)
-			ClientCall(host, "client.pc_agentline", id, p, name, text)
+		if depth == 0 or (id ~= by and a.hearAgents >= depth) then
+			local hear = a.hears == "all"
+			local named = (a.hears == "named" or a.hears == "engaged") and PC.agentNamed(text, a.name)
+			local eng = s.agentEng[id] and s.agentEng[id][p]
+			local engaged = a.hears == "engaged" and eng ~= nil and s.time - eng <= PC.cfg.agentEngaged
+			if (a.hears == "near" or named or engaged) and ch ~= "g" and feet then
+				local pos = PC.agentPos(a.at)
+				hear = pos ~= nil and VecLength(VecSub(pos, feet)) <= PC.rangeOf(ch) + 1   -- (+1: from the feet to its middle)
+			end
+			if hear then
+				if named then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][p] = s.time end   -- (named it: engaged)
+				ClientCall(host, "client.pc_agentline", id, p, name, text, depth)
+			end
 		end
 	end
 end
 
 -- (the host's game) an agent's reply: a line from its speaker number, as a player's (PC.deliver: the players in its
 -- mode's reach, everything a line gets), and its last line for the mod (.heard: how many players got it). from: the
--- players whose lines it answered (ids, spaces between) - engaged with it now; text "": only that (a reply of calls)
-function server.pc_agentsay(p, tok, id, text, from)
+-- players whose lines it answered (ids, spaces between) - engaged with it now; text "": only that (a reply of calls).
+-- depth: its count of agent lines in a row (1: it answers a player or the game; PC.agentHear)
+function server.pc_agentsay(p, tok, id, text, from, depth)
 	local s, cfg = PC.S(), PC.cfg
 	p = PC.who(p, tok)
 	if not p then return end
@@ -290,12 +308,13 @@ function server.pc_agentsay(p, tok, id, text, from)
 	if not a then return end
 	s.agentEng = s.agentEng or {}
 	for q in tostring(type(from) == "string" and from or ""):gmatch("%d+") do
-		q = PC.validId(q)
+		q = PC.validId(q) or (PC.isAgentP(tonumber(q)) and tonumber(q)) or nil   -- (a player, or an agent it answered)
 		if q then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][q] = s.time end
 	end
 	text = PC.clean(PC.arg(text), cfg.agentReplyMax)
 	if text == "" then return end
-	local n = PC.deliver(a.p, a.name, a.mode, text, {agent = id})
+	depth = math.max(1, math.min(1000, math.floor(PC.finite(depth) or 1)))
+	local n = PC.deliver(a.p, a.name, a.mode, text, {agent = id, depth = depth})
 	ClearKey(base(id) .. ".live")
 	SetString(base(id) .. ".reply", text)
 	SetInt(base(id) .. ".replyn", s.n)
@@ -341,15 +360,15 @@ local function A()
 	if not c.agent then
 		c.agent = {defs = {}, lines = {}, results = {}, forget = {}, pending = {}, n = 0, sentAt = -1e9, readT = -1e9,
 			callN = GetInt(PC.cfg.reg .. ".agentcall.last"), lineFrom = {}, saidNotes = {}, liveOn = {}, utt = {},
-			scorePending = {}, decisions = {}, scoreN = 0}
+			scorePending = {}, decisions = {}, scoreN = 0, lineDepth = {}, later = {}}
 	end
 	return c.agent
 end
 
 -- (client.pc_agentline / events) a line for agent id waits in the feed until its reply (the host's game; with the host's
 -- language model on). Before it, as events in the same turn: what the agent said without the model (.say) and the
--- mod's note (.note), each once. raw: a note itself
-local function queue(id, text, from, raw)
+-- mod's note (.note), each once. raw: a note itself. depth: an agent's line's count (PC.agentHear; 0: a player's, an event)
+local function queue(id, text, from, raw, depth)
 	local vo, st = PC.c and PC.c.voice, A()
 	if not (vo and vo.llm and vo.h and vo.h.alive) then return end
 	text = PC.utf8Head(tostring(text or ""), 400)
@@ -367,6 +386,8 @@ local function queue(id, text, from, raw)
 	st.n = st.n + 1
 	st.lineFrom[st.n] = from and from.id or ""                       -- (who each line was from: a reply's .replyfrom, a
 	st.lineFrom[st.n - 300] = nil                                    --  call's .from - the newest 300)
+	if not raw then st.lineDepth[st.n] = depth or 0 end              -- (its reply's count: PC.agentReplyDepth; notes don't count)
+	st.lineDepth[st.n - 300] = nil
 	local state = GetString(base(id) .. ".state")
 	if #state > 2048 then state = state:sub(1, 2048):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") end
 	st.lines[#st.lines + 1] = {id = st.n, agent = id, text = text, from = from, state = state ~= "" and state or nil, t = GetTime(),
@@ -376,9 +397,25 @@ local function queue(id, text, from, raw)
 end
 
 -- (server.pc_agentline -> the host's game) player p (name) said text near agent id
-function client.pc_agentline(id, p, name, text)
+function client.pc_agentline(id, p, name, text, depth)
 	if not PC.isHost() or not PC.agentIdOk(id) or type(text) ~= "string" then return end
-	queue(id, text, {id = tostring(tonumber(p) or 0), name = type(name) == "string" and name or "?"})
+	local from = {id = tostring(tonumber(p) or 0), name = type(name) == "string" and name or "?"}
+	depth = math.max(0, math.floor(PC.finite(depth) or 0))
+	if depth == 0 then queue(id, text, from); return end
+	local cfg, st = PC.cfg, A()                                         -- (another agent's line: after a pause to read it)
+	local wait = math.max(cfg.agentPauseMin, math.min(cfg.agentPauseMax, PC.utf8Len(text) * cfg.agentPausePerChar))
+	st.later[#st.later + 1] = {due = GetTime() + wait, id = id, text = text, from = from, depth = depth}
+end
+
+-- a reply's count of agent lines in a row, from the lines it answers (ids: a set): the lowest of theirs + 1 (a player
+-- in the turn starts it over); 1 when none is known
+function PC.agentReplyDepth(ids)
+	local st, d = A(), nil
+	for x in pairs(ids) do
+		local ld = st.lineDepth[x]
+		if ld and (not d or ld < d) then d = ld end
+	end
+	return (d or 0) + 1
 end
 
 -- (the host's game, each tick) the mods' agents (definitions, events, forgets), the calls' results, the status key
@@ -410,6 +447,12 @@ function PC.agentTick(now)
 	end
 	for i = #st.lines, 1, -1 do                                        -- (lines no reply came for)
 		if now - st.lines[i].t > cfg.agentLineLife then table.remove(st.lines, i) end
+	end
+	while #st.later > cfg.agentLinesMax do table.remove(st.later, 1) end
+	local i = 1
+	while st.later[i] do                                               -- (other agents' lines, read: now for the model, in
+		local l = st.later[i]                                           --  the order said)
+		if GetTime() >= l.due then table.remove(st.later, i); queue(l.id, l.text, l.from, nil, l.depth) else i = i + 1 end
 	end
 	for i = #st.decisions, 1, -1 do                                    -- (decisions no reply came for)
 		if now - st.decisions[i].t > cfg.agentLineLife then table.remove(st.decisions, i) end
@@ -462,7 +505,7 @@ function PC.agentTick(now)
 				ClearKey(b .. ".say")                                     --  with its next line)
 				for line in (sy .. "\n"):gmatch("([^\n]*)\n") do
 					if line ~= "" then
-						PC.call("pc_agentsay", id, line, "")
+						PC.call("pc_agentsay", id, line, "", 1)              -- (an agent line - others hearing agents hear it)
 						st.saidNotes[id] = st.saidNotes[id] or {}
 						table.insert(st.saidNotes[id], line)
 						while #st.saidNotes[id] > 3 do table.remove(st.saidNotes[id], 1) end
@@ -678,7 +721,8 @@ function PC.agentReply(obj)
 		SetString(base(id) .. ".replyfrom", fromS)
 		SetString(base(id) .. ".replylines", linesS)
 	end
-	if text ~= "" or fromS ~= "" then PC.call("pc_agentsay", id, text, fromS) end   -- (said; who it answered: engaged)
+	if text ~= "" or fromS ~= "" then PC.call("pc_agentsay", id, text, fromS, PC.agentReplyDepth(ids)) end   -- (said; who it
+	                                                                                                           --  answered: engaged)
 	for _, call in ipairs(type(obj.calls) == "table" and obj.calls or {}) do
 		if type(call) == "table" and type(call.name) == "string" and type(call.call) == "string" then
 			st.callN = st.callN + 1

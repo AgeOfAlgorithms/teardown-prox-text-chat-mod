@@ -783,7 +783,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 19                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 20                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -803,6 +803,8 @@ PC.API_VERSION = 19                                                -- (3: proxch
                                                                     --     at= offsets - Mochi the Corgi's requests)
                                                                     --  19: agents' criteria, scores and decisions (the mod
                                                                     --     judges each turn), .skipn, proxchat.agentscores
+                                                                    --  20: agents hear agents (.hearagents: counted, so
+                                                                    --     their talk among themselves ends)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
@@ -1341,8 +1343,8 @@ function PC.deliver(p, name, ch, text, o)
 	local sent = 0
 	s.n = s.n + 1
 	local chan = not PC.inLobby() and s.chan[p] or nil
-	if not o.agent and PC.agentHear then PC.agentHear(p, ch, text, chan) end   -- (agents.lua: the AI characters that hear
-	if chan then                                                             --  it - a player's, never another agent's)
+	if PC.agentHear then PC.agentHear(p, ch, text, chan, o.agent and (o.depth or 1) or 0, o.agent) end   -- (agents.lua: the AI
+	if chan then                                                       --  characters that hear it - an agent's: only those that hear agents)
 		-- a channel (the dead, a team's dead) talks to itself only, whatever the mode: sent to its
 		-- players alone, never in shared
 		for _, q in ipairs(PC.allPlayers()) do
