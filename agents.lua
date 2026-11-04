@@ -27,10 +27,19 @@
 --   proxchat.agent.<id>.say         it says this without the model (scripted lines, a fallback): read and cleared,
 --                                   delivered as a reply; the model hears of it with its next line ("[you said: ...]")
 --   proxchat.agent.<id>.forget      true: its conversation starts over (read and cleared)
+--   proxchat.agent.<id>.criteria    (API 19) what the mod wants each turn of players' lines scored on before the agent
+--                                   answers: a JSON array of {name, description}, at most 8 (names a-z 0-9 _). Koetama
+--                                   asks the model for a score 0-1 on each; the chat writes them (.scores.<name>, .scorefrom,
+--                                   .scorelines, .scoretext, then the counter .scoren); the mod judges (its own weights and
+--                                   checks) and writes .decide = "<scoren> answer" or "<scoren> skip"; skip = no reply
+--                                   (.skipn counts it), those lines come with its next answered turn. No decision in 3 s:
+--                                   it answers. Notes ride along as context; a mod's .event and function results are never
+--                                   scored. Only with a Koetama that scores (proxchat.agentscores true: "agent_scores")
 -- THE CHAT SETS (host): proxchat.agents (off / ready / busy / budget / error - "off": no Koetama, or the host hasn't
 -- allowed its language model for Teardown), proxchat.agent.<id>.reply / .replyn (its last line, a counter) with
 -- .replyfrom / .replylines (the players, and the line ids, it answered) and .heard (how many players got it), .live,
--- .error (a code: budget, queue_full, failed, ... - Koetama 0.5.10) and .why (what went wrong, in words: for logs);
+-- .error (a code: budget, queue_full, failed, ... - Koetama 0.5.10) and .why (what went wrong, in words: for logs),
+-- the scores above and .skipn (API 19: turns the mod skipped, a counter), proxchat.agentscores (the host's Koetama scores);
 -- function calls in a ring of 16: proxchat.agentcall.last (a counter) and proxchat.agentcall.<n % 16>.n / .agent /
 -- .name / .args (JSON) / .arg.<parameter> (each plain value as text) / .from (the players whose lines it answers, ids
 -- separated by spaces; "" for game events alone) / .lines (those lines' ids); the mod answers each with
@@ -331,7 +340,8 @@ local function A()
 	local c = PC.C()
 	if not c.agent then
 		c.agent = {defs = {}, lines = {}, results = {}, forget = {}, pending = {}, n = 0, sentAt = -1e9, readT = -1e9,
-			callN = GetInt(PC.cfg.reg .. ".agentcall.last"), lineFrom = {}, saidNotes = {}, liveOn = {}, utt = {}}
+			callN = GetInt(PC.cfg.reg .. ".agentcall.last"), lineFrom = {}, saidNotes = {}, liveOn = {}, utt = {},
+			scorePending = {}, decisions = {}, scoreN = 0}
 	end
 	return c.agent
 end
@@ -359,7 +369,8 @@ local function queue(id, text, from, raw)
 	st.lineFrom[st.n - 300] = nil                                    --  call's .from - the newest 300)
 	local state = GetString(base(id) .. ".state")
 	if #state > 2048 then state = state:sub(1, 2048):gsub("[\128-\191]*$", ""):gsub("[\192-\255]$", "") end
-	st.lines[#st.lines + 1] = {id = st.n, agent = id, text = text, from = from, state = state ~= "" and state or nil, t = GetTime()}
+	st.lines[#st.lines + 1] = {id = st.n, agent = id, text = text, from = from, state = state ~= "" and state or nil, t = GetTime(),
+		context = raw or nil}                                          -- (a note: what it should know, no reason to answer)
 	while #st.lines > PC.cfg.agentLinesMax do table.remove(st.lines, 1) end
 	if PC.voiceFeedNow then PC.voiceFeedNow(vo) end
 end
@@ -378,8 +389,30 @@ function PC.agentTick(now)
 	local on = vo and vo.llm and vo.h and vo.h.alive
 	local state = on and (st.state or "ready") or "off"
 	if GetString(reg .. ".agents") ~= state then SetString(reg .. ".agents", state) end
+	local scores = on and vo.h.hello ~= nil and vo.h.hello.features.agent_scores == true or false   -- (API 19)
+	if GetBool(reg .. ".agentscores") ~= scores then SetBool(reg .. ".agentscores", scores) end
+	for id, sp in pairs(st.scorePending) do                            -- (a mod's decision on a scored turn: at once)
+		local key = base(id) .. ".decide"
+		local dv = GetString(key)
+		if dv ~= "" then
+			ClearKey(key)
+			local n, what = dv:match("^%s*(%d+)%s+(%a+)%s*$")
+			if tonumber(n) == sp.n and (what == "answer" or what == "skip") then
+				st.decisions[#st.decisions + 1] = {agent = id, turn = sp.turn, answer = what == "answer", ids = sp.ids, t = now}
+				st.scorePending[id] = nil
+				if on and PC.voiceFeedNow then PC.voiceFeedNow(vo) end
+			elseif PC.problem and n and tonumber(n) ~= sp.n then
+				PC.problem(key, "names turn " .. n .. " - the scores waiting are turn " .. sp.n .. " (.scoren)")
+			elseif PC.problem then
+				PC.problem(key, "is \"" .. dv .. "\" - write \"<scoren> answer\" or \"<scoren> skip\"")
+			end
+		end
+	end
 	for i = #st.lines, 1, -1 do                                        -- (lines no reply came for)
 		if now - st.lines[i].t > cfg.agentLineLife then table.remove(st.lines, i) end
+	end
+	for i = #st.decisions, 1, -1 do                                    -- (decisions no reply came for)
+		if now - st.decisions[i].t > cfg.agentLineLife then table.remove(st.decisions, i) end
 	end
 	for k, pc in pairs(st.pending) do                                  -- (a mod answered a call)
 		local key = reg .. ".agentcall." .. k .. ".result"
@@ -405,12 +438,14 @@ function PC.agentTick(now)
 			local mw = GetString(b .. ".max_words")
 			local ch = GetString(b .. ".character")
 			local stream = GetString(b .. ".stream")
-			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream
+			local crit = GetString(b .. ".criteria")
+			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream .. "\0" .. crit
 			local d = st.defs[id]
 			if not d or d.sig ~= sig then
 				local def = {id = id, version = (d and d.def.version or 0) + 1, persona = persona, character = ch ~= "0" and ch ~= "false",
 					stream = stream ~= "0" and stream ~= "false",
 					max_words = math.max(1, math.min(1000, math.floor(tonumber(mw) or 80)))}
+				if crit ~= "" then def.criteria = PC.agentCriteria(crit, b) end   -- (API 19)
 				if fns ~= "" then
 					local list = PC.jsonDecode(fns)
 					if type(list) == "table" and getmetatable(list) ~= nil then def.functions = list
@@ -455,7 +490,8 @@ function PC.agentHello(vo)
 	vo.llm = vo.h.hello and vo.h.hello.features.llm == true or false
 	local st = A()
 	st.sentAt, st.known = GetTime(), nil
-end
+	st.scorePending, st.decisions = {}, {}                           -- (a new Koetama numbers its turns afresh: the old
+end                                                                  --  ones' decisions would land on its new turns)
 
 -- (voice.lua) agents_known: the definitions Koetama has, {id, version} each (it replaces what was known)
 function PC.agentKnown(obj)
@@ -474,6 +510,9 @@ function PC.agentReceived(obj)
 	for _, x in ipairs(type(obj.agent_results) == "table" and obj.agent_results or {}) do if type(x) == "string" then calls[x] = true end end
 	for _, l in ipairs(st.lines) do if got[l.id] then l.received = true end end
 	for _, r in ipairs(st.results) do if calls[r.call] then r.received = true end end
+	local turns = {}
+	for _, x in ipairs(type(obj.agent_decisions) == "table" and obj.agent_decisions or {}) do if tonumber(x) then turns[tonumber(x)] = true end end
+	for _, x in ipairs(st.decisions) do if turns[x.turn] then x.received = true end end
 end
 
 -- (voice.lua's PC.voiceFeed) the agents' fields of the feed (the host's game, its language model on)
@@ -490,15 +529,76 @@ function PC.agentFeed(vo, f)
 	if #defs > 0 then f.agents = defs end
 	local lines = PC.jsonArray({})
 	for _, l in ipairs(st.lines) do                                  -- (not those Koetama said it received)
-		if #lines < 8 and not l.received then lines[#lines + 1] = {id = l.id, agent = l.agent, text = l.text, from = l.from, state = l.state} end
+		if #lines < 8 and not l.received then lines[#lines + 1] = {id = l.id, agent = l.agent, text = l.text, from = l.from, state = l.state, context = l.context} end
 	end
 	if #lines > 0 then f.to_agent = lines end
 	local res = PC.jsonArray({})
 	for _, r in ipairs(st.results) do if not r.received then res[#res + 1] = {call = r.call, result = r.result} end end
 	if #res > 0 then f.agent_results = res end
+	local dec = PC.jsonArray({})                                     -- (API 19: the mods' decisions on scored turns)
+	for _, x in ipairs(st.decisions) do
+		if not x.received and #dec < 32 then dec[#dec + 1] = {agent = x.agent, turn = x.turn, answer = x.answer} end
+	end
+	if #dec > 0 then f.agent_decisions = dec end
 	local fg = PC.jsonArray({})
 	for _, x in ipairs(st.forget) do fg[#fg + 1] = x.id end
 	if #fg > 0 then f.agent_forget = fg end
+end
+
+-- (API 19) a mod's .criteria (JSON) as Koetama takes them: [{name, description}], at most 8, names a-z 0-9 _ (at most
+-- 32, each once), descriptions cut to 300 bytes; nil (and the mod told) when it isn't that
+function PC.agentCriteria(text, b)
+	local list = PC.jsonDecode(text)
+	local bad
+	if type(list) ~= "table" or getmetatable(list) == nil or #list == 0 or #list > 8 then bad = "is not a JSON array of 1 to 8 {name, description}" end
+	local out, seen = PC.jsonArray({}), {}
+	for _, c in ipairs(not bad and list or {}) do
+		local n, d = type(c) == "table" and c.name, type(c) == "table" and c.description
+		if type(n) ~= "string" or not n:find("^[a-z0-9_]+$") or #n > 32 or seen[n] then bad = "has a bad or repeated name (a-z 0-9 _, at most 32)"; break end
+		if type(d) ~= "string" or d == "" then bad = "has a criterion without a description"; break end
+		d = PC.utf8Head(d, 300)
+		while #d > 300 do d = PC.utf8Head(d, PC.utf8Len(d) - 1) end
+		seen[n] = true
+		out[#out + 1] = {name = n, description = d}
+	end
+	if bad then
+		if PC.problem then PC.problem(b .. ".criteria", bad .. " - nothing is scored") end
+		return nil
+	end
+	return out
+end
+
+-- (voice.lua's message handler, API 19) agent_scores: a turn of players' lines scored on the mod's criteria; it waits for
+-- the mod's decision (.decide). The keys first, the counter .scoren last
+function PC.agentScores(obj)
+	local st = A()
+	local id = obj.agent
+	if not (PC.agentIdOk(id) and st.defs[id] and tonumber(obj.turn)) then return end
+	local ids = {}
+	for _, x in ipairs(type(obj.ids) == "table" and obj.ids or {}) do if tonumber(x) then ids[#ids + 1] = tonumber(x) end end
+	table.sort(ids)
+	local b = base(id)
+	ClearKey(b .. ".scores")
+	for k, v in pairs(type(obj.scores) == "table" and obj.scores or {}) do
+		if type(k) == "string" and k:find("^[a-z0-9_]+$") and tonumber(v) then
+			SetFloat(b .. ".scores." .. k, math.max(0, math.min(1, tonumber(v))))
+		end
+	end
+	local want, from, seenFrom, text, ls = {}, {}, {}, {}, {}
+	for _, x in ipairs(ids) do want[x] = true; ls[#ls + 1] = tostring(x) end
+	for _, l in ipairs(st.lines) do
+		if want[l.id] then
+			local f = st.lineFrom[l.id]
+			if f and f ~= "" and not seenFrom[f] then seenFrom[f] = true; from[#from + 1] = f end
+			text[#text + 1] = l.from and ((l.from.name or "?") .. ": " .. l.text) or ("[" .. l.text .. "]")
+		end
+	end
+	st.scoreN = st.scoreN + 1
+	st.scorePending[id] = {n = st.scoreN, turn = tonumber(obj.turn), ids = ids}
+	SetString(b .. ".scorefrom", table.concat(from, " "))
+	SetString(b .. ".scorelines", table.concat(ls, " "))
+	SetString(b .. ".scoretext", table.concat(text, "\n"))
+	SetInt(b .. ".scoren", st.scoreN)
 end
 
 -- (voice.lua's message handler) an agent_reply: its lines answered; the words said (through the host); each call
@@ -527,6 +627,10 @@ function PC.agentReply(obj)
 	for _, x in ipairs(type(obj.ids) == "table" and obj.ids or {}) do if tonumber(x) then ids[tonumber(x)] = true end end
 	local answered = {}
 	for i = #st.lines, 1, -1 do if ids[st.lines[i].id] then table.insert(answered, 1, table.remove(st.lines, i)) end end
+	local function done(x) for _, i in ipairs(x.ids or {}) do if ids[i] then return true end end end
+	for i = #st.decisions, 1, -1 do if done(st.decisions[i]) then table.remove(st.decisions, i) end end   -- (its turn is over:
+	for k, sp in pairs(st.scorePending) do if done(sp) then st.scorePending[k] = nil end end            --  answered, skipped,
+	                                                                                                      --  timed out, failed)
 	for i = #st.results, 1, -1 do                                      -- (the follow-up came: their results are read)
 		for _, x in ipairs(st.results[i].ids or {}) do if ids[x] then table.remove(st.results, i); break end end
 	end
@@ -556,6 +660,10 @@ function PC.agentReply(obj)
 	SetString(base(id) .. ".error", err)
 	SetString(base(id) .. ".why", why)
 	if err ~= "" then return end
+	if obj.skipped == true then                                      -- (API 19: the mod skipped a scored turn - nothing said,
+		SetInt(base(id) .. ".skipn", GetInt(base(id) .. ".skipn") + 1) --  and it isn't engaged with them for it)
+		return
+	end
 	local text = type(obj.text) == "string" and obj.text or ""
 	local idList = {}
 	for x in pairs(ids) do idList[#idList + 1] = x end

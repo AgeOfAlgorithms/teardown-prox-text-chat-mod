@@ -783,7 +783,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 18                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 19                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -801,6 +801,8 @@ PC.API_VERSION = 18                                                -- (3: proxch
                                                                     --  17: agents - a mod's AI characters, agents.lua;
                                                                     --  18: agents' note, say, heard, replyfrom, from, engaged,
                                                                     --     at= offsets - Mochi the Corgi's requests)
+                                                                    --  19: agents' criteria, scores and decisions (the mod
+                                                                    --     judges each turn), .skipn, proxchat.agentscores
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)

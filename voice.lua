@@ -2195,6 +2195,8 @@ function PC.voiceMessage(vo, obj)
 		PC.trStatus(obj)                                                 -- (into + the pairs' state: the Translate tab)
 	elseif t == "agent_reply" then
 		if PC.agentReply then PC.agentReply(obj) end                     -- (agents.lua: said, its calls to the mod)
+	elseif t == "agent_scores" then
+		if PC.agentScores then PC.agentScores(obj) end                   -- (agents.lua, API 19: for the mod to judge)
 	elseif t == "agent_status" then
 		if PC.agentStatus then PC.agentStatus(obj) end
 	elseif t == "agents_known" then
