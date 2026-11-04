@@ -72,7 +72,7 @@ Server keys are checked on the host, so that's the screen to watch.
 ## `proxchat.version`, `proxchat.alive`
 
 **Read only, every machine.** The chat sets both every tick on every machine where it runs:
-`proxchat.version` is the API version (18 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone), 16 `proxchat.pinganon.<player>`, 17 [agents](#agents-ai-characters), 18 their `note`, `say`, `heard`, who a reply answers, `hears = "engaged"`, `at=` offsets), `proxchat.alive` the `GetTime()` of its last
+`proxchat.version` is the API version (19 = this document; 4 added the devices, 5 `proxchat.hearall` and the [trust model](#trust-what-a-game-mod-can-do-and-what-a-player-cant), 6 [`proxchat.problem`](#when-your-mod-gets-a-key-wrong), 7 [`proxchat.open`](#proxchatopen), 8 [`proxchat.close`](#proxchatclose), [`proxchat.key.*`, `proxchat.talking`](#proxchatkey-proxchattalkingplayer), 9 [pings](#pings-proxchatteamplayer-proxchatnoping), 10 a ping's reach, 11 [`proxchat.noglobal`](#proxchatnoglobal), 12 [`proxchat.aim`, `proxchat.pingskip`](#proxchataim-proxchatpingskip-steering-the-ping), 13 `proxchat.pingcolor.<player>`, 15 pins follow the talk modes (`ping=` and `proxchat.pingto` gone), 16 `proxchat.pinganon.<player>`, 17 [agents](#agents-ai-characters), 18 their `note`, `say`, `heard`, who a reply answers, `hears = "engaged"`, `at=` offsets, 19 their [scores](#scores-your-mod-decides-whether-an-agent-answers)), `proxchat.alive` the `GetTime()` of its last
 tick. The chat draws its own "Enter: chat" hint; use these for YOUR game's hints and rules that only
 make sense with a chat, so players without it never see them. A key can outlive a mod, so check that
 `alive` is recent:
@@ -171,6 +171,7 @@ speak with `.say`: give them fallback lines.
 | `proxchat.agent.<id>.note` | since 18: what it should know with the **next** line it gets ("Alex petted you", "you were hit"). No request of its own: it goes as an event in the same turn as the next line (a player's or an event), exactly once, then the chat clears it |
 | `proxchat.agent.<id>.say` | since 18: it says this **without the model** (scripted lines, reactions that shouldn't cost a request, your fallback while `proxchat.agents` isn't ready). Read and cleared; said like a reply (bubble, babble, chat, `.reply`, `.heard`). The model hears of it with its next line (`[you said: ...]`) |
 | `proxchat.agent.<id>.forget` | `true`: its conversation starts over (a new round, it died). Read and cleared |
+| `proxchat.agent.<id>.criteria` | since 19: **what your mod wants each turn scored on before the agent answers**, so YOUR script decides whether it answers: a JSON array of up to 8 `{"name", "description"}` (names `a-z 0-9 _`, descriptions up to 300 bytes): `[{"name": "topic", "description": "Rex is the topic: someone talks to him or about him"}, {"name": "danger", "description": "someone is hurt or in danger"}]`. Before each turn of players' lines, Koetama asks the model for a score from 0 to 1 on each (a short, cheap request) and the turn waits for your decision - see [Scores](#scores-your-mod-decides-whether-an-agent-answers). Your `.event` lines and function results are never scored (they always get an answer); `.note`s ride along as context. Pairs well with `hears = "near"`. Needs a Koetama that scores: `proxchat.agentscores` is `true` (without it the key does nothing) |
 
 **What it says is said like a player's line** (the chat gives each agent a speaker number,
 `proxchat.agent.<id>.player`, 3000 and up): a speech bubble over it and a line in the chat for the players within
@@ -179,7 +180,8 @@ translated, hidden by `/mute <name>`, and a [chat event](#proxchatsaid-chat-even
 your monsters can hear NPCs too). Agents hear only players, never each other. Your mod also gets its last line in
 `proxchat.agent.<id>.reply`, with a counter in `proxchat.agent.<id>.replyn` (for a bark, a mouth that moves); since 18
 `.heard` (how many players it reached: 0 means nobody was near enough) and `.replyfrom` / `.replylines` (the players,
-ids separated by spaces, and the line ids it answered: a reply can answer several lines at once). While it is still
+ids separated by spaces, and the line ids it answered: a reply can answer several lines at once); since 19 `.skipn`
+(a counter: scored turns your mod skipped). While it is still
 writing, its words so far are in `proxchat.agent.<id>.live` (cleared when the reply is complete, also when it ends with
 no words or an error). When
 there is no reply, `proxchat.agent.<id>.error` holds a code: `"budget"` (the host's month is spent: nothing more
@@ -244,6 +246,45 @@ end
 
 function server.tick(dt)
 	SetString("proxchat.agent.shop.state", "it is " .. timeOfDay() .. "; the store is " .. (storeOpen and "open" or "closed"))
+end
+```
+
+### Scores: your mod decides whether an agent answers
+
+**Since 19, with `proxchat.agentscores` true.** An agent that hears everything near it (`hears = "near"`) would answer
+every line. With `.criteria` set, each turn of players' lines is first scored by the model on your criteria, 0 to 1
+each, and the turn waits for YOUR decision: weigh the scores, add what only your game knows (is the speaker looking at
+it? its owner? did it just talk with them?), and answer or skip. The chat writes, for each scored turn:
+
+| key | what |
+|---|---|
+| `proxchat.agent.<id>.scores.<name>` | each criterion's score, 0-1 (a float; one the model left out is not set) |
+| `proxchat.agent.<id>.scorefrom` | the players whose lines these are (ids separated by spaces) |
+| `proxchat.agent.<id>.scoretext` | the lines, one per line (`Name: words`, `[a note]`) |
+| `proxchat.agent.<id>.scorelines` | their line ids |
+| `proxchat.agent.<id>.scoren` | a counter, written last: a new number = new scores to judge |
+
+Then write `proxchat.agent.<id>.decide` = `"<scoren> answer"` or `"<scoren> skip"` (read and cleared). Skip: no reply,
+`.skipn` counts it, and those lines go with its next answered turn, so it still knows what was said. No decision within
+3 s: it answers. If the scoring fails (the model's answer unreadable, the request failed), it answers without asking.
+While a turn waits, newer lines wait too: decide in the tick you see the scores.
+
+```lua
+-- server: a dog that answers what concerns it, weighing the model's scores with what the game knows
+SetString("proxchat.agent.rex.hears", "near")
+SetString("proxchat.agent.rex.criteria", [[[{"name": "topic", "description": "Rex is the topic: someone talks to him or about him"},
+	{"name": "food", "description": "it is about food or treats"}, {"name": "danger", "description": "someone is hurt or in danger"}]]])
+local seenScore = 0
+function server.tick(dt)
+	local k = "proxchat.agent.rex."
+	local n = GetInt(k .. "scoren")
+	if n ~= seenScore then
+		seenScore = n
+		local p = tonumber(GetString(k .. "scorefrom"):match("%d+"))
+		local score = GetFloat(k .. "scores.topic") * 1.0 + GetFloat(k .. "scores.food") * 0.6 + GetFloat(k .. "scores.danger") * 0.9
+		if p and lookingAtDog(p) then score = score + 0.4 end             -- (your game's own checks)
+		SetString(k .. "decide", n .. (score >= 0.6 and " answer" or " skip"))
+	end
 end
 ```
 

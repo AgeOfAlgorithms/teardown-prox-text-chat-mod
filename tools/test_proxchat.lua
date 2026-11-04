@@ -4072,7 +4072,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 18, "proxchat.version 18")
+	check(M.reg["proxchat.version"] == 19, "proxchat.version 19")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4596,6 +4596,9 @@ end)()
 	end
 	run(60 * 16)                                                          -- (an earlier test's Koetama left: the 15 s retry)
 	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm"}}); run(5)
+	check(HOST.reg["proxchat.agentscores"] ~= true, "a Koetama without \"agent_scores\" in its hello: proxchat.agentscores false")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
+	check(HOST.reg["proxchat.agentscores"] == true, "... with it (API 19): proxchat.agentscores true")
 	-- a dog that obeys when called by name, and a baker who talks with anyone near
 	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a loyal dog. You obey simple commands."
 	HOST.reg["proxchat.agent.rex.name"] = "Rex"
@@ -4758,6 +4761,72 @@ end)()
 	local ln, lr2 = lineFor("rex", "Alex petted you"), lineFor("rex", "Rex, roll")
 	check(ln and lr2 and ln.from == nil and ln.id < lr2.id and HOST.reg["proxchat.agent.rex.note"] == nil, ".note: an event just before P2's next line, cleared")
 	flush()
+	-- API 19: criteria - in the definition; notes go as context; Koetama's scores for the mod (.scores.*, .scorefrom,
+	-- .scoretext, .scoren last); the mod's decision (.decide "<n> answer|skip") in the feed until received; a skipped
+	-- reply says nothing (.skipn counts it)
+	local CRIT = '[{"name":"topic","description":"Rex is the topic"},{"name":"food","description":"it is about food"}]'
+	HOST.reg["proxchat.agent.rex.criteria"] = CRIT; run(20)
+	local rg
+	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rg = d end end
+	check(rg and rg.criteria and #rg.criteria == 2 and rg.criteria[1].name == "topic" and rg.criteria[2].description == "it is about food",
+		".criteria: in Rex's definition (sent again)")
+	HOST.reg["proxchat.agent.rex.note"] = "Alex fed you"; run(20)
+	waitRate(); say(P2, "Rex, what now"); run(3)
+	local nc, lw = lineFor("rex", "Alex fed you"), lineFor("rex", "Rex, what now")
+	check(nc and nc.context == true and lw and lw.context == nil and ln.context == true,
+		"a note goes as context (to_agent context: true), the player's line doesn't")
+	local sn0 = HOST.reg["proxchat.agent.rex.scoren"] or 0
+	sendObj({type = "agent_scores", agent = "rex", turn = 7, ids = {nc.id, lw.id}, scores = {topic = 0.9, food = 1.5}}); run(3)
+	local sn = HOST.reg["proxchat.agent.rex.scoren"]
+	check(sn == sn0 + 1 and math.abs(HOST.reg["proxchat.agent.rex.scores.topic"] - 0.9) < 1e-6 and HOST.reg["proxchat.agent.rex.scores.food"] == 1
+		and HOST.reg["proxchat.agent.rex.scorefrom"] == "2" and HOST.reg["proxchat.agent.rex.scoretext"] == "[Alex fed you]\nP2: Rex, what now"
+		and HOST.reg["proxchat.agent.rex.scorelines"] == nc.id .. " " .. lw.id,
+		"agent_scores: .scores.topic 0.9, .scores.food clamped to 1, .scorefrom, .scoretext, .scorelines, .scoren + 1")
+	HOST.reg["proxchat.agent.rex.decide"] = (sn + 5) .. " skip"; run(3)
+	check(feed().agent_decisions == nil and HOST.reg["proxchat.agent.rex.decide"] == nil, "a decision naming another turn: ignored, cleared")
+	HOST.reg["proxchat.agent.rex.decide"] = sn .. " skip"; run(3)
+	local dc = (feed().agent_decisions or {})[1]
+	check(dc and dc.agent == "rex" and dc.turn == 7 and dc.answer == false and HOST.reg["proxchat.agent.rex.decide"] == nil,
+		"the mod's \"<n> skip\": agent_decisions {rex, turn 7, answer false} in the feed, the key cleared")
+	sendObj({type = "received", agent_decisions = {7}}); run(3)
+	check(feed().agent_decisions == nil, "received agent_decisions: it leaves the feed")
+	local sk0, rn0 = HOST.reg["proxchat.agent.rex.skipn"] or 0, HOST.reg["proxchat.agent.rex.replyn"]
+	sendObj({type = "agent_reply", ids = {nc.id, lw.id}, agent = "rex", text = "", calls = {}, error = "", final = true, skipped = true}); run(3)
+	check(HOST.reg["proxchat.agent.rex.skipn"] == sk0 + 1 and HOST.reg["proxchat.agent.rex.replyn"] == rn0 and not lineFor("rex", "Rex, what now"),
+		"a skipped reply: .skipn + 1, nothing said, the lines done")
+	waitRate(); say(P2, "Rex, dinner"); run(3)
+	local ld = lineFor("rex", "Rex, dinner")
+	sendObj({type = "agent_scores", agent = "rex", turn = 8, ids = {ld.id}, scores = {topic = 1, food = 1}}); run(3)
+	HOST.reg["proxchat.agent.rex.decide"] = HOST.reg["proxchat.agent.rex.scoren"] .. " answer"; run(3)
+	dc = (feed().agent_decisions or {})[1]
+	check(dc and dc.turn == 8 and dc.answer == true, "\"<n> answer\": answer true")
+	sendObj({type = "agent_reply", ids = {ld.id}, agent = "rex", text = "Dinner!", calls = {}, error = "", final = true}); run(3)
+	check(feed().agent_decisions == nil and said(P2, "Rex", "Dinner!"), "its reply ends the decision (no longer sent)")
+	-- a decision no reply comes for goes after agentLineLife; a new Koetama (its hello) drops the old one's turns
+	waitRate(); say(P2, "Rex, sit"); run(3)
+	local ls9 = lineFor("rex", "Rex, sit")
+	sendObj({type = "agent_scores", agent = "rex", turn = 9, ids = {ls9.id}, scores = {topic = 1}}); run(3)
+	HOST.reg["proxchat.agent.rex.decide"] = HOST.reg["proxchat.agent.rex.scoren"] .. " answer"; run(3)
+	check(((feed().agent_decisions or {})[1] or {}).turn == 9, "turn 9 decided: in the feed")
+	local dq = M.PC.c.agent.decisions[1]
+	dq.t = dq.t - M.PC.cfg.agentLineLife - 1; run(60 * 2)                       -- (the next idle feed write)
+	check(feed().agent_decisions == nil and #M.PC.c.agent.decisions == 0, "a decision no reply came for: dropped after agentLineLife")
+	sendObj({type = "agent_scores", agent = "rex", turn = 10, ids = {ls9.id}, scores = {topic = 1}}); run(3)
+	HOST.reg["proxchat.agent.rex.decide"] = HOST.reg["proxchat.agent.rex.scoren"] .. " skip"; run(3)
+	sendObj({type = "agent_scores", agent = "rex", turn = 11, ids = {ls9.id}, scores = {topic = 1}}); run(3)
+	check(((feed().agent_decisions or {})[1] or {}).turn == 10 and M.PC.c.agent.scorePending.rex, "turn 10 decided, turn 11 waiting")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
+	check(feed().agent_decisions == nil and next(M.PC.c.agent.scorePending) == nil,
+		"a new Koetama's hello: the old one's decisions and waiting turns dropped (its turn numbers start again)")
+	flush()
+	HOST.reg["proxchat.agent.rex.criteria"] = '[{"name":"Topic!","description":"x"}]'; run(20)
+	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rg = d end end
+	check(rg and rg.criteria == nil, "bad criteria (a name not a-z 0-9 _): none sent")
+	HOST.reg["proxchat.agent.rex.criteria"] = '[{"name":"topic","description":"' .. ("x"):rep(400) .. '"}]'; run(20)
+	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rg = d end end
+	check(rg and rg.criteria and #rg.criteria[1].description == 300, "a description over 300 bytes: cut")
+	HOST.reg["proxchat.agent.rex.criteria"] = nil; run(20)
+	flush()
 	-- .say: spoken without the model, as a reply; the model hears of it with the next line
 	HOST.reg["proxchat.agent.rex.say"] = "Bark bark!"; run(20)
 	check(said(P2, "Rex", "Bark bark!") and HOST.reg["proxchat.agent.rex.say"] == nil and HOST.reg["proxchat.agent.rex.heard"] >= 3
@@ -4774,7 +4843,7 @@ end)()
 	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a lazy dog."; run(20)
 	local rex2
 	for _, d in ipairs(feed().agents or {}) do if d.id == "rex" then rex2 = d end end
-	check(rex2 and rex2.version == 2 and rex2.persona:find("lazy"), "a changed persona: version 2, in the feed again")
+	check(rex2 and rex2.version >= 2 and rex2.persona:find("lazy"), "a changed persona: a new version, in the feed again")
 	-- only the host speaks for an agent
 	waitRate(); P2.PC.call("pc_agentsay", "rex", "I am a fake Rex"); run(3)
 	check(not said(P1, "Rex", "I am a fake Rex") and not said(P2, "Rex", "I am a fake Rex"), "a player's game can't speak as an agent (the host only)")
