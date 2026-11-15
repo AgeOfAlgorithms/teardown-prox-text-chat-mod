@@ -4072,7 +4072,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 21, "proxchat.version 21")
+	check(M.reg["proxchat.version"] == 22, "proxchat.version 22")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4639,6 +4639,17 @@ end)()
 	check(lineFor("rex", "rex sit"), "P5 whispering from 8 m (Whisper 8): Rex hears it")
 	W.pos[5] = Vec(17, 0, 0); waitRate(); say(P5, "/w rex down"); run(3)
 	check(not lineFor("rex", "rex down"), "... from 11 m: not")
+	-- (API 22) a wall muffles an agent's hearing, as it does a player's, when walls are on
+	do
+		local saveBox, saveP3, saveWalls = deep(W.boxes), deep(W.pos[3]), HOST.reg["proxchat.walls"]
+		W.pos[3] = Vec(0, 0, 0); W.boxes = {}; HOST.reg["proxchat.walls"] = true; steps(20)   -- (P3 20 m from the Baker at 20,0,0; Speak 25)
+		waitRate(); say(P3, "fresh bread today"); run(3)
+		check(lineFor("baker", "fresh bread today"), "walls on, open path: the Baker (20 m, Speak 25) still hears P3")
+		W.boxes = {{lo = Vec(10, -5, -40), hi = Vec(10.3, 30, 40)}}; steps(5)
+		waitRate(); say(P3, "still any bread"); run(3)
+		check(not lineFor("baker", "still any bread"), "... a wall between: 20 m sounds 40 m off (past Speak) - the Baker doesn't hear it")
+		HOST.reg["proxchat.walls"] = saveWalls; W.boxes = saveBox; W.pos[3] = saveP3; steps(5)
+	end
 	W.pos[5] = Vec(14, 0, 0)
 	-- the reply: said near Rex (bubble + chat); the call written for the mod
 	local rexId = lr.id
