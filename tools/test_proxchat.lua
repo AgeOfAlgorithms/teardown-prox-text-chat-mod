@@ -4072,7 +4072,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 20, "proxchat.version 20")
+	check(M.reg["proxchat.version"] == 21, "proxchat.version 21")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4599,6 +4599,14 @@ end)()
 	check(HOST.reg["proxchat.agentscores"] ~= true, "a Koetama without \"agent_scores\" in its hello: proxchat.agentscores false")
 	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
 	check(HOST.reg["proxchat.agentscores"] == true, "... with it (API 19): proxchat.agentscores true")
+	-- (API 21) how many functions per agent Koetama allows: proxchat.agentfunctions, 16 unless the hello says more
+	check(HOST.reg["proxchat.agentfunctions"] == 16, "a hello with no agent_functions (API 21): proxchat.agentfunctions 16 (the floor)")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}, agent_functions = 32}); run(5)
+	check(HOST.reg["proxchat.agentfunctions"] == 32, "... with agent_functions 32: proxchat.agentfunctions 32 (a mod may send up to 32)")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}, agent_functions = 12}); run(5)
+	check(HOST.reg["proxchat.agentfunctions"] == 16, "... a bogus agent_functions below 16: clamped up to the 16 floor")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
+	check(HOST.reg["proxchat.agentfunctions"] == 16, "... a later hello without it: back to 16")
 	-- a dog that obeys when called by name, and a baker who talks with anyone near
 	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a loyal dog. You obey simple commands."
 	HOST.reg["proxchat.agent.rex.name"] = "Rex"

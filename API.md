@@ -152,6 +152,13 @@ the replies come late - so a quiet agent while busy is waiting, not silent); `"b
 `proxchat.version >= 17` too (`>= 18` for the keys marked so below). While it is not `"ready"`, your agents can still
 speak with `.say`: give them fallback lines.
 
+**How many functions? `proxchat.agentfunctions`.** Since 21: `GetInt("proxchat.agentfunctions")` is how many functions
+one agent's [`.functions`](#agents-ai-characters) list may hold on this host - **16**, or more (up to **32**) with a
+new enough Koetama. It reads 16 until the host's Koetama has said otherwise (and 16 on a chat older than 21, which never
+sets it), so a mod reading it never sees 0. **Check it before you send more than 16 functions**: a Koetama that only
+allows 16 drops an agent whose list is longer *entirely* - it goes silent - so send the extra functions only when
+`proxchat.agentfunctions >= ` the size you need.
+
 **Define an agent** (server, on the host; set the keys once, or whenever they change - a change goes to the model):
 
 | key | what |
@@ -162,7 +169,7 @@ speak with `.say`: give them fallback lines.
 | `proxchat.agent.<id>.hears` | `near` (the default: lines said within the line's mode range of it - Whisper 8 m, Speak 25 m, Yell 40 m), `named` (near, and its name in the line: "Rex, sit"), `engaged` (since 18: `named`, plus anything said near it by a player it answered or who named it in the last 30 s - a conversation without repeating its name, and strangers' chatter left out), `all` (every line, anywhere), `none` (only your events). The dead (a [channel](#proxchatchannelplayer)) talk to no agent |
 | `proxchat.agent.<id>.mode` | how far its replies carry: `whisper`, `speak` (the default), `yell` or `global` |
 | `proxchat.agent.<id>.voice` | its babble voice: one of the chat's voices (`squeaky`, `chirpy`, `plain`, `low`, `deep`, `robot`; or 1-6). Default: one picked from its speaker number |
-| `proxchat.agent.<id>.functions` | what it can do: a JSON array of `{"name", "description", "parameters"}` (a JSON Schema object), at most 16 |
+| `proxchat.agent.<id>.functions` | what it can do: a JSON array of `{"name", "description", "parameters"}` (a JSON Schema object), at most 16 - or as many as [`proxchat.agentfunctions`](#how-many-functions-proxchatagentfunctions) reports (up to 32 with a new enough Koetama). **An agent whose list is longer than the host's limit is dropped entirely - it never speaks** - so never send more than 16 unless `proxchat.agentfunctions` says you may |
 | `proxchat.agent.<id>.state` | what it should know right now ("the bread is in the oven; Alex owes you 5 coins"), sent with each line, up to 2 KB |
 | `proxchat.agent.<id>.max_words` | its longest reply (default 80) |
 | `proxchat.agent.<id>.stream` | `"false"`: its reply shows only when it is complete. By default its words show as the model writes them: a growing bubble and a live line at the bottom of the chat, as a talking player's, until the whole reply takes their place |
