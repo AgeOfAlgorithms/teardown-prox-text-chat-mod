@@ -4446,6 +4446,10 @@ end)()
 	local said = table.concat(P2.debug, " | ")
 	check(said:find("proxchat.aim", 1, true) and said:find("x y z dx dy dz", 1, true) and said:find('"abc" is not a body handle', 1, true)
 		and P2.reg["proxchat.aim"] == nil, "a wrong aim or skip list: said (what the form is), cleared")
+	P2.PC.problems = {seen = {}, n = 0, scanT = -1e9}; P2.debug = {}
+	P2.reg["proxchat.pingskip"] = "-9215 77"; step()
+	check(#P2.debug == 0, "a negative handle (a body the client spawned itself, as Humans vs Clickers' fog panels) is a body handle: nothing said ("
+		.. table.concat(P2.debug, " | ") .. ")")
 	-- Settings' "Ping size": a slider 50 % .. 200 % (100 % at first); let go - saved, and a preview pin where you aim
 	clearPins()
 	say(P2, "/settings"); step()

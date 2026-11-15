@@ -123,7 +123,8 @@ every frame, and the chat reads and clears them (as [`proxchat.avoid`](#proxchat
 
 - `proxchat.aim`: `"x y z dx dy dz"`, the view ray your camera is drawn with (its position and the way it looks). While
   set, pings cast along it instead of the player's camera.
-- `proxchat.pingskip`: body handles separated by spaces (at most 64). The ping ray passes through them.
+- `proxchat.pingskip`: body handles separated by spaces (at most 64), including the negative handles of bodies your
+  client script spawned itself. The ping ray passes through them.
 
 Not set: the player's own camera, skipping only their own body and the vehicle they sit in.
 
