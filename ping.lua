@@ -232,7 +232,7 @@ function PC.pingSteerTick(now)
 		local list, bad = {}, nil
 		for _, x in ipairs(words(sk)) do
 			local h = tonumber(x)
-			if h and h == math.floor(h) and h > 0 then
+			if h and h == math.floor(h) and h ~= 0 then                 -- (negative: a body this client spawned itself, valid)
 				if #list < PC.PING_SKIP_MAX then list[#list + 1] = h end
 			else bad = bad or x end
 		end
