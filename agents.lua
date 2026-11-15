@@ -284,7 +284,12 @@ function PC.agentHear(p, ch, text, chan, depth, by)
 			local engaged = a.hears == "engaged" and eng ~= nil and s.time - eng <= PC.cfg.agentEngaged
 			if (a.hears == "near" or named or engaged) and ch ~= "g" and feet then
 				local pos = PC.agentPos(a.at)
-				hear = pos ~= nil and VecLength(VecSub(pos, feet)) <= PC.rangeOf(ch) + 1   -- (+1: from the feet to its middle)
+				local dist = pos ~= nil and VecLength(VecSub(pos, feet)) or nil
+				if dist and dist <= PC.rangeOf(ch) + 1 and shared.pcWalls then        -- (walls on: a wall in the way muffles it, as for a player)
+					local ok, blocked = pcall(PC.beamBlocked, VecAdd(feet, Vec(0, 1.7, 0)), VecAdd(pos, Vec(0, 1, 0)))
+					if ok and blocked then dist = dist / PC.cfg.wallFactor end        -- (through the wall: it carries wallFactor as far)
+				end
+				hear = dist ~= nil and dist <= PC.rangeOf(ch) + 1                     -- (+1: from the feet to its middle)
 			end
 			if hear then
 				if named then s.agentEng[id] = s.agentEng[id] or {}; s.agentEng[id][p] = s.time end   -- (named it: engaged)
