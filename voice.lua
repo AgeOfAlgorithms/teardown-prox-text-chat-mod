@@ -2162,8 +2162,10 @@ function PC.voiceMessage(vo, obj)
 		if type(obj.features) == "table" then
 			for _, f in ipairs(obj.features) do if type(f) == "string" then feats[f] = true end end
 		end
+		local afun = tonumber(obj.agent_functions)                       -- (how many functions per agent Koetama allows; 16 unless its hello says more)
 		vo.h.hello = {app = type(obj.app) == "string" and obj.app or "", version = type(obj.version) == "string" and obj.version or "",
-			protocol = tonumber(obj.protocol), features = feats}
+			protocol = tonumber(obj.protocol), features = feats,
+			agentFunctions = (afun and afun > 16) and math.floor(afun) or 16}
 		if PC.agentHello then PC.agentHello(vo) end                      -- (agents.lua: the host's language model; send again)
 		if PC.koetamaNewer(vo) and vo.h.newerSaid ~= vo.h.hello.protocol then
 			vo.h.newerSaid = vo.h.hello.protocol                          -- (said once per protocol number, not per reconnect)

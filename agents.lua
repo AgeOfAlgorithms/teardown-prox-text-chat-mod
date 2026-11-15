@@ -428,6 +428,8 @@ function PC.agentTick(now)
 	if GetString(reg .. ".agents") ~= state then SetString(reg .. ".agents", state) end
 	local scores = on and vo.h.hello ~= nil and vo.h.hello.features.agent_scores == true or false   -- (API 19)
 	if GetBool(reg .. ".agentscores") ~= scores then SetBool(reg .. ".agentscores", scores) end
+	local funcs = (vo and vo.h and vo.h.hello and vo.h.hello.agentFunctions) or 16   -- (API 21: functions Koetama allows per agent; 16 until a hello says more)
+	if GetInt(reg .. ".agentfunctions") ~= funcs then SetInt(reg .. ".agentfunctions", funcs) end
 	for id, sp in pairs(st.scorePending) do                            -- (a mod's decision on a scored turn: at once)
 		local key = base(id) .. ".decide"
 		local dv = GetString(key)
