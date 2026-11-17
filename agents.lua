@@ -435,6 +435,8 @@ function PC.agentTick(now)
 	if GetBool(reg .. ".agentscores") ~= scores then SetBool(reg .. ".agentscores", scores) end
 	local funcs = (vo and vo.h and vo.h.hello and vo.h.hello.agentFunctions) or 16   -- (API 21: functions Koetama allows per agent; 16 until a hello says more)
 	if GetInt(reg .. ".agentfunctions") ~= funcs then SetInt(reg .. ".agentfunctions", funcs) end
+	local final = on and vo.h.hello ~= nil and vo.h.hello.features.agent_final == true or false   -- (API 23: a result can end a turn, max_rounds caps it)
+	if GetBool(reg .. ".agentfinal") ~= final then SetBool(reg .. ".agentfinal", final) end
 	for id, sp in pairs(st.scorePending) do                            -- (a mod's decision on a scored turn: at once)
 		local key = base(id) .. ".decide"
 		local dv = GetString(key)
@@ -469,9 +471,11 @@ function PC.agentTick(now)
 		local r = GetString(key)
 		if r ~= "" then
 			if #r > 1000 then r = r:sub(1, 1000) end
-			st.results[#st.results + 1] = {call = pc.call, result = r, ids = pc.ids}
+			local fin = GetBool(reg .. ".agentcall." .. k .. ".final")    -- (API 23: this result ends the turn - Koetama makes no follow-up request)
+			st.results[#st.results + 1] = {call = pc.call, result = r, ids = pc.ids, final = fin or nil}
 			st.pending[k] = nil
 			ClearKey(key)
+			ClearKey(reg .. ".agentcall." .. k .. ".final")
 			if on and PC.voiceFeedNow then PC.voiceFeedNow(vo) end
 		end
 	end
@@ -489,13 +493,15 @@ function PC.agentTick(now)
 			local ch = GetString(b .. ".character")
 			local stream = GetString(b .. ".stream")
 			local crit = GetString(b .. ".criteria")
-			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream .. "\0" .. crit
+			local mr = GetString(b .. ".max_rounds")                       -- (API 23: cap a turn's model requests)
+			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream .. "\0" .. crit .. "\0" .. mr
 			local d = st.defs[id]
 			if not d or d.sig ~= sig then
 				local def = {id = id, version = (d and d.def.version or 0) + 1, persona = persona, character = ch ~= "0" and ch ~= "false",
 					stream = stream ~= "0" and stream ~= "false",
 					max_words = math.max(1, math.min(1000, math.floor(tonumber(mw) or 80)))}
 				if crit ~= "" then def.criteria = PC.agentCriteria(crit, b) end   -- (API 19)
+				if tonumber(mr) then def.max_rounds = math.max(1, math.min(16, math.floor(tonumber(mr)))) end   -- (API 23)
 				if fns ~= "" then
 					local list = PC.jsonDecode(fns)
 					if type(list) == "table" and getmetatable(list) ~= nil then def.functions = list
@@ -583,7 +589,7 @@ function PC.agentFeed(vo, f)
 	end
 	if #lines > 0 then f.to_agent = lines end
 	local res = PC.jsonArray({})
-	for _, r in ipairs(st.results) do if not r.received then res[#res + 1] = {call = r.call, result = r.result} end end
+	for _, r in ipairs(st.results) do if not r.received then res[#res + 1] = {call = r.call, result = r.result, final = r.final and true or nil} end end
 	if #res > 0 then f.agent_results = res end
 	local dec = PC.jsonArray({})                                     -- (API 19: the mods' decisions on scored turns)
 	for _, x in ipairs(st.decisions) do
@@ -713,6 +719,10 @@ function PC.agentReply(obj)
 	if obj.skipped == true then                                      -- (API 19: the mod skipped a scored turn - nothing said,
 		SetInt(base(id) .. ".skipn", GetInt(base(id) .. ".skipn") + 1) --  and it isn't engaged with them for it)
 		return
+	end
+	local ti, to, tc = tonumber(obj.tokens_in), tonumber(obj.tokens_out), tonumber(obj.tokens_cached)
+	if ti or to or tc then                                           -- (API 23: what this one model request used, for the mod's own spend view)
+		SetString(base(id) .. ".tokens", string.format("%d %d %d", ti or 0, to or 0, tc or 0))
 	end
 	local text = type(obj.text) == "string" and obj.text or ""
 	local idList = {}
