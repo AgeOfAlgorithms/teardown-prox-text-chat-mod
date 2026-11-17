@@ -174,7 +174,7 @@ so **fewer and shorter functions and a tighter persona** are the main lever on s
 
 | key | what |
 |---|---|
-| `proxchat.agent.<id>.persona` | who it is and how it talks, what it wants and refuses (the system prompt, up to 8 KB). The agent exists while this is set; `ClearKey("proxchat.agent.<id>")` removes it. `<id>`: letters, digits, `_ . : -` |
+| `proxchat.agent.<id>.persona` | who it is and how it talks, what it wants and refuses (the system prompt, up to 8 KB: a longer one is **cut at the end**, so put the rules that matter first - the chat tells you in `proxchat.problem` when yours is over). The agent exists while this is set; `ClearKey("proxchat.agent.<id>")` removes it. `<id>`: letters, digits, `_ . : -` |
 | `proxchat.agent.<id>.name` | its name in bubbles and the chat (default: the id) |
 | `proxchat.agent.<id>.at` | where it is: `player:<id>`, `body:<handle>` (moves with it, smoothly on every screen) or `x,y,z`; since 18 with an offset after a `+`: `body:<handle>+0,0.8,0.3` (in the body's own frame: point at your rig's body and lift the bubble to its head - no extra anchor body needed). Not set: nowhere (it hears only `all` lines or your events, and its replies go to everyone in the chat). If the body loses all its voxels the chat uses its position, and if the body is gone, the agent's last known place (it never talks to nobody); the chat tells you once in `proxchat.problem` |
 | `proxchat.agent.<id>.hears` | `near` (the default: lines said within the line's mode range of it - Whisper 8 m, Speak 25 m, Yell 40 m), `named` (near, and its name in the line: "Rex, sit"), `engaged` (since 18: `named`, plus anything said near it by a player it answered or who named it in the last 30 s - a conversation without repeating its name, and strangers' chatter left out), `all` (every line, anywhere), `none` (only your events). The dead (a [channel](#proxchatchannelplayer)) talk to no agent. Since 22, when the host turns walls on, a `near` / `named` / `engaged` agent's hearing is muffled by walls like a player's (a voice through a wall carries about half as far) - so an agent in the next room no longer hears a line at full range; `all` still hears everything |
@@ -221,7 +221,10 @@ an attack: every id in `.from` must be the host's). Then answer it, so the model
 something more after it. **Since 23**, also `SetBool("proxchat.agentcall.<k>.final", true)` when this result should
 **end the agent's turn** - the model gets no follow-up request (one fewer request), though the result still reaches it on
 its next turn. One final result among a turn's calls is enough. Needs [`proxchat.agentfinal`](#fewer-requests-proxchatagentfinal);
-harmless on an older Koetama (it just does the follow-up).
+harmless on an older Koetama (it just does the follow-up). **The tradeoff:** a model usually sends a function call with
+no words, and the follow-up is what would have said something - so after a `.final` result the character **acts
+silently**. Use it for actions a quiet character can just do (walk somewhere, start a task); leave it off when the
+character should react out loud (answering a player, a refusal, something surprising).
 
 ```lua
 -- server: a dog that follows whoever tells it to ("Rex, follow me", "Rex, stay")

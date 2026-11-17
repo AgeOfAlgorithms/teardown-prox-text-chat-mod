@@ -4974,6 +4974,13 @@ end)()
 	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}; run(150)
 	local saidP = table.concat(HOST.debug, " | ")
 	check(not saidP:find("agent", 1, true), "apicheck: proxchat.agent.*, proxchat.agents, proxchat.agentcall.* are known keys (" .. saidP .. ")")
+	-- a persona over 8 KB: Koetama keeps only the first 8 KB, so the mod is told (it would lose the end silently)
+	HOST.PC.problems = {seen = {}, n = 0, scanT = -1e9}; HOST.debug = {}
+	HOST.reg["proxchat.agent.longp.persona"] = string.rep("You are a talkative villager. ", 300)   -- (9000 bytes)
+	run(40)
+	local saidL = table.concat(HOST.debug, " | ")
+	check(saidL:find("proxchat.agent.longp.persona", 1, true) and saidL:find("over 8 KB", 1, true),
+		"a persona over 8 KB: proxchat.problem says it is cut at the end (" .. saidL:sub(1, 100) .. ")")
 	for k2 in pairs(HOST.reg) do if k2:find("^proxchat%.agent") then HOST.reg[k2] = nil end end
 	helperOn = false; M.files = {}; run(5)
 end)()
