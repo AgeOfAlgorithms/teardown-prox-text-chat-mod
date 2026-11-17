@@ -497,6 +497,9 @@ function PC.agentTick(now)
 			local sig = persona .. "\0" .. fns .. "\0" .. mw .. "\0" .. ch .. "\0" .. stream .. "\0" .. crit .. "\0" .. mr
 			local d = st.defs[id]
 			if not d or d.sig ~= sig then
+				if #persona > 8192 and PC.problem then                       -- (a persona over 8 KB is cut: warn the mod, it loses the end silently)
+					PC.problem(b .. ".persona", "is over 8 KB; Koetama keeps the first 8 KB and cuts the rest - put the essential rules first")
+				end
 				local def = {id = id, version = (d and d.def.version or 0) + 1, persona = persona, character = ch ~= "0" and ch ~= "false",
 					stream = stream ~= "0" and stream ~= "false",
 					max_words = math.max(1, math.min(1000, math.floor(tonumber(mw) or 80)))}
