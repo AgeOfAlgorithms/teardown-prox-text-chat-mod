@@ -4072,7 +4072,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 22, "proxchat.version 22")
+	check(M.reg["proxchat.version"] == 23, "proxchat.version 23")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4611,6 +4611,10 @@ end)()
 	check(HOST.reg["proxchat.agentfunctions"] == 16, "... a bogus agent_functions below 16: clamped up to the 16 floor")
 	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores"}}); run(5)
 	check(HOST.reg["proxchat.agentfunctions"] == 16, "... a later hello without it: back to 16")
+	-- (API 23) proxchat.agentfinal: Koetama can end a turn on a result and cap it with max_rounds
+	check(HOST.reg["proxchat.agentfinal"] ~= true, "a hello without agent_final: proxchat.agentfinal not true")
+	sendObj({type = "hello", app = "Koetama", version = "0.6.0", protocol = M.PC.PROTOCOL, features = {"translate", "llm", "agent_scores", "agent_final"}}); run(5)
+	check(HOST.reg["proxchat.agentfinal"] == true, "a hello with agent_final (API 23): proxchat.agentfinal true")
 	-- a dog that obeys when called by name, and a baker who talks with anyone near
 	HOST.reg["proxchat.agent.rex.persona"] = "You are Rex, a loyal dog. You obey simple commands."
 	HOST.reg["proxchat.agent.rex.name"] = "Rex"
@@ -4618,6 +4622,7 @@ end)()
 	HOST.reg["proxchat.agent.rex.hears"] = "named"
 	HOST.reg["proxchat.agent.rex.max_words"] = "8"
 	HOST.reg["proxchat.agent.rex.functions"] = '[{"name":"follow","description":"Follow a player","parameters":{"type":"object","properties":{"player":{"type":"string"}},"required":["player"]}}]'
+	HOST.reg["proxchat.agent.rex.max_rounds"] = "2"
 	HOST.reg["proxchat.agent.baker.persona"] = "You are the village baker, friendly and chatty."
 	HOST.reg["proxchat.agent.baker.name"] = "Baker"
 	HOST.reg["proxchat.agent.baker.at"] = "20,0,0"
@@ -4628,8 +4633,9 @@ end)()
 	local rex = defs.rex
 	check(rex and defs.baker and rex.version == 1 and rex.persona:find("loyal dog") and rex.max_words == 8 and rex.character == true
 		and rex.functions and rex.functions[1].name == "follow" and rex.functions[1].parameters.required[1] == "player"
+		and rex.max_rounds == 2
 		and HOST.reg["proxchat.agents"] == "ready" and HOST.PC.S().agents.rex.name == "Rex",
-		"a mod's agents (proxchat.agent.<id>.*): in Koetama's feed (persona, functions, max_words), proxchat.agents = ready")
+		"a mod's agents (proxchat.agent.<id>.*): in Koetama's feed (persona, functions, max_words, max_rounds), proxchat.agents = ready")
 	-- who hears what: Rex (at 6) only when named, near; the Baker (at 20) anyone near
 	waitRate(); say(P2, "Rex, follow me"); run(3)
 	local lr = lineFor("rex", "Rex, follow me")
@@ -4660,7 +4666,8 @@ end)()
 	HOST.reg["proxchat.agent.rex.voice"] = "robot"; run(40)
 	P2.sounds = {}
 	sendObj({type = "agent_reply", ids = {rexId}, agent = "rex", text = "Woof! Following you.",
-		calls = {{call = "c1", name = "follow", args = {player = "P2", speed = 2}}}, error = ""}); run(3)
+		calls = {{call = "c1", name = "follow", args = {player = "P2", speed = 2}}}, error = "",
+		tokens_in = 1200, tokens_out = 8, tokens_cached = 1024}); run(3)
 	local k = HOST.reg["proxchat.agentcall.last"] % 16
 	local cb = "proxchat.agentcall." .. k .. "."
 	local RP = HOST.reg["proxchat.agent.rex.player"]                     -- (Rex's speaker number: 3000..)
@@ -4669,6 +4676,7 @@ end)()
 		and drawn(P2, "^Woof! Following you%.$") and not lineFor("rex", "Rex, follow me") and HOST.reg["proxchat.agent.rex.reply"] == "Woof! Following you."
 		and HOST.PC.S().agentP.rex == RP,
 		"Rex's reply, a line from his speaker number (proxchat.agent.rex.player, 3000..): his bubble and a chat line for P1, P2, P3 (24 m) - not P4 (54 m); .reply for the mod")
+	check(HOST.reg["proxchat.agent.rex.tokens"] == "1200 8 1024", "the reply's tokens (API 23): proxchat.agent.rex.tokens = \"in out cached\"")
 	run(40)
 	local sl = HOST.reg["proxchat.said.last"] % 16
 	local robot = P2.PC.findVoice("robot")
@@ -4683,10 +4691,11 @@ end)()
 	check(HOST.reg[cb .. "name"] == "follow" and HOST.reg[cb .. "agent"] == "rex" and HOST.reg[cb .. "arg.player"] == "P2"
 		and HOST.reg[cb .. "arg.speed"] == "2" and HOST.reg[cb .. "args"]:find('"player":"P2"', 1, true),
 		"its call for the mod: proxchat.agentcall.<k>: name follow, agent rex, arg.player P2, arg.speed 2, args (JSON)")
-	HOST.reg[cb .. "result"] = "ok: following P2"; run(3)
+	HOST.reg[cb .. "result"] = "ok: following P2"; HOST.reg[cb .. "final"] = true; run(3)
 	local res = (feed().agent_results or {})[1]
-	check(res and res.call == "c1" and res.result == "ok: following P2" and HOST.reg[cb .. "result"] == nil,
-		"the mod answers (.result \"ok: following P2\"): in agent_results for Koetama, the key cleared")
+	check(res and res.call == "c1" and res.result == "ok: following P2" and res.final == true
+		and HOST.reg[cb .. "result"] == nil and HOST.reg[cb .. "final"] == nil,
+		"the mod answers with .final (API 23): agent_results has final true (ends the turn, no follow-up request), both keys cleared")
 	sendObj({type = "agent_reply", ids = {rexId}, agent = "rex", text = "", calls = {}, error = ""}); run(3)
 	check(feed().agent_results == nil, "the follow-up reply to the same lines: the results are done")
 	-- the mod's events and forgets
