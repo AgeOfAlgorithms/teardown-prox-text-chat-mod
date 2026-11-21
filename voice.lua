@@ -1100,6 +1100,7 @@ end
 -- its own mode, saved (the typed line keeps its own; in the lobby both are Global). The key: B unless rebound on the
 -- Voice page (any key Teardown's own controls don't use: they are read from its keymap, options.input.keymap).
 -- Nothing of this works while the player types (letters go into the line) or without the helper.
+PC.TALK_ASK_HOLD = 0.12                                                -- s a proxchat.talk counts as the key held
 PC.TALK_MODES = {"w", "s", "y", "g"}
 PC.TALK_MODE_I = {w = 1, s = 2, y = 3, g = 4}
 -- keys the talk key can never be: the chat's and the game's fixed ones (the tool groups are the digits)
@@ -1208,8 +1209,15 @@ function PC.talkTick(vo, now)
 		vo.bindEat = vo.bindEat - 1                                        --  field takes it in this frame's draw)
 		if c.typing then c.text = vo.bindText or c.text end
 	end
+	-- proxchat.talk (client, bool; API 24, 2026-11-20): a mod whose UI holds the input (an interactive lobby: the chat's
+	-- InputDown never sees the talk key then - Humans vs Clickers' lobby, the user's report) sets it every frame while
+	-- the talk key is down; read and cleared here, counted as held for TALK_ASK_HOLD s (either script order, no flicker)
+	local tkey = PC.cfg.reg .. ".talk"
+	if GetBool(tkey) then vo.talkAskT = now end
+	if GetBool(tkey) or GetString(tkey) ~= "" then ClearKey(tkey) end
+	local asked = vo.talkAskT and now - vo.talkAskT < PC.TALK_ASK_HOLD
 	local free = vo.h.alive and not c.typing and not c.nav and not (PC.hooks.blockKeys and PC.hooks.blockKeys())
-	local held = (free and InputDown(vo.talkKey)) and true or false
+	local held = (free and (asked or InputDown(vo.talkKey))) and true or false
 	if held ~= vo.held then
 		vo.held, vo.heldT = held, now
 		SetBool(PC.cfg.reg .. ".talking." .. GetLocalPlayer(), held)    -- (API 8: a game ignores the talk key meanwhile)
