@@ -783,7 +783,7 @@ end
 -- ============================================================================ server
 -- "the chat runs here": proxchat.version (the API's version) and proxchat.alive (GetTime() of the last
 -- tick), on every machine, every tick (the server's ClearKey at its start wipes them: set again at once)
-PC.API_VERSION = 23                                                -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
+PC.API_VERSION = 24                                               -- (3: proxchat.avoid.*, proxchat.hideBubbles; 4: devices.lua;
                                                                     --  5: proxchat.hearall.<p>, the trust model - 2026-10-09;
                                                                     --  6: proxchat.problem, a game mod's mistakes told - 2026-10-11;
                                                                     --  7: proxchat.open, a game opens the chat - 2026-10-12;
@@ -813,7 +813,9 @@ PC.API_VERSION = 23                                                -- (3: proxch
                                                                     --  23: fewer model requests - a result ends the turn
                                                                     --     (proxchat.agentcall.<n>.final), max_rounds caps a
                                                                     --     turn, proxchat.agentfinal says Koetama can; a reply's
-                                                                    --     tokens in proxchat.agent.<id>.tokens - 2026-11-16)
+                                                                    --     tokens in proxchat.agent.<id>.tokens - 2026-11-16;
+                                                                    --  24: proxchat.talk - a mod whose UI holds the input
+                                                                    --     passes the talk key on (interactive lobbies) - 2026-11-20)
 function PC.heartbeat()
 	local reg = PC.cfg.reg
 	SetInt(reg .. ".version", PC.API_VERSION)
