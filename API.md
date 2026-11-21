@@ -13,6 +13,7 @@ whole interface:
 | [`proxchat.block`](#proxchatblock) | bool | your **client** script | each machine | while true, Enter does not open the chat |
 | [`proxchat.open`](#proxchatopen) | bool | your **client** script | each machine | opens the chat now, as Enter would (the chat clears it) |
 | [`proxchat.close`](#proxchatclose) | bool | your **client** script | each machine | closes the chat now (the chat clears it) |
+| [`proxchat.talk`](#proxchattalk) | bool | your **client** script, every frame | each machine | the talk key is held (for a mod whose UI has the keys; the chat clears it) |
 | [`proxchat.key.*`](#proxchatkey-proxchattalkingplayer), [`proxchat.talking.<player>`](#proxchatkey-proxchattalkingplayer) | string, bool | the chat | each machine | the chat's keys (for your hints), and whether the talk key is held |
 | [`proxchat.typing.<player>`](#proxchattypingplayer) | bool | the chat | host: every player; each machine: its own player | true while that player is typing |
 | [`proxchat.ranges`](#proxchatranges) | string | your **server** script | host | sets the Whisper / Speak / Yell (and the devices') distances |
@@ -410,6 +411,26 @@ Your UI should step aside while `proxchat.typing.<me>` is true: the chat is draw
 whatever order the engine draws mods, so it can end up under a full-screen panel. When the player closes
 the chat, `proxchat.typing.<me>` turns false and your UI comes back. Check `proxchat.version >= 7` first
 if you need to know the chat supports it; an older chat ignores the key.
+
+## `proxchat.talk`
+
+**Client, bool, every frame. Since version 24.** While your UI is interactive, the chat doesn't see the talk key
+either, so a player using push to talk can't talk in your lobby. Pass the key on: set `proxchat.talk` to true on
+every frame the player holds it down. The chat reads and clears it each frame and treats it as the talk key being
+held: the line starts, and it ends when you stop setting it. It works only while the player's Koetama is running
+(`proxchat.key.talk` is `""` otherwise), and not while they type in the chat.
+
+```lua
+-- your client script, in draw, wherever your UI is interactive (the same place you hand Enter over)
+local me = GetLocalPlayer()
+local talkKey = GetString("proxchat.key.talk")
+if talkKey ~= "" and not GetBool("proxchat.typing." .. me) and InputDown(talkKey) then
+	SetBool("proxchat.talk", true)
+end
+```
+
+Setting it also while your UI isn't interactive does no harm: the chat sees the key itself then as well. An older
+chat ignores the key.
 
 ## `proxchat.close`
 

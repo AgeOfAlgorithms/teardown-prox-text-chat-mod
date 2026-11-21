@@ -2376,6 +2376,22 @@ end)()
 	check(not drawn(M, "^Yell$"), "... and the strip fades away")
 	M.keys.tab = true; step()
 	check(M.PC.voiceMode() == "y", "Tab alone does not switch the voice's mode")
+	-- proxchat.talk (API 24): a mod whose interactive UI holds the keys (a lobby) passes the talk key on, every frame
+	M.reg["proxchat.talk"] = true; helperStep(); step()
+	check(M.PC.c.voice.held and head().talkKey == true and M.reg["proxchat.talking." .. M.me] == true and M.reg["proxchat.talk"] == nil,
+		"proxchat.talk from a mod: the talk key held (talk_key true, proxchat.talking.<me>), the key cleared (API 24)")
+	M.reg["proxchat.talk"] = true; helperStep(); step()
+	helperStep(); step()                                                 -- (a frame without it: the other script order)
+	check(M.PC.c.voice.held and head().talkKey == true, "... a frame without it (the scripts' order) doesn't let go")
+	run(12)
+	check(not M.PC.c.voice.held and head().talkKey == false and M.reg["proxchat.talking." .. M.me] == false,
+		"... no longer set: let go")
+	M.reg["proxchat.talk"] = "yes"; helperStep(); step()
+	check(not M.PC.c.voice.held and M.reg["proxchat.talk"] == nil, "a text in proxchat.talk: not held, cleared")
+	press(M, "return")
+	M.reg["proxchat.talk"] = true; helperStep(); step()
+	check(not M.PC.c.voice.held, "... nor while the player types in the chat")
+	press(M, "esc"); run(12)
 	-- a line said in Yell, then in Global (to everyone, as text only: no bubble, no babble)
 	M.sounds, P1.sounds, P3.sounds = {}, {}, {}
 	sendText("over here"); run(30)
@@ -4072,7 +4088,7 @@ end)()
 	M.held = {menu_cancel = true}; M.keys.menu_cancel = true; steps(1); M.held = nil; steps(1)
 	check(not M.PC.windowOpen(), "... B closes it")
 	M.LastInputDevice, M.device = nil, nil
-	check(M.reg["proxchat.version"] == 23, "proxchat.version 23")
+	check(M.reg["proxchat.version"] == 24, "proxchat.version 24")
 	-- proxchat.close (API 8): a game closes the chat; the line unsent is dropped
 	M.keys["return"] = true; steps(2)
 	M.PC.c.text = "never said"
@@ -4702,7 +4718,7 @@ end)()
 	HOST.reg["proxchat.agent.baker.event"] = "the oven caught fire"; run(20)
 	local ev = lineFor("baker", "the oven caught fire")
 	check(ev and ev.from == nil and HOST.reg["proxchat.agent.baker.event"] == nil, "proxchat.agent.baker.event: a line from the game (no from), the key cleared")
-	HOST.reg["proxchat.agent.baker.forget"] = true; run(20)
+	HOST.reg["proxchat.agent.baker.forget"] = true; run(30)                -- (read every 0.25 s, the feed every ~0.22 s: both)
 	check((feed().agent_forget or {})[1] == "baker" and HOST.reg["proxchat.agent.baker.forget"] == nil, "proxchat.agent.baker.forget: agent_forget, cleared")
 	-- errors and status
 	sendObj({type = "agent_reply", ids = {ev.id}, agent = "baker", text = "", calls = {}, error = "budget"}); run(3)
